@@ -1,82 +1,102 @@
 # Workbench
 
-Terminal-first work management for tasks, artifacts, and external work items.
+Terminal-first task management with a focused dashboard UI.
 
 ## What it does
 
-- Quick capture into `Now`, `Next`, or `Later`
-- Review and reclassify items between lanes
-- Track more than tasks: `task`, `artifact`, `work`, and `link`
-- Attach references to local paths, issue URLs, PRs, docs, or other repositories
-- Mark a `Now` item as "done for today" without completing it
-- Automatically show that item again on the next day
+- Capture new tasks into `Inbox`
+- Separate self-prioritized work from date-based or recurring work
+- Keep the main execution view focused on `Today = Now + active Deferred`
+- Open `Next`, `Later`, and `Deferred` only when needed, without mixing them into today's list
+- Mark a visible Today item as "done for today" without completing it
+- Show work in a three-pane TUI: sections, item list, and details
 
-## Why the model looks like this
+## Model
 
-The app does not assume that all `Now` work finishes in one day.
+- `Inbox`: new, unclassified tasks
+- `Now`, `Next`, `Later`: self-prioritized stock
+- `Scheduled`, `Recurring`: deferred work that becomes active by condition
+- `Today`: the execution view, made from `Now` plus active deferred items
 
-Instead of forcing a task to be complete or incomplete, a `Now` item can be marked as "done for today". That hides it from today's active queue, but it is still open and reappears tomorrow.
+See [docs/task-management-philosophy.md](docs/task-management-philosophy.md) for the design rationale.
 
-This matches day-based work pacing:
+## Setup
 
-- During the day: focus on the remaining `Now` queue
-- At the end of the day: close unfinished `Now` items for today
-- Next day: open `Now` items show up again automatically
+1. Enter the dev environment with `nix develop`.
+2. Run `go test ./...` once to confirm the local environment is healthy.
+3. Optionally seed demo data with `go run ./src --seed-demo`.
+4. Start the app with `go run ./src`.
+5. Set `$EDITOR` if you want `e` to open notes in a specific editor.
+
+If you want to start with your own empty data, skip `--seed-demo`.
+Runtime data is stored locally and is ignored by Git:
+
+```text
+./tasks.ndjson
+./notes/
+./activity.ndjson
+./archive/
+```
 
 ## Run
 
 ```bash
 nix develop
-go run .
-```
-
-If you want to enter the shell and then work normally:
-
-```bash
-nix develop
 go test ./...
-go run .
+go run ./src --seed-demo
+go run ./src
 ```
 
-State is stored in:
+Active task state is stored in:
 
 ```text
-~/.config/workbench/state.json
+./tasks.ndjson
+./notes/<id>.md
 ```
 
-## Commands
+`tasks.ndjson` holds the current state for active tasks. Long-form notes live in `notes/<id>.md` only when needed.
 
-- `add`
-- `review`
-- `update <id>`
-- `work <id>`: mark as done for today
-- `done <id>`: mark fully complete
-- `reopen <id>`: bring back a "done for today" item on the same day
-- `save`
-- `quit`
+The intended model is:
 
-## Example usage
+- task state stays compact and machine-readable
+- note files are created only for tasks that need long-form text
+- recurring rules are edited in the app with `c`
+- archival is expected once active data grows large
 
-Capture a task:
+See [docs/storage-model.md](docs/storage-model.md) for the storage and archive design.
 
-```text
-title> fix flaky CI in repo-x
-kind [task/artifact/work/link]> task
-lane [now/next/later]> now
-note (optional)> waiting on one failing snapshot
-link label (blank to finish)> repo
-link url/path> https://github.com/example/repo-x
-link label (blank to finish)>
-```
+`go run ./src --seed-demo` writes demo data into the active store so you can inspect the UI immediately.
 
-Capture a non-task deliverable:
+## Layout
 
-```text
-title> release notes draft
-kind [task/artifact/work/link]> artifact
-lane [now/next/later]> next
-note (optional)> draft for 1.4.0
-link label (blank to finish)> doc
-link url/path> /Users/me/notes/release-1.4.0.md
-link label (blank to finish)>
-```
+- Left pane: tabbed task list for `Today`, `Inbox`, `Next`, `Later`, `Scheduled`, `Recurring`, `Done Today`, `Completed`
+- Right pane: notes and work log for the selected item
+- Bottom bar: active key bindings and current status
+
+## Keys
+
+- `j` / `k`: move cursor or scroll focused pane
+- `J` / `K`: switch views
+- `tab`: switch focus between list and details
+- `?`: open help
+- `/`: search and filter
+- `a`: add item to `Inbox`
+- `e`: open the selected task's note file in `$EDITOR`
+- `m`: move selected item between `Inbox`, `Now`, `Next`, `Later`, `Scheduled`, `Recurring`
+- `c`: edit deferred conditions for `Scheduled` / `Recurring`
+- `w`: mark selected `Today` item as done for today
+- `r`: restore selected item from `Done Today` or `Completed`
+- `d`: mark selected item complete
+- `x`: delete selected item
+- `s`: save
+- `q`: quit
+
+## Manual check
+
+1. Start the app with `go run ./src`
+2. Press `a` and add an Inbox task
+3. Press `m` and move it to `Next`
+4. Press `m` again and move it to `Now`
+5. Confirm it appears in `Today`
+6. Press `w` to move it out of today's active queue
+7. Move to `Done Today` and press `r`

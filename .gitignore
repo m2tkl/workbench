@@ -1,0 +1,6 @@
+.gopath/
+tasks/
+tasks.ndjson
+activity.ndjson
+notes/
+archive/
