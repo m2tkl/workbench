@@ -1,4 +1,4 @@
-package main
+package workbench
 
 import (
 	"crypto/rand"

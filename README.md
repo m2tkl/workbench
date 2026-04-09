@@ -23,13 +23,20 @@ See [docs/task-management-philosophy.md](docs/task-management-philosophy.md) for
 ## Setup
 
 1. Enter the dev environment with `nix develop`.
-2. Run `go test ./...` once to confirm the local environment is healthy.
-3. Optionally seed demo data with `go run ./src --seed-demo`.
-4. Start the app with `go run ./src`.
-5. Set `$EDITOR` if you want `e` to open notes in a specific editor.
+2. Install the binary with `nix profile install .` or run it directly with `nix run .`.
+3. Set `$EDITOR` if you want `e` to open notes in a specific editor.
+4. Optionally seed demo data with `workbench --seed-demo`.
+5. Start the app with `workbench`.
+
+If you prefer Go installation instead of Nix installation:
+
+```bash
+go install ./cmd/workbench
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
 
 If you want to start with your own empty data, skip `--seed-demo`.
-Runtime data is stored locally and is ignored by Git:
+Runtime data is stored in the current working directory and is ignored by Git:
 
 ```text
 ./tasks.ndjson
@@ -43,8 +50,16 @@ Runtime data is stored locally and is ignored by Git:
 ```bash
 nix develop
 go test ./...
-go run ./src --seed-demo
-go run ./src
+nix run . -- --seed-demo
+nix run .
+```
+
+Or install it once:
+
+```bash
+nix profile install .
+workbench --seed-demo
+workbench
 ```
 
 Active task state is stored in:
@@ -65,7 +80,7 @@ The intended model is:
 
 See [docs/storage-model.md](docs/storage-model.md) for the storage and archive design.
 
-`go run ./src --seed-demo` writes demo data into the active store so you can inspect the UI immediately.
+`workbench --seed-demo` writes demo data into the active store so you can inspect the UI immediately.
 
 ## Layout
 
@@ -93,10 +108,11 @@ See [docs/storage-model.md](docs/storage-model.md) for the storage and archive d
 
 ## Manual check
 
-1. Start the app with `go run ./src`
-2. Press `a` and add an Inbox task
-3. Press `m` and move it to `Next`
-4. Press `m` again and move it to `Now`
-5. Confirm it appears in `Today`
-6. Press `w` to move it out of today's active queue
-7. Move to `Done Today` and press `r`
+1. Start the app with `workbench`
+2. If needed, seed demo data first with `workbench --seed-demo`
+3. Press `a` and add an Inbox task
+4. Press `m` and move it to `Next`
+5. Press `m` again and move it to `Now`
+6. Confirm it appears in `Today`
+7. Press `w` to move it out of today's active queue
+8. Move to `Done Today` and press `r`
