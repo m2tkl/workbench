@@ -1,4 +1,4 @@
-module github.com/m2tkl/workbench
+module github.com/m2tkl/taskbench
 
 go 1.22.0
 

@@ -1,4 +1,4 @@
-package workbench
+package taskbench
 
 import (
 	"encoding/json"

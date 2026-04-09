@@ -1,4 +1,4 @@
-# Workbench
+# Taskbench
 
 Terminal-first task management with a focused dashboard UI.
 
@@ -25,13 +25,13 @@ See [docs/task-management-philosophy.md](docs/task-management-philosophy.md) for
 1. Enter the dev environment with `nix develop`.
 2. Install the binary with `nix profile install .` or run it directly with `nix run .`.
 3. Set `$EDITOR` if you want `e` to open notes in a specific editor.
-4. Optionally seed demo data with `workbench --seed-demo`.
-5. Start the app with `workbench`.
+4. Optionally seed demo data with `taskbench --seed-demo`.
+5. Start the app with `taskbench`.
 
 If you prefer Go installation instead of Nix installation:
 
 ```bash
-go install ./cmd/workbench
+go install ./cmd/taskbench
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
@@ -58,8 +58,8 @@ Or install it once:
 
 ```bash
 nix profile install .
-workbench --seed-demo
-workbench
+taskbench --seed-demo
+taskbench
 ```
 
 Active task state is stored in:
@@ -80,7 +80,7 @@ The intended model is:
 
 See [docs/storage-model.md](docs/storage-model.md) for the storage and archive design.
 
-`workbench --seed-demo` writes demo data into the active store so you can inspect the UI immediately.
+`taskbench --seed-demo` writes demo data into the active store so you can inspect the UI immediately.
 
 ## Layout
 
@@ -108,8 +108,8 @@ See [docs/storage-model.md](docs/storage-model.md) for the storage and archive d
 
 ## Manual check
 
-1. Start the app with `workbench`
-2. If needed, seed demo data first with `workbench --seed-demo`
+1. Start the app with `taskbench`
+2. If needed, seed demo data first with `taskbench --seed-demo`
 3. Press `a` and add an Inbox task
 4. Press `m` and move it to `Next`
 5. Press `m` again and move it to `Now`

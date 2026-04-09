@@ -1,4 +1,4 @@
-package workbench
+package taskbench
 
 import (
 	"fmt"
@@ -394,7 +394,7 @@ func (a *App) renderHeader(width int) string {
 	filterStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	contentWidth := max(1, width-2)
 
-	left := titleStyle.Render("workbench") + " " + metaStyle.Render(a.today)
+	left := titleStyle.Render("taskbench") + " " + metaStyle.Render(a.today)
 	if a.filter != "" {
 		left += " " + filterStyle.Render("filter:"+a.filter)
 	}
