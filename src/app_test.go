@@ -237,6 +237,56 @@ func TestUndoRestoresDeletedItemWithinWindow(t *testing.T) {
 	}
 }
 
+func TestDeleteRequiresConfirmation(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Clean inbox", KindTask, PlacementInbox)
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	app = model.(*App)
+
+	if app.mode != modeConfirmDelete {
+		t.Fatalf("expected delete confirm mode, got %v", app.mode)
+	}
+	if len(app.state.Items) != 1 {
+		t.Fatalf("expected item to remain before confirmation, got %d items", len(app.state.Items))
+	}
+}
+
+func TestDeleteConfirmationEnterDeletesAndEscCancels(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Clean inbox", KindTask, PlacementInbox)
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	app = model.(*App)
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	app = model.(*App)
+	if app.mode != modeNormal {
+		t.Fatalf("expected normal mode after cancel, got %v", app.mode)
+	}
+	if len(app.state.Items) != 1 {
+		t.Fatalf("expected item to remain after cancel, got %d items", len(app.state.Items))
+	}
+
+	app = NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	app = model.(*App)
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(*App)
+	if len(app.state.Items) != 0 {
+		t.Fatalf("expected item to be deleted after confirmation, got %d items", len(app.state.Items))
+	}
+}
+
 func TestUndoExpiresAfterWindow(t *testing.T) {
 	base := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	current := base

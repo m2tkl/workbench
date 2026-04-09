@@ -30,6 +30,7 @@ const (
 	modeMove
 	modeSchedule
 	modeRecurring
+	modeConfirmDelete
 )
 
 type section int
@@ -237,7 +238,7 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "u":
 		a.undoLastAction()
 	case "x":
-		a.deleteItem()
+		a.startDeleteConfirm()
 	case "s":
 		a.save()
 	case "J":
@@ -316,6 +317,16 @@ func (a *App) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.applyMoveChoice()
 		}
 		a.syncSelection()
+		return a, nil
+	case modeConfirmDelete:
+		switch msg.String() {
+		case "esc":
+			a.mode = modeNormal
+			a.status = "Delete canceled."
+		case "enter":
+			a.mode = modeNormal
+			a.deleteItem()
+		}
 		return a, nil
 	}
 
@@ -659,6 +670,26 @@ func (a *App) renderModal(width, height int) string {
 			Width(width).
 			Height(height).
 			Render(strings.Join(append([]string{title, ""}, body...), "\n"))
+	case modeConfirmDelete:
+		title = "Delete Item"
+		item := a.selectedItem()
+		if item == nil {
+			body = append(body, "No item selected.")
+		} else {
+			body = append(body,
+				"Delete this item?",
+				"",
+				item.ID+" "+item.Title,
+			)
+		}
+		body = append(body, "", "Enter delete, Esc cancel")
+		return lipgloss.NewStyle().
+			Padding(1, 2).
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(lipgloss.Color("86")).
+			Width(width).
+			Height(height).
+			Render(strings.Join(append([]string{title, ""}, body...), "\n"))
 	}
 
 	body = append(body, "")
@@ -761,6 +792,16 @@ func (a *App) startSearch() {
 	a.inputCursor = 0
 	a.mode = modeSearch
 	a.focusInputs()
+}
+
+func (a *App) startDeleteConfirm() {
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
+		return
+	}
+	a.mode = modeConfirmDelete
+	a.status = "Confirm delete with Enter."
 }
 
 func (a *App) startAdd() {
