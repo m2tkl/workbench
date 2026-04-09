@@ -61,13 +61,6 @@ type recurringDraft struct {
 	donePolicy DonePolicy
 }
 
-type sectionRailItem struct {
-	section section
-	key     string
-	label   string
-	count   int
-}
-
 const undoWindow = 10 * time.Second
 
 type undoState struct {
@@ -115,6 +108,14 @@ type App struct {
 	undo *undoState
 }
 
+var movePlacements = []Placement{
+	PlacementNow,
+	PlacementNext,
+	PlacementLater,
+	PlacementScheduled,
+	PlacementRecurring,
+}
+
 func NewApp(store Store, state State) *App {
 	state.Sort()
 	app := &App{
@@ -127,9 +128,9 @@ func NewApp(store Store, state State) *App {
 		height:          36,
 		focus:           paneList,
 		selectedSection: sectionToday,
-		moveChoice:      PlacementInbox,
+		moveChoice:      PlacementNext,
 		selectedIDs:     map[string]struct{}{},
-		status:          "Today = Now + active Deferred",
+		status:          "Focus = Now + active Deferred",
 	}
 	app.syncSelection()
 	return app
@@ -172,36 +173,22 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		a.mode = modeHelp
 		return a, nil
-	case "tab", "shift+tab", "backtab":
-		if a.focus == paneList {
-			a.focus = paneDetails
-		} else {
-			a.focus = paneList
-		}
+	case "tab", "l":
+		a.nextPrimarySection()
+	case "shift+tab", "backtab", "h":
+		a.prevPrimarySection()
 	case "esc":
 		if a.selectedSection != sectionToday {
 			a.jumpSection(sectionToday)
-			a.status = "Returned to Today."
+			a.status = "Returned to Focus."
 		}
 	case "1", "t":
-		if a.moveSelectionTo(PlacementNow) {
-			break
-		}
 		a.jumpSection(sectionToday)
 	case "2", "n":
-		if a.moveSelectionTo(PlacementInbox) {
-			break
-		}
 		a.jumpSection(sectionInbox)
 	case "3", "i":
-		if a.moveSelectionTo(PlacementNext) {
-			break
-		}
 		a.jumpSection(sectionNext)
 	case "4", "v":
-		if a.moveSelectionTo(PlacementLater) {
-			break
-		}
 		a.jumpSection(sectionReview)
 	case "5":
 		a.jumpSection(sectionDeferred)
@@ -217,7 +204,8 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.editSelectedItem()
 	case "m":
 		if len(a.selectedIDs) > 0 {
-			a.status = "Use t/n/i/v to move selected items."
+			a.mode = modeMove
+			a.moveChoice = normalizedMoveChoice(a.moveChoice)
 			return a, nil
 		}
 		item := a.selectedItem()
@@ -226,7 +214,7 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.mode = modeMove
-		a.moveChoice = item.Placement()
+		a.moveChoice = normalizedMoveChoice(item.Placement())
 	case "c":
 		a.startEditDeferredCondition()
 	case "w":
@@ -385,28 +373,23 @@ func (a *App) View() string {
 	innerHeight := max(12, a.height-layoutStyle.GetVerticalFrameSize())
 
 	headerHeight := 2
+	tabsHeight := 2
 	footerHeight := 3
-	bodyHeight := max(6, innerHeight-headerHeight-footerHeight-1)
-	railWidth := max(18, min(24, innerWidth/5))
-	mainWidth := max(20, innerWidth-railWidth-1)
+	bodyHeight := max(6, innerHeight-headerHeight-tabsHeight-footerHeight-1)
+	mainWidth := innerWidth
 	listHeight := max(3, int(float64(bodyHeight)*0.42))
 	if listHeight > bodyHeight-3 {
 		listHeight = bodyHeight - 3
 	}
 	detailHeight := max(3, bodyHeight-listHeight)
-	viewsHeight := listHeight
-	actionsHeight := detailHeight
 
 	header := a.renderHeader(innerWidth)
-	views := a.renderSectionRail(railWidth, viewsHeight)
-	actions := a.renderActionsPanel(railWidth, actionsHeight)
-	rail := lipgloss.JoinVertical(lipgloss.Left, views, actions)
+	tabs := a.renderTabs(innerWidth)
 	list := a.renderListPanel(mainWidth, listHeight)
 	details := a.renderDetails(mainWidth, detailHeight)
-	main := lipgloss.JoinVertical(lipgloss.Left, list, details)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, rail, " ", main)
+	body := lipgloss.JoinVertical(lipgloss.Left, list, details)
 	footer := a.renderFooter(innerWidth)
-	layout := layoutStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body, footer))
+	layout := layoutStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, tabs, body, footer))
 
 	if a.mode == modeNormal {
 		return layout
@@ -428,7 +411,7 @@ func (a *App) renderHeader(width int) string {
 	}
 
 	right := metaStyle.Render(fmt.Sprintf(
-		"today:%d  inbox:%d  completed:%d",
+		"focus:%d  inbox:%d  completed:%d",
 		a.sectionCount(sectionToday),
 		a.sectionCount(sectionInbox),
 		a.sectionCount(sectionCompleted),
@@ -447,41 +430,36 @@ func (a *App) renderHeader(width int) string {
 	})
 }
 
-func (a *App) renderSectionRail(width, height int) string {
-	panelStyle := lipgloss.NewStyle().
-		Padding(0, 1).
-		Border(lipgloss.NormalBorder())
-	contentWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
-	bodyHeight := max(1, height-panelStyle.GetVerticalFrameSize()-1)
-	lines := []string{}
-	for _, item := range a.sectionRailItems() {
-		style := lipgloss.NewStyle().
-			Width(contentWidth)
+func (a *App) renderTabs(width int) string {
+	items := []struct {
+		section section
+		label   string
+	}{
+		{section: sectionToday, label: "Focus"},
+		{section: sectionInbox, label: "Inbox"},
+		{section: sectionNext, label: "Next"},
+		{section: sectionReview, label: "Later"},
+		{section: sectionDeferred, label: "Deferred"},
+		{section: sectionDoneToday, label: "Closed"},
+		{section: sectionCompleted, label: "Done"},
+	}
+
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 1)
 		if item.section == a.selectedSection {
 			style = style.Foreground(lipgloss.Color("230")).Background(lipgloss.Color("35")).Bold(true)
-		} else {
-			style = style.Foreground(lipgloss.Color("252"))
 		}
-		lines = append(lines, style.Render(truncateRunes(fmt.Sprintf("%s %-8s %2d", item.key, item.label, item.count), contentWidth)))
+		parts = append(parts, style.Render(item.label))
 	}
-	lines = sliceLines(lines, 0, bodyHeight)
-	for len(lines) < bodyHeight {
-		lines = append(lines, "")
-	}
-	return a.renderPanel(paneList, width, height, "Views", strings.Join(lines, "\n"))
-}
 
-func (a *App) renderActionsPanel(width, height int) string {
-	lines := a.actionLines()
-	panelStyle := lipgloss.NewStyle().
-		Padding(0, 1).
-		Border(lipgloss.NormalBorder())
-	bodyHeight := max(1, height-panelStyle.GetVerticalFrameSize()-1)
-	lines = sliceLines(lines, 0, bodyHeight)
-	for len(lines) < bodyHeight {
-		lines = append(lines, "")
-	}
-	return a.renderPanel(paneDetails, width, height, "Actions", strings.Join(lines, "\n"))
+	tabsLine := "  " + strings.Join(parts, " ")
+	contentWidth := max(1, width-2)
+
+	return a.renderFlatBlock(width, []string{
+		tabsLine,
+		a.renderRule(contentWidth),
+	})
 }
 
 func (a *App) renderListPanel(width, height int) string {
@@ -519,24 +497,7 @@ func (a *App) renderListPanel(width, height int) string {
 }
 
 func (a *App) listTitle() string {
-	switch a.selectedSection {
-	case sectionToday:
-		return "Today"
-	case sectionInbox:
-		return "Inbox"
-	case sectionNext:
-		return "Next"
-	case sectionReview:
-		return "Later"
-	case sectionDeferred:
-		return "Deferred"
-	case sectionDoneToday:
-		return "Done Today"
-	case sectionCompleted:
-		return "Completed"
-	default:
-		return sectionLabel(a.selectedSection)
-	}
+	return "Tasks"
 }
 
 func (a *App) renderListHeader(width int) string {
@@ -569,7 +530,7 @@ func (a *App) renderDetails(width, height int) string {
 }
 
 func (a *App) renderFooter(width int) string {
-	helpText := "1-7 views  tab pane  j/k move  u undo  q quit"
+	helpText := "tab next tab  shift+tab prev tab  a add to inbox  q quit"
 	help := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245")).
 		Render(truncateRunes(helpText, width-2))
@@ -608,25 +569,25 @@ func (a *App) renderModal(width, height int) string {
 	case modeHelp:
 		title = "Help"
 		body = append(body,
-			"1/t  Today",
+			"1/t  Focus",
 			"2/n  Inbox",
-			"3/i  Next",
-			"4/v  Later",
+			"3/i  Pick from Next",
+			"4/v  Review Later",
 			"5    Deferred",
-			"6/o  Done Today",
+			"6/o  Closed Today",
 			"7/p  Completed",
 			"",
 			"j/k  move cursor",
-			"tab  switch pane",
+			"tab/l  next tab",
+			"shift+tab/h  previous tab",
 			"/    search",
 			"a    add task",
 			"e    edit markdown",
 			"space  select item",
-			"t/n/i/v  move selection",
-			"m    move current item",
+			"m    move item or selection",
 			"c    edit deferred rule",
-			"w    done for today",
-			"r    restore selected done item",
+			"w    close for today",
+			"r    restore selected closed item",
 			"u    undo recent change",
 			"d    complete",
 			"x    delete",
@@ -654,8 +615,13 @@ func (a *App) renderModal(width, height int) string {
 		return a.renderRecurringModal(width, height, title)
 	case modeMove:
 		title = "Move Item"
-		body = append(body, "Choose destination.")
-		for _, placement := range allPlacements {
+		if len(a.selectedIDs) > 0 {
+			title = "Move Selection"
+			body = append(body, "Choose destination for selected items.")
+		} else {
+			body = append(body, "Choose destination.")
+		}
+		for _, placement := range movePlacements {
 			cursor := " "
 			if placement == a.moveChoice {
 				cursor = ">"
@@ -919,14 +885,34 @@ func (a *App) submitAdd() {
 }
 
 func (a *App) submitSchedule() {
-	item := a.selectedItem()
-	if item == nil {
-		a.status = "No item selected."
-		return
-	}
 	day, err := parseDate(a.inputs[0].Value())
 	if err != nil {
 		a.status = err.Error()
+		return
+	}
+	if len(a.selectedIDs) > 0 && a.pendingTarget == PlacementScheduled {
+		a.captureUndo("bulk schedule")
+		scheduled := 0
+		for idx := range a.state.Items {
+			if !a.isSelected(a.state.Items[idx].ID) {
+				continue
+			}
+			a.state.Items[idx].SetScheduledFor(a.now(), day)
+			scheduled++
+		}
+		if scheduled == 0 {
+			a.undo = nil
+			a.status = "No item selected."
+			return
+		}
+		a.selectedIDs = map[string]struct{}{}
+		a.save()
+		a.status = a.undoStatus(fmt.Sprintf("Scheduled %d item(s) for %s.", scheduled, day))
+		return
+	}
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
 		return
 	}
 	a.captureUndo("schedule " + item.ID)
@@ -963,7 +949,7 @@ func (a *App) submitRecurring() {
 
 func (a *App) applyMoveChoice() {
 	item := a.selectedItem()
-	if item == nil {
+	if len(a.selectedIDs) == 0 && item == nil {
 		a.mode = modeNormal
 		a.status = "No item selected."
 		return
@@ -971,6 +957,11 @@ func (a *App) applyMoveChoice() {
 
 	switch a.moveChoice {
 	case PlacementScheduled:
+		if len(a.selectedIDs) > 0 {
+			a.pendingTarget = PlacementScheduled
+			a.startSingleInput(modeSchedule, "YYYY-MM-DD", dateKey(a.now()))
+			return
+		}
 		a.pendingTarget = PlacementScheduled
 		value := item.ScheduledFor
 		if value == "" {
@@ -978,10 +969,18 @@ func (a *App) applyMoveChoice() {
 		}
 		a.startSingleInput(modeSchedule, "YYYY-MM-DD", value)
 	case PlacementRecurring:
+		if len(a.selectedIDs) > 0 {
+			a.applySelectionMove(a.moveChoice)
+			return
+		}
 		a.captureUndo("move " + item.ID)
 		item.SetRecurringDefault(a.now())
 		a.startRecurringEditor(item)
 	default:
+		if len(a.selectedIDs) > 0 {
+			a.applySelectionMove(a.moveChoice)
+			return
+		}
 		a.captureUndo("move " + item.ID)
 		item.MoveTo(a.now(), a.moveChoice)
 		a.mode = modeNormal
@@ -997,11 +996,11 @@ func (a *App) markDoneForToday() {
 		return
 	}
 	if a.selectedSection == sectionDeferred && item.IsDeferred() {
-		a.status = "Deferred items can only be closed from Today."
+		a.status = "Deferred items can only be closed from Focus."
 		return
 	}
 	if !item.IsVisibleToday(a.now()) {
-		a.status = "Done for today only works on Today items."
+		a.status = "Done for today only works on Focus items."
 		return
 	}
 	a.captureUndo("close for today " + item.ID)
@@ -1017,7 +1016,7 @@ func (a *App) completeItem() {
 		return
 	}
 	if a.selectedSection == sectionDeferred && item.IsDeferred() {
-		a.status = "Deferred items can only be completed from Today."
+		a.status = "Deferred items can only be completed from Focus."
 		return
 	}
 	if item.Status == "done" {
@@ -1121,6 +1120,47 @@ func (a *App) moveSelectionTo(target Placement) bool {
 	a.status = a.undoStatus(fmt.Sprintf("Moved %d item(s) to %s.", moved, target))
 	a.syncSelection()
 	return true
+}
+
+func (a *App) applySelectionMove(target Placement) {
+	if target == PlacementRecurring {
+		a.captureUndo("bulk move")
+		moved := 0
+		for idx := range a.state.Items {
+			if !a.isSelected(a.state.Items[idx].ID) {
+				continue
+			}
+			a.state.Items[idx].SetRecurringDefault(a.now())
+			moved++
+		}
+		if moved == 0 {
+			a.undo = nil
+			a.mode = modeNormal
+			a.status = "No item selected."
+			return
+		}
+		a.selectedIDs = map[string]struct{}{}
+		a.mode = modeNormal
+		a.save()
+		a.status = a.undoStatus(fmt.Sprintf("Moved %d item(s) to %s.", moved, target))
+		a.syncSelection()
+		return
+	}
+	if target == PlacementScheduled {
+		a.mode = modeSchedule
+		return
+	}
+	a.mode = modeNormal
+	a.moveSelectionTo(target)
+}
+
+func normalizedMoveChoice(choice Placement) Placement {
+	for _, placement := range movePlacements {
+		if placement == choice {
+			return choice
+		}
+	}
+	return PlacementNext
 }
 
 func (a *App) captureUndo(label string) {
@@ -1253,6 +1293,45 @@ func (a *App) nextSection() {
 	a.resetViewState()
 }
 
+func (a *App) nextPrimarySection() {
+	order := []section{
+		sectionToday,
+		sectionInbox,
+		sectionNext,
+		sectionReview,
+		sectionDeferred,
+		sectionDoneToday,
+		sectionCompleted,
+	}
+	a.cyclePrimarySection(order, 1)
+}
+
+func (a *App) prevPrimarySection() {
+	order := []section{
+		sectionToday,
+		sectionInbox,
+		sectionNext,
+		sectionReview,
+		sectionDeferred,
+		sectionDoneToday,
+		sectionCompleted,
+	}
+	a.cyclePrimarySection(order, -1)
+}
+
+func (a *App) cyclePrimarySection(order []section, delta int) {
+	if len(order) == 0 {
+		return
+	}
+	index := slices.Index(order, a.selectedSection)
+	if index < 0 {
+		index = 0
+	} else {
+		index = (index + delta + len(order)) % len(order)
+	}
+	a.jumpSection(order[index])
+}
+
 func (a *App) resetViewState() {
 	a.listCursor = 0
 	a.listOffset = 0
@@ -1368,11 +1447,11 @@ func (a *App) itemsForSection(s section) []itemRef {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionNext:
-			if item.Status == "open" && (item.Placement() == PlacementNext || item.Placement() == PlacementLater) {
+			if item.Status == "open" && item.Placement() == PlacementNext {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionReview:
-			if item.IsReviewCandidate(now, 7) {
+			if item.Status == "open" && item.Placement() == PlacementLater {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionDeferred:
@@ -1423,33 +1502,33 @@ func (a *App) detailLines(width int) []string {
 		return []string{
 			"No item selected.",
 			"",
-			"Open a list with 1-6, then use j/k to pick an item.",
+			"Open Inbox, Next, or Later with 2-4, then use j/k to pick an item.",
 		}
 	}
 
-	lines := []string{
-		item.Title,
+	lines := append([]string{}, wrapText(item.Title, width)...)
+	lines = append(lines,
 		"",
-		"ID: " + item.ID,
-		"Triage: " + string(item.Triage),
-		"Stage: " + string(item.Stage),
-		"Deferred: " + string(item.DeferredKind),
-		"Status: " + item.Status,
-		"Updated: " + item.UpdatedAt,
-	}
+		"ID: "+item.ID,
+		"Triage: "+string(item.Triage),
+		"Stage: "+string(item.Stage),
+		"Deferred: "+string(item.DeferredKind),
+		"Status: "+item.Status,
+		"Updated: "+item.UpdatedAt,
+	)
 	if item.ScheduledFor != "" {
-		lines = append(lines, "Scheduled for: "+item.ScheduledFor)
+		lines = append(lines, wrapText("Scheduled for: "+item.ScheduledFor, width)...)
 	}
 	if item.RecurringEveryDays > 0 {
-		lines = append(lines, fmt.Sprintf("Recurring: %s", item.RecurringSummary()))
+		lines = append(lines, wrapText(fmt.Sprintf("Recurring: %s", item.RecurringSummary()), width)...)
 	} else if item.Placement() == PlacementRecurring {
-		lines = append(lines, fmt.Sprintf("Recurring: %s", item.RecurringSummary()))
+		lines = append(lines, wrapText(fmt.Sprintf("Recurring: %s", item.RecurringSummary()), width)...)
 	}
 	if item.DoneForDayOn != "" {
-		lines = append(lines, "Done for day: "+item.DoneForDayOn)
+		lines = append(lines, wrapText("Done for day: "+item.DoneForDayOn, width)...)
 	}
 	if item.LastReviewedOn != "" {
-		lines = append(lines, "Last reviewed: "+item.LastReviewedOn)
+		lines = append(lines, wrapText("Last reviewed: "+item.LastReviewedOn, width)...)
 	}
 
 	if len(item.Notes) == 0 {
@@ -1494,7 +1573,7 @@ func newInput(placeholder, value string) textinput.Model {
 func sectionLabel(s section) string {
 	switch s {
 	case sectionToday:
-		return "Today"
+		return "Focus"
 	case sectionInbox:
 		return "Inbox"
 	case sectionNext:
@@ -1504,72 +1583,12 @@ func sectionLabel(s section) string {
 	case sectionDeferred:
 		return "Deferred"
 	case sectionDoneToday:
-		return "Done Today"
+		return "Closed Today"
 	case sectionCompleted:
 		return "Completed"
 	default:
 		return "Unknown"
 	}
-}
-
-func (a *App) sectionRailItems() []sectionRailItem {
-	return []sectionRailItem{
-		{section: sectionToday, key: "1", label: "Today", count: a.sectionCount(sectionToday)},
-		{section: sectionInbox, key: "2", label: "Inbox", count: a.sectionCount(sectionInbox)},
-		{section: sectionNext, key: "3", label: "Next", count: a.sectionCount(sectionNext)},
-		{section: sectionReview, key: "4", label: "Later", count: a.sectionCount(sectionReview)},
-		{section: sectionDeferred, key: "5", label: "Deferred", count: a.sectionCount(sectionDeferred)},
-		{section: sectionDoneToday, key: "6", label: "Done", count: a.sectionCount(sectionDoneToday)},
-		{section: sectionCompleted, key: "7", label: "Complete", count: a.sectionCount(sectionCompleted)},
-	}
-}
-
-func (a *App) actionLines() []string {
-	lines := []string{}
-	switch a.selectedSection {
-	case sectionToday:
-		lines = append(lines,
-			"w  done today",
-			"d  complete",
-			"u  undo",
-			"e  edit",
-			"space select",
-			"t/n/i/v move",
-		)
-	case sectionDeferred:
-		lines = append(lines,
-			"c  edit rule",
-			"u  undo",
-			"e  edit",
-			"m  move",
-			"x  delete",
-		)
-	case sectionCompleted:
-		lines = append(lines,
-			"r  restore",
-			"u  undo",
-			"e  edit",
-			"x  delete",
-		)
-	case sectionDoneToday:
-		lines = append(lines,
-			"r  restore",
-			"u  undo",
-			"e  edit",
-			"x  delete",
-		)
-	default:
-		lines = append(lines,
-			"u  undo",
-			"e  edit",
-			"m  move",
-			"x  delete",
-			"space select",
-			"t/n/i/v move",
-		)
-	}
-	lines = append(lines, "", "a  add", "/  search", "?  help")
-	return lines
 }
 
 func staleLabel(item Item, now time.Time, staleAfterDays int) string {
@@ -1819,8 +1838,21 @@ func wrapText(text string, width int) []string {
 		return []string{""}
 	}
 	lines := []string{}
-	current := words[0]
-	for _, word := range words[1:] {
+	current := ""
+	for _, word := range words {
+		for lipgloss.Width(word) > width {
+			if current != "" {
+				lines = append(lines, current)
+				current = ""
+			}
+			runes := []rune(word)
+			lines = append(lines, string(runes[:width]))
+			word = string(runes[width:])
+		}
+		if current == "" {
+			current = word
+			continue
+		}
 		if lipgloss.Width(current+" "+word) > width {
 			lines = append(lines, current)
 			current = word
@@ -1828,7 +1860,9 @@ func wrapText(text string, width int) []string {
 		}
 		current += " " + word
 	}
-	lines = append(lines, current)
+	if current != "" {
+		lines = append(lines, current)
+	}
 	return lines
 }
 

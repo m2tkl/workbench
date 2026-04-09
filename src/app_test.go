@@ -122,6 +122,25 @@ func TestViewShortcutsUseInboxBeforeNext(t *testing.T) {
 	}
 }
 
+func TestViewShortcutDoesNotMoveSelectedItems(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Draft email", KindTask, PlacementInbox)
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+	app.selectedIDs[item.ID] = struct{}{}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	updated := model.(*App)
+
+	if updated.selectedSection != sectionToday {
+		t.Fatalf("expected 1 to open Focus, got %s", sectionLabel(updated.selectedSection))
+	}
+	if updated.state.Items[0].Placement() != PlacementInbox {
+		t.Fatalf("expected selected item to stay in Inbox, got %s", updated.state.Items[0].Placement())
+	}
+}
+
 func TestShiftJKCyclesViews(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	app := NewApp(newTestStore(t), demoState(now))
@@ -136,7 +155,97 @@ func TestShiftJKCyclesViews(t *testing.T) {
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
 	updated = model.(*App)
 	if updated.selectedSection != sectionToday {
-		t.Fatalf("expected K to move back to Today, got %s", sectionLabel(updated.selectedSection))
+		t.Fatalf("expected K to move back to Focus, got %s", sectionLabel(updated.selectedSection))
+	}
+}
+
+func TestNextSectionExcludesLaterItems(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	nextItem := NewItem(now, "Prepare PR", KindTask, PlacementNext)
+	laterItem := NewItem(now, "Someday cleanup", KindTask, PlacementLater)
+
+	app := NewApp(newTestStore(t), State{Items: []Item{nextItem, laterItem}})
+	app.now = func() time.Time { return now }
+
+	items := app.itemsForSection(sectionNext)
+	if len(items) != 1 {
+		t.Fatalf("expected only Next items, got %d", len(items))
+	}
+	if items[0].item.ID != nextItem.ID {
+		t.Fatalf("expected Next item %s, got %s", nextItem.ID, items[0].item.ID)
+	}
+}
+
+func TestTabsRenderSections(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+	app.width = 100
+	app.height = 24
+
+	view := app.View()
+	if !strings.Contains(view, "Focus") || !strings.Contains(view, "Inbox") || !strings.Contains(view, "Next") || !strings.Contains(view, "Later") {
+		t.Fatalf("expected core tabs in view: %q", view)
+	}
+	if !strings.Contains(view, "Deferred") || !strings.Contains(view, "Closed") || !strings.Contains(view, "Done") {
+		t.Fatalf("expected top tabs in view: %q", view)
+	}
+	if strings.Contains(view, "…") {
+		t.Fatalf("expected tabs to avoid ellipsis truncation: %q", view)
+	}
+}
+
+func TestTabCyclesSections(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated := model.(*App)
+	if updated.selectedSection != sectionInbox {
+		t.Fatalf("expected Tab from Focus to open Inbox, got %s", sectionLabel(updated.selectedSection))
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = model.(*App)
+	if updated.selectedSection != sectionNext {
+		t.Fatalf("expected second Tab to open Next, got %s", sectionLabel(updated.selectedSection))
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	updated = model.(*App)
+	if updated.selectedSection != sectionInbox {
+		t.Fatalf("expected Shift+Tab to move back to Inbox, got %s", sectionLabel(updated.selectedSection))
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	updated = model.(*App)
+	if updated.selectedSection != sectionToday {
+		t.Fatalf("expected Shift+Tab to return to Focus, got %s", sectionLabel(updated.selectedSection))
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	updated = model.(*App)
+	if updated.selectedSection != sectionCompleted {
+		t.Fatalf("expected Shift+Tab from Focus to wrap to Completed, got %s", sectionLabel(updated.selectedSection))
+	}
+}
+
+func TestHLAlsoCycleSections(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	updated := model.(*App)
+	if updated.selectedSection != sectionInbox {
+		t.Fatalf("expected l from Focus to open Inbox, got %s", sectionLabel(updated.selectedSection))
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	updated = model.(*App)
+	if updated.selectedSection != sectionToday {
+		t.Fatalf("expected h to move back to Focus, got %s", sectionLabel(updated.selectedSection))
 	}
 }
 
@@ -253,6 +362,28 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 	}
 	if len(app.state.Items) != 1 {
 		t.Fatalf("expected item to remain before confirmation, got %d items", len(app.state.Items))
+	}
+}
+
+func TestMoveSelectionUsesMoveModal(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Draft email", KindTask, PlacementInbox)
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+	app.selectedIDs[item.ID] = struct{}{}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	app = model.(*App)
+	if app.mode != modeMove {
+		t.Fatalf("expected move modal, got %v", app.mode)
+	}
+
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(*App)
+	if app.state.Items[0].Placement() != PlacementNext {
+		t.Fatalf("expected selected item to move to Next, got %s", app.state.Items[0].Placement())
 	}
 }
 
@@ -544,6 +675,33 @@ func TestViewRespectsViewportMargins(t *testing.T) {
 	for _, line := range lines {
 		if lipgloss.Width(line) > app.width {
 			t.Fatalf("line exceeded viewport width: got %d want <= %d", lipgloss.Width(line), app.width)
+		}
+	}
+}
+
+func TestViewHandlesLongDetailContentWithinViewport(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, strings.Repeat("VeryLongTitle", 8), KindTask, PlacementInbox)
+	item.Notes = []string{strings.Repeat("x", 160)}
+	item.Log = []WorkLogEntry{{
+		Date:   "2026-04-08",
+		Action: "note",
+		Note:   strings.Repeat("y", 160),
+	}}
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.width = 72
+	app.height = 20
+	app.selectedSection = sectionInbox
+
+	view := app.View()
+	if got := lipgloss.Height(view); got > app.height {
+		t.Fatalf("view height exceeded viewport with long detail content: got %d want <= %d", got, app.height)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if lipgloss.Width(line) > app.width {
+			t.Fatalf("line exceeded viewport width with long detail content: got %d want <= %d, line=%q", lipgloss.Width(line), app.width, line)
 		}
 	}
 }
