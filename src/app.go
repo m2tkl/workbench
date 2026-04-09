@@ -434,23 +434,26 @@ func (a *App) renderTabs(width int) string {
 	items := []struct {
 		section section
 		label   string
+		short   string
+		compact string
 	}{
-		{section: sectionToday, label: "Focus"},
-		{section: sectionInbox, label: "Inbox"},
-		{section: sectionNext, label: "Next"},
-		{section: sectionReview, label: "Later"},
-		{section: sectionDeferred, label: "Deferred"},
-		{section: sectionDoneToday, label: "Closed"},
-		{section: sectionCompleted, label: "Done"},
+		{section: sectionToday, label: "Focus", short: "Focus", compact: "F"},
+		{section: sectionInbox, label: "Inbox", short: "Inbox", compact: "I"},
+		{section: sectionNext, label: "Next", short: "Next", compact: "N"},
+		{section: sectionReview, label: "Later", short: "Later", compact: "L"},
+		{section: sectionDeferred, label: "Deferred", short: "Def", compact: "D"},
+		{section: sectionDoneToday, label: "Done for Day", short: "Day", compact: "Day"},
+		{section: sectionCompleted, label: "Complete", short: "Comp", compact: "C"},
 	}
 
+	labels := pickTabLabels(items, max(1, width-2))
 	parts := make([]string, 0, len(items))
-	for _, item := range items {
+	for idx, item := range items {
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 1)
 		if item.section == a.selectedSection {
 			style = style.Foreground(lipgloss.Color("230")).Background(lipgloss.Color("35")).Bold(true)
 		}
-		parts = append(parts, style.Render(item.label))
+		parts = append(parts, style.Render(labels[idx]))
 	}
 
 	tabsLine := "  " + strings.Join(parts, " ")
@@ -460,6 +463,41 @@ func (a *App) renderTabs(width int) string {
 		tabsLine,
 		a.renderRule(contentWidth),
 	})
+}
+
+func pickTabLabels(items []struct {
+	section section
+	label   string
+	short   string
+	compact string
+}, width int) []string {
+	sets := [][]string{
+		make([]string, len(items)),
+		make([]string, len(items)),
+		make([]string, len(items)),
+	}
+	for i, item := range items {
+		sets[0][i] = item.label
+		sets[1][i] = item.short
+		sets[2][i] = item.compact
+	}
+	for _, labels := range sets {
+		if tabLineWidth(labels) <= width {
+			return labels
+		}
+	}
+	return sets[len(sets)-1]
+}
+
+func tabLineWidth(labels []string) int {
+	width := 2
+	for idx, label := range labels {
+		width += lipgloss.Width(label) + 2
+		if idx > 0 {
+			width++
+		}
+	}
+	return width
 }
 
 func (a *App) renderListPanel(width, height int) string {
@@ -570,8 +608,11 @@ func (a *App) renderFlatBlock(width int, lines []string) string {
 	contentWidth := max(1, width-2)
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
-		padding := max(0, contentWidth-lipgloss.Width(line))
-		out = append(out, " "+line+strings.Repeat(" ", padding)+" ")
+		rendered := lipgloss.NewStyle().
+			Width(contentWidth).
+			MaxWidth(contentWidth).
+			Render(line)
+		out = append(out, " "+rendered+" ")
 	}
 	return strings.Join(out, "\n")
 }
@@ -589,8 +630,8 @@ func (a *App) renderModal(width, height int) string {
 			"3/i  Pick from Next",
 			"4/v  Review Later",
 			"5    Deferred",
-			"6/o  Closed Today",
-			"7/p  Completed",
+			"6/o  Done for Day",
+			"7/p  Complete",
 			"",
 			"j/k  move cursor",
 			"tab/l  next tab",
@@ -601,12 +642,14 @@ func (a *App) renderModal(width, height int) string {
 			"space  select item",
 			"m    move item or selection",
 			"c    edit deferred rule",
-			"w    close for today",
-			"r    restore selected closed item",
+			"w    close selected Focus item for today only",
+			"r    restore selected Done for Day or Complete item",
 			"u    undo recent change",
-			"d    complete",
+			"d    mark selected item done",
 			"x    delete",
 			"s    save",
+			"",
+			"Done for Day keeps the task open. Complete finishes it.",
 			"",
 			"Esc, q, ?  close help",
 		)
@@ -1659,9 +1702,9 @@ func sectionLabel(s section) string {
 	case sectionDeferred:
 		return "Deferred"
 	case sectionDoneToday:
-		return "Closed Today"
+		return "Done for Day"
 	case sectionCompleted:
-		return "Completed"
+		return "Complete"
 	default:
 		return "Unknown"
 	}

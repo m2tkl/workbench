@@ -188,11 +188,48 @@ func TestTabsRenderSections(t *testing.T) {
 	if !strings.Contains(view, "Focus") || !strings.Contains(view, "Inbox") || !strings.Contains(view, "Next") || !strings.Contains(view, "Later") {
 		t.Fatalf("expected core tabs in view: %q", view)
 	}
-	if !strings.Contains(view, "Deferred") || !strings.Contains(view, "Closed") || !strings.Contains(view, "Done") {
+	if !strings.Contains(view, "Deferred") || !strings.Contains(view, "Done for Day") || !strings.Contains(view, "Complete") {
 		t.Fatalf("expected top tabs in view: %q", view)
 	}
 	if strings.Contains(view, "…") {
 		t.Fatalf("expected tabs to avoid ellipsis truncation: %q", view)
+	}
+}
+
+func TestTabsUseCompactLabelsWhenWidthIsTight(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+	app.width = 72
+	app.height = 24
+
+	view := app.View()
+	if !strings.Contains(view, "Def") {
+		t.Fatalf("expected compact deferred tab label: %q", view)
+	}
+	if !strings.Contains(view, "Day") {
+		t.Fatalf("expected compact done-for-day tab label: %q", view)
+	}
+	if !strings.Contains(view, "Comp") {
+		t.Fatalf("expected compact complete tab label: %q", view)
+	}
+}
+
+func TestHelpExplainsDoneForDayVsComplete(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+	app.mode = modeHelp
+
+	help := app.renderModal(72, 24)
+	if !strings.Contains(help, "6/o  Done for Day") {
+		t.Fatalf("expected Done for Day shortcut in help: %q", help)
+	}
+	if !strings.Contains(help, "7/p  Complete") {
+		t.Fatalf("expected Complete shortcut in help: %q", help)
+	}
+	if !strings.Contains(help, "Done for Day keeps the task open. Complete finishes it.") {
+		t.Fatalf("expected help to explain status difference: %q", help)
 	}
 }
 
