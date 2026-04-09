@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -252,10 +253,17 @@ func TestHLAlsoCycleSections(t *testing.T) {
 func TestListHeaderAlignsWithRows(t *testing.T) {
 	app := NewApp(newTestStore(t), State{})
 	header := app.renderListHeader(80)
-	row := fmt.Sprintf(">%s %s", " ", app.renderListRow(Item{ID: "12345678", Title: "Example"}))
+	row := fmt.Sprintf(">%s %s", " ", app.renderListRow(Item{
+		ID:    "12345678",
+		Title: "Example",
+		Notes: []string{"- [x] Done\n- [ ] Todo"},
+	}, 77))
 
 	if strings.Index(header, "TITLE") != strings.Index(row, "Example") {
 		t.Fatalf("title column misaligned: header=%q row=%q", header, row)
+	}
+	if strings.Index(header, "PROGRESS") != strings.Index(row, "████") {
+		t.Fatalf("progress column misaligned: header=%q row=%q", header, row)
 	}
 }
 
@@ -265,17 +273,52 @@ func TestListRowMarksItemsWithNotes(t *testing.T) {
 		ID:    "12345678",
 		Title: "Example",
 		Notes: []string{"has note"},
-	})
+	}, 77)
 	withoutNote := app.renderListRow(Item{
 		ID:    "12345678",
 		Title: "Example",
-	})
+	}, 77)
 
 	if !strings.Contains(withNote, "12345678 * Example") {
 		t.Fatalf("expected note marker in row: %q", withNote)
 	}
 	if !strings.Contains(withoutNote, "12345678   Example") {
 		t.Fatalf("expected blank note marker in row: %q", withoutNote)
+	}
+}
+
+func TestListRowShowsChecklistProgress(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	row := app.renderListRow(Item{
+		ID:    "12345678",
+		Title: "Example",
+		Notes: []string{strings.TrimSpace(`
+- [x] Write changelog
+- [ ] Tag release
+- [X] Notify team
+`)},
+	}, 77)
+
+	if !strings.Contains(row, "█████░░░  66%") {
+		t.Fatalf("expected checklist progress in row: %q", row)
+	}
+}
+
+func TestDetailLinesDoNotShowChecklistProgressSection(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Ship release", KindTask, PlacementInbox)
+	item.Notes = []string{strings.TrimSpace(`
+- [x] Write changelog
+- [ ] Tag release
+`)}
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+
+	lines := app.detailLines(80)
+	if slices.Index(lines, "Progress:") != -1 {
+		t.Fatalf("did not expect progress section in details: %#v", lines)
 	}
 }
 

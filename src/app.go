@@ -487,7 +487,7 @@ func (a *App) renderListPanel(width, height int) string {
 		if a.isSelected(item.ID) {
 			selectedMark = "*"
 		}
-		line := fmt.Sprintf("%s%s %s", cursor, selectedMark, a.renderListRow(item))
+		line := fmt.Sprintf("%s%s %s", cursor, selectedMark, a.renderListRow(item, max(1, innerWidth-3)))
 		lines = append(lines, truncateRunes(line, innerWidth))
 	}
 	for len(lines) < bodyHeight {
@@ -501,15 +501,30 @@ func (a *App) listTitle() string {
 }
 
 func (a *App) renderListHeader(width int) string {
-	return truncateRunes(fmt.Sprintf("   %-8s %-1s %s", "ID", "N", "TITLE"), width)
+	titleWidth := listTitleWidth(max(1, width-3))
+	return truncateRunes(
+		"   "+strings.Join([]string{
+			padCell("ID", 8),
+			padCell("N", 1),
+			padCell("TITLE", titleWidth),
+			padCell("PROGRESS", listProgressWidth),
+		}, " "),
+		width,
+	)
 }
 
-func (a *App) renderListRow(item Item) string {
+func (a *App) renderListRow(item Item, width int) string {
 	noteMark := " "
 	if itemHasNoteContent(item) {
 		noteMark = "*"
 	}
-	return fmt.Sprintf("%-8s %-1s %s", item.ID, noteMark, item.Title)
+	titleWidth := listTitleWidth(width)
+	return strings.Join([]string{
+		padCell(item.ID, 8),
+		padCell(noteMark, 1),
+		padCell(item.Title, titleWidth),
+		padCell(listChecklistProgress(item.Notes), listProgressWidth),
+	}, " ")
 }
 
 func (a *App) renderDetails(width, height int) string {
@@ -1559,6 +1574,67 @@ func (a *App) detailLines(width int) []string {
 		}
 	}
 	return lines
+}
+
+func listTitleWidth(width int) int {
+	return max(8, width-(8+1+listProgressWidth+3))
+}
+
+func listChecklistProgress(notes []string) string {
+	done, total := checklistProgress(notes)
+	if total == 0 {
+		return "-"
+	}
+
+	barWidth := 8
+	filled := (done * barWidth) / total
+	if filled == 0 && done > 0 {
+		filled = 1
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	percent := (done * 100) / total
+	return fmt.Sprintf("%s %3d%%", bar, percent)
+}
+
+const listProgressWidth = 15
+
+func padCell(text string, width int) string {
+	text = truncateRunes(text, width)
+	return text + strings.Repeat(" ", max(0, width-lipgloss.Width(text)))
+}
+
+func checklistProgress(notes []string) (done, total int) {
+	for _, note := range notes {
+		for _, line := range strings.Split(note, "\n") {
+			mark, ok := checklistMarker(line)
+			if !ok {
+				continue
+			}
+			total++
+			if mark == 'x' || mark == 'X' {
+				done++
+			}
+		}
+	}
+	return done, total
+}
+
+func checklistMarker(line string) (byte, bool) {
+	line = strings.TrimSpace(line)
+	if len(line) < 6 {
+		return 0, false
+	}
+	if (line[0] != '-' && line[0] != '*') || line[1] != ' ' || line[2] != '[' || line[4] != ']' {
+		return 0, false
+	}
+
+	mark := line[3]
+	switch mark {
+	case ' ', 'x', 'X':
+		return mark, true
+	default:
+		return 0, false
+	}
 }
 
 func newInput(placeholder, value string) textinput.Model {
