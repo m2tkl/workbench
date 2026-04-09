@@ -191,6 +191,75 @@ func TestCompletedSectionListsAndRestoresCompletedItems(t *testing.T) {
 	}
 }
 
+func TestUndoRestoresCompletedItemWithinWindow(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Ship release", KindTask, PlacementNow)
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+
+	app.completeItem()
+	if app.state.Items[0].Status != "done" {
+		t.Fatalf("expected item to be complete, got %s", app.state.Items[0].Status)
+	}
+	if app.undo == nil {
+		t.Fatal("expected undo snapshot after completion")
+	}
+
+	app.undoLastAction()
+	if app.state.Items[0].Status != "open" {
+		t.Fatalf("expected item to be restored to open, got %s", app.state.Items[0].Status)
+	}
+	if app.undo != nil {
+		t.Fatal("expected undo snapshot to be cleared after undo")
+	}
+}
+
+func TestUndoRestoresDeletedItemWithinWindow(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Clean inbox", KindTask, PlacementInbox)
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+
+	app.deleteItem()
+	if len(app.state.Items) != 0 {
+		t.Fatalf("expected item to be deleted, got %d items", len(app.state.Items))
+	}
+
+	app.undoLastAction()
+	if len(app.state.Items) != 1 {
+		t.Fatalf("expected deleted item to be restored, got %d items", len(app.state.Items))
+	}
+	if app.state.Items[0].ID != item.ID {
+		t.Fatalf("expected restored item %s, got %s", item.ID, app.state.Items[0].ID)
+	}
+}
+
+func TestUndoExpiresAfterWindow(t *testing.T) {
+	base := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	current := base
+	item := NewItem(base, "Ship release", KindTask, PlacementNow)
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return current }
+
+	app.completeItem()
+	current = current.Add(undoWindow)
+	app.undoLastAction()
+
+	if app.state.Items[0].Status != "done" {
+		t.Fatalf("expected completed item to stay done after expiry, got %s", app.state.Items[0].Status)
+	}
+	if app.undo != nil {
+		t.Fatal("expected expired undo snapshot to be cleared")
+	}
+	if app.status != "Undo expired." {
+		t.Fatalf("unexpected status: %s", app.status)
+	}
+}
+
 func TestSubmitRecurringUpdatesRuleFromModalInputs(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	item := NewItem(now, "Water plants", KindTask, PlacementRecurring)

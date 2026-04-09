@@ -67,6 +67,19 @@ type sectionRailItem struct {
 	count   int
 }
 
+const undoWindow = 10 * time.Second
+
+type undoState struct {
+	state           State
+	selectedIDs     map[string]struct{}
+	selectedSection section
+	listCursor      int
+	listOffset      int
+	detailOffset    int
+	label           string
+	expiresAt       time.Time
+}
+
 type App struct {
 	store      Store
 	state      State
@@ -97,6 +110,8 @@ type App struct {
 	recurringField  int
 	recurringOption int
 	recurringDraft  recurringDraft
+
+	undo *undoState
 }
 
 func NewApp(store Store, state State) *App {
@@ -219,6 +234,8 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.completeItem()
 	case "r":
 		a.reopenItem()
+	case "u":
+		a.undoLastAction()
 	case "x":
 		a.deleteItem()
 	case "s":
@@ -541,7 +558,7 @@ func (a *App) renderDetails(width, height int) string {
 }
 
 func (a *App) renderFooter(width int) string {
-	helpText := "1-7 views  tab pane  j/k move  q quit"
+	helpText := "1-7 views  tab pane  j/k move  u undo  q quit"
 	help := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245")).
 		Render(truncateRunes(helpText, width-2))
@@ -599,6 +616,7 @@ func (a *App) renderModal(width, height int) string {
 			"c    edit deferred rule",
 			"w    done for today",
 			"r    restore selected done item",
+			"u    undo recent change",
 			"d    complete",
 			"x    delete",
 			"s    save",
@@ -853,9 +871,10 @@ func (a *App) submitAdd() {
 	item := NewInboxItem(a.now(), title, KindTask)
 	item.AddNote(a.now(), a.inputs[1].Value())
 
+	a.captureUndo("add " + item.ID)
 	a.state.AddItem(item)
 	a.save()
-	a.status = "Added " + item.ID + " to Inbox."
+	a.status = a.undoStatus("Added " + item.ID + " to Inbox.")
 }
 
 func (a *App) submitSchedule() {
@@ -869,9 +888,10 @@ func (a *App) submitSchedule() {
 		a.status = err.Error()
 		return
 	}
+	a.captureUndo("schedule " + item.ID)
 	item.SetScheduledFor(a.now(), day)
 	a.save()
-	a.status = "Scheduled " + item.ID + " for " + day + "."
+	a.status = a.undoStatus("Scheduled " + item.ID + " for " + day + ".")
 }
 
 func (a *App) submitRecurring() {
@@ -894,9 +914,10 @@ func (a *App) submitRecurring() {
 		return
 	}
 
+	a.captureUndo("recurring rule " + item.ID)
 	item.SetRecurringRule(a.now(), weekdays, weeks, months, policy)
 	a.save()
-	a.status = "Updated recurring rule for " + item.ID
+	a.status = a.undoStatus("Updated recurring rule for " + item.ID)
 }
 
 func (a *App) applyMoveChoice() {
@@ -916,13 +937,15 @@ func (a *App) applyMoveChoice() {
 		}
 		a.startSingleInput(modeSchedule, "YYYY-MM-DD", value)
 	case PlacementRecurring:
+		a.captureUndo("move " + item.ID)
 		item.SetRecurringDefault(a.now())
 		a.startRecurringEditor(item)
 	default:
+		a.captureUndo("move " + item.ID)
 		item.MoveTo(a.now(), a.moveChoice)
 		a.mode = modeNormal
 		a.save()
-		a.status = fmt.Sprintf("Moved %s to %s.", item.ID, item.Placement())
+		a.status = a.undoStatus(fmt.Sprintf("Moved %s to %s.", item.ID, item.Placement()))
 	}
 }
 
@@ -940,9 +963,10 @@ func (a *App) markDoneForToday() {
 		a.status = "Done for today only works on Today items."
 		return
 	}
+	a.captureUndo("close for today " + item.ID)
 	item.MarkDoneForDay(a.now(), "")
 	a.save()
-	a.status = "Closed for today: " + item.ID
+	a.status = a.undoStatus("Closed for today: " + item.ID)
 }
 
 func (a *App) completeItem() {
@@ -959,13 +983,14 @@ func (a *App) completeItem() {
 		a.status = "Item is already complete."
 		return
 	}
+	a.captureUndo("complete " + item.ID)
 	item.Complete(a.now(), "")
 	a.save()
 	if item.Placement() == PlacementRecurring && item.Status != "done" {
-		a.status = "Closed current recurring window for " + item.ID
+		a.status = a.undoStatus("Closed current recurring window for " + item.ID)
 		return
 	}
-	a.status = "Completed " + item.ID
+	a.status = a.undoStatus("Completed " + item.ID)
 }
 
 func (a *App) reopenItem() {
@@ -975,18 +1000,20 @@ func (a *App) reopenItem() {
 		return
 	}
 	if item.Status == "done" {
+		a.captureUndo("restore " + item.ID)
 		item.ReopenComplete(a.now())
 		a.save()
-		a.status = "Restored " + item.ID
+		a.status = a.undoStatus("Restored " + item.ID)
 		return
 	}
 	if !item.IsClosedForToday(a.now()) {
 		a.status = "Selected item is not restorable."
 		return
 	}
+	a.captureUndo("reopen " + item.ID)
 	item.ReopenForToday(a.now())
 	a.save()
-	a.status = "Reopened " + item.ID
+	a.status = a.undoStatus("Reopened " + item.ID)
 }
 
 func (a *App) deleteItem() {
@@ -996,13 +1023,14 @@ func (a *App) deleteItem() {
 		return
 	}
 	id := item.ID
+	a.captureUndo("delete " + id)
 	if !a.state.DeleteItem(id) {
 		a.status = "Delete failed."
 		return
 	}
 	delete(a.selectedIDs, id)
 	a.save()
-	a.status = "Deleted " + id
+	a.status = a.undoStatus("Deleted " + id)
 }
 
 func (a *App) jumpSection(target section) {
@@ -1034,6 +1062,7 @@ func (a *App) moveSelectionTo(target Placement) bool {
 	if len(a.selectedIDs) == 0 {
 		return false
 	}
+	a.captureUndo("bulk move")
 	moved := 0
 	for idx := range a.state.Items {
 		if !a.isSelected(a.state.Items[idx].ID) {
@@ -1043,13 +1072,84 @@ func (a *App) moveSelectionTo(target Placement) bool {
 		moved++
 	}
 	if moved == 0 {
+		a.undo = nil
 		return false
 	}
 	a.selectedIDs = map[string]struct{}{}
 	a.save()
-	a.status = fmt.Sprintf("Moved %d item(s) to %s.", moved, target)
+	a.status = a.undoStatus(fmt.Sprintf("Moved %d item(s) to %s.", moved, target))
 	a.syncSelection()
 	return true
+}
+
+func (a *App) captureUndo(label string) {
+	a.undo = &undoState{
+		state:           cloneState(a.state),
+		selectedIDs:     cloneSelectedIDs(a.selectedIDs),
+		selectedSection: a.selectedSection,
+		listCursor:      a.listCursor,
+		listOffset:      a.listOffset,
+		detailOffset:    a.detailOffset,
+		label:           label,
+		expiresAt:       a.now().Add(undoWindow),
+	}
+}
+
+func (a *App) undoLastAction() {
+	if a.undo == nil {
+		a.status = "Nothing to undo."
+		return
+	}
+	if !a.now().Before(a.undo.expiresAt) {
+		a.undo = nil
+		a.status = "Undo expired."
+		return
+	}
+
+	snapshot := a.undo
+	a.state = cloneState(snapshot.state)
+	a.selectedIDs = cloneSelectedIDs(snapshot.selectedIDs)
+	a.selectedSection = snapshot.selectedSection
+	a.listCursor = snapshot.listCursor
+	a.listOffset = snapshot.listOffset
+	a.detailOffset = snapshot.detailOffset
+	a.undo = nil
+	a.save()
+	if strings.HasPrefix(a.status, "save failed:") {
+		return
+	}
+	a.syncSelection()
+	a.status = "Undid " + snapshot.label + "."
+}
+
+func (a *App) undoStatus(message string) string {
+	return fmt.Sprintf("%s Press u within %ds to undo.", message, int(undoWindow/time.Second))
+}
+
+func cloneState(state State) State {
+	items := make([]Item, len(state.Items))
+	for idx := range state.Items {
+		items[idx] = cloneItem(state.Items[idx])
+	}
+	return State{Items: items}
+}
+
+func cloneItem(item Item) Item {
+	cloned := item
+	cloned.Notes = append([]string(nil), item.Notes...)
+	cloned.RecurringWeekdays = append([]string(nil), item.RecurringWeekdays...)
+	cloned.RecurringWeeks = append([]string(nil), item.RecurringWeeks...)
+	cloned.RecurringMonths = append([]int(nil), item.RecurringMonths...)
+	cloned.Log = append([]WorkLogEntry(nil), item.Log...)
+	return cloned
+}
+
+func cloneSelectedIDs(selected map[string]struct{}) map[string]struct{} {
+	cloned := make(map[string]struct{}, len(selected))
+	for id := range selected {
+		cloned[id] = struct{}{}
+	}
+	return cloned
 }
 
 func (a *App) save() {
@@ -1390,6 +1490,7 @@ func (a *App) actionLines() []string {
 		lines = append(lines,
 			"w  done today",
 			"d  complete",
+			"u  undo",
 			"e  edit",
 			"space select",
 			"t/n/i/v move",
@@ -1397,6 +1498,7 @@ func (a *App) actionLines() []string {
 	case sectionDeferred:
 		lines = append(lines,
 			"c  edit rule",
+			"u  undo",
 			"e  edit",
 			"m  move",
 			"x  delete",
@@ -1404,17 +1506,20 @@ func (a *App) actionLines() []string {
 	case sectionCompleted:
 		lines = append(lines,
 			"r  restore",
+			"u  undo",
 			"e  edit",
 			"x  delete",
 		)
 	case sectionDoneToday:
 		lines = append(lines,
 			"r  restore",
+			"u  undo",
 			"e  edit",
 			"x  delete",
 		)
 	default:
 		lines = append(lines,
+			"u  undo",
 			"e  edit",
 			"m  move",
 			"x  delete",
