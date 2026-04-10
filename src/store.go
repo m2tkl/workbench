@@ -37,6 +37,21 @@ type storedItem struct {
 }
 
 func defaultStorePath() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("TASKBENCH_DATA_DIR")); path != "" {
+		return filepath.Abs(path)
+	}
+
+	configPath, err := defaultConfigPath()
+	if err != nil {
+		return "", err
+	}
+	config, err := loadConfig(configPath)
+	if err != nil {
+		return "", err
+	}
+	if config.DataDir != "" {
+		return config.DataDir, nil
+	}
 	return os.Getwd()
 }
 

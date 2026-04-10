@@ -25,8 +25,9 @@ See [docs/task-management-philosophy.md](docs/task-management-philosophy.md) for
 1. Enter the dev environment with `nix develop`.
 2. Install the binary with `nix profile install .` or run it directly with `nix run .`.
 3. Set `$EDITOR` if you want `e` to open notes in a specific editor.
-4. Optionally seed demo data with `taskbench --seed-demo`.
-5. Start the app with `taskbench`.
+4. Optionally configure a default data directory with `taskbench config set --data-dir /path/to/taskbench-data`.
+5. Optionally seed demo data with `taskbench --seed-demo`.
+6. Start the app with `taskbench`.
 
 If you prefer Go installation instead of Nix installation:
 
@@ -36,7 +37,7 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
 If you want to start with your own empty data, skip `--seed-demo`.
-Runtime data is stored in the current working directory and is ignored by Git:
+Taskbench reads configuration from your OS config directory, for example `~/.config/taskbench/config.json` on Linux. Runtime data is stored in the current working directory by default, or in the directory you set in config:
 
 ```text
 ./tasks.ndjson
@@ -50,6 +51,7 @@ Runtime data is stored in the current working directory and is ignored by Git:
 ```bash
 nix develop
 go test ./...
+nix run . -- config set --data-dir "$HOME/src/my-taskbench-data"
 nix run . -- --seed-demo
 nix run .
 ```
@@ -58,11 +60,19 @@ Or install it once:
 
 ```bash
 nix profile install .
+taskbench config set --data-dir ~/src/my-taskbench-data
 taskbench --seed-demo
 taskbench
 ```
 
-Active task state is stored in:
+You can inspect the current config with:
+
+```bash
+taskbench config show
+taskbench config path
+```
+
+Active task state is stored in the configured data directory. A one-off override is still available with `--data-dir` or `TASKBENCH_DATA_DIR`:
 
 ```text
 ./tasks.ndjson
