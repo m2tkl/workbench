@@ -653,12 +653,15 @@ func TestStoreLoadsNDJSONWithNoteFile(t *testing.T) {
 Draft the summary for the release.
 
 Include breaking changes and upgrade steps.
-
-## Activity
-- 2026-04-08 | note | seeded by hand
 `) + "\n"
 	if err := os.WriteFile(store.NotePath(record.ID), []byte(note), 0o644); err != nil {
 		t.Fatalf("write note: %v", err)
+	}
+	activity := strings.TrimSpace(`
+{"item_id":"edited-task","date":"2026-04-08","action":"note","note":"seeded by hand"}
+`) + "\n"
+	if err := os.WriteFile(store.ActivityPath(), []byte(activity), 0o644); err != nil {
+		t.Fatalf("write activity: %v", err)
 	}
 
 	loaded, err := store.Load()
@@ -686,6 +689,48 @@ Include breaking changes and upgrade steps.
 	}
 	if item.RecurringDonePolicy != DonePolicyPerMonth {
 		t.Fatalf("unexpected recurring policy: %s", item.RecurringDonePolicy)
+	}
+}
+
+func TestStorePersistsActivityOutsideNoteMarkdown(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewInboxItem(now, "Prepare release notes", KindTask)
+	item.AddNote(now, "Initial note.")
+	item.MoveTo(now.Add(time.Hour), PlacementNext)
+
+	if err := store.Save(State{Items: []Item{item}}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	noteRaw, err := os.ReadFile(store.NotePath(item.ID))
+	if err != nil {
+		t.Fatalf("read note: %v", err)
+	}
+	if strings.Contains(string(noteRaw), "## Activity") {
+		t.Fatalf("did not expect note markdown to include activity section:\n%s", string(noteRaw))
+	}
+
+	activityRaw, err := os.ReadFile(store.ActivityPath())
+	if err != nil {
+		t.Fatalf("read activity: %v", err)
+	}
+	if !strings.Contains(string(activityRaw), "\"item_id\":\""+item.ID+"\"") {
+		t.Fatalf("expected activity record for item, got:\n%s", string(activityRaw))
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.Items) != 1 {
+		t.Fatalf("expected one item, got %d", len(loaded.Items))
+	}
+	if len(loaded.Items[0].Log) != 2 {
+		t.Fatalf("expected two log entries, got %+v", loaded.Items[0].Log)
+	}
+	if loaded.Items[0].Log[1].Action != "move:next" {
+		t.Fatalf("unexpected loaded log: %+v", loaded.Items[0].Log)
 	}
 }
 
@@ -855,5 +900,106 @@ Edited in markdown.
 	}
 	if app.state.Items[0].Placement() != PlacementInbox {
 		t.Fatalf("unexpected placement: %s", app.state.Items[0].Placement())
+	}
+}
+
+func TestStorePreservesUnknownMarkdownSectionsOnRoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	state := State{
+		Items: []Item{
+			NewItem(now, "Investigate parser", KindTask, PlacementInbox),
+		},
+	}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	itemID := state.Items[0].ID
+	note := strings.TrimSpace(`
+# Investigate parser
+
+Known intro.
+
+## Research Notes
+Keep this heading and body.
+`) + "\n"
+	if err := os.MkdirAll(store.NotesDir(), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(store.NotePath(itemID), []byte(note), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.Items) != 1 {
+		t.Fatalf("expected one item, got %d", len(loaded.Items))
+	}
+	if strings.TrimSpace(loaded.Items[0].NoteMarkdown) == "" {
+		t.Fatalf("expected note markdown to be preserved")
+	}
+
+	loaded.Items[0].MoveTo(now.Add(time.Hour), PlacementNext)
+
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("save round-trip: %v", err)
+	}
+
+	raw, err := os.ReadFile(store.NotePath(itemID))
+	if err != nil {
+		t.Fatalf("read round-tripped note: %v", err)
+	}
+	got := string(raw)
+	if !strings.Contains(got, "## Research Notes\nKeep this heading and body.") {
+		t.Fatalf("expected unknown section to remain, got:\n%s", got)
+	}
+}
+
+func TestStoreDoesNotRewriteEditedNoteMarkdownOnSave(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	state := State{
+		Items: []Item{
+			NewItem(now, "Investigate parser", KindTask, PlacementInbox),
+		},
+	}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	itemID := state.Items[0].ID
+	note := strings.TrimSpace(`
+# Investigate parser
+
+Intro paragraph.
+
+## Research Notes
+Keep this heading and spacing.
+
+- bullet stays here
+`) + "\n"
+	if err := os.WriteFile(store.NotePath(itemID), []byte(note), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	loaded.Items[0].MoveTo(now.Add(time.Hour), PlacementNext)
+
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("save after move: %v", err)
+	}
+
+	raw, err := os.ReadFile(store.NotePath(itemID))
+	if err != nil {
+		t.Fatalf("read saved note: %v", err)
+	}
+	if string(raw) != note {
+		t.Fatalf("expected note markdown to stay byte-for-byte stable\nwant:\n%s\ngot:\n%s", note, string(raw))
 	}
 }

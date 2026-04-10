@@ -1542,6 +1542,9 @@ func (a *App) matchesFilter(item Item) bool {
 			return true
 		}
 	}
+	if strings.Contains(strings.ToLower(item.NoteMarkdown), q) {
+		return true
+	}
 	return false
 }
 
@@ -1614,6 +1617,16 @@ func (a *App) detailLines(width int) []string {
 				line += "  " + entry.Note
 			}
 			lines = append(lines, wrapText(line, width)...)
+		}
+	}
+	if raw := strings.TrimSpace(item.NoteMarkdown); raw != "" {
+		lines = append(lines, "")
+		for _, part := range strings.Split(raw, "\n") {
+			if strings.TrimSpace(part) == "" {
+				lines = append(lines, "")
+				continue
+			}
+			lines = append(lines, wrapText(part, width)...)
 		}
 	}
 	return lines

@@ -84,6 +84,8 @@ type Item struct {
 	DeferredKind        DeferredKind   `json:"deferred_kind,omitempty"`
 	Status              string         `json:"status"`
 	Notes               []string       `json:"notes,omitempty"`
+	NoteMarkdown        string         `json:"-"`
+	NoteTailMarkdown    string         `json:"-"`
 	DoneForDayOn        string         `json:"done_for_day_on,omitempty"`
 	LastReviewedOn      string         `json:"last_reviewed_on,omitempty"`
 	ScheduledFor        string         `json:"scheduled_for,omitempty"`
@@ -169,6 +171,7 @@ func (i *Item) AddNote(now time.Time, note string) {
 		return
 	}
 	i.Notes = append(i.Notes, note)
+	i.NoteMarkdown = appendNoteMarkdown(i.NoteMarkdown, i.Title, note)
 	i.Log = append(i.Log, WorkLogEntry{
 		Date:   dateKey(now),
 		Action: "note",
@@ -176,6 +179,20 @@ func (i *Item) AddNote(now time.Time, note string) {
 	})
 	i.LastReviewedOn = dateKey(now)
 	i.touch(now)
+}
+
+func appendNoteMarkdown(raw, title, note string) string {
+	raw = strings.TrimSpace(strings.ReplaceAll(raw, "\r\n", "\n"))
+	note = strings.TrimSpace(note)
+	title = strings.TrimSpace(title)
+
+	if raw == "" {
+		if title == "" {
+			return note
+		}
+		return strings.TrimSpace("# " + title + "\n\n" + note)
+	}
+	return strings.TrimSpace(raw + "\n\n" + note)
 }
 
 func (i *Item) MoveTo(now time.Time, placement Placement) {

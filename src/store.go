@@ -14,6 +14,13 @@ type Store struct {
 	root string
 }
 
+type storedActivity struct {
+	ItemID string `json:"item_id"`
+	Date   string `json:"date"`
+	Action string `json:"action"`
+	Note   string `json:"note,omitempty"`
+}
+
 type storedItem struct {
 	ID                  string       `json:"id"`
 	Title               string       `json:"title"`
@@ -67,6 +74,10 @@ func (s Store) NotesDir() string {
 	return filepath.Join(s.root, "notes")
 }
 
+func (s Store) ActivityPath() string {
+	return filepath.Join(s.root, "activity.ndjson")
+}
+
 func (s Store) ItemPath(id string) string {
 	return s.NotePath(id)
 }
@@ -92,6 +103,11 @@ func (s Store) EnsureNoteFile(item Item) (string, error) {
 }
 
 func (s *Store) Load() (State, error) {
+	activityByItem, err := s.loadActivity()
+	if err != nil {
+		return State{}, fmt.Errorf("load activity: %w", err)
+	}
+
 	file, err := os.Open(s.TasksPath())
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -117,6 +133,7 @@ func (s *Store) Load() (State, error) {
 		}
 
 		item := itemFromStored(record)
+		item.Log = append(item.Log, activityByItem[item.ID]...)
 		if err := s.loadNote(&item); err != nil {
 			return State{}, fmt.Errorf("load note %s: %w", item.ID, err)
 		}
@@ -139,6 +156,9 @@ func (s *Store) Save(state State) error {
 	}
 
 	if err := s.saveTasks(state.Items); err != nil {
+		return err
+	}
+	if err := s.saveActivity(state.Items); err != nil {
 		return err
 	}
 	if err := s.saveNotes(state.Items); err != nil {
@@ -168,6 +188,34 @@ func (s *Store) saveTasks(items []Item) error {
 	return writer.Flush()
 }
 
+func (s *Store) saveActivity(items []Item) error {
+	file, err := os.Create(s.ActivityPath())
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	for _, item := range items {
+		for _, entry := range item.Log {
+			record := storedActivity{
+				ItemID: item.ID,
+				Date:   entry.Date,
+				Action: entry.Action,
+				Note:   entry.Note,
+			}
+			encoded, err := json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			if _, err := writer.Write(append(encoded, '\n')); err != nil {
+				return err
+			}
+		}
+	}
+	return writer.Flush()
+}
+
 func (s *Store) saveNotes(items []Item) error {
 	keep := map[string]struct{}{}
 	for _, item := range items {
@@ -179,7 +227,7 @@ func (s *Store) saveNotes(items []Item) error {
 		}
 
 		keep[item.ID+".md"] = struct{}{}
-		if err := os.WriteFile(s.NotePath(item.ID), []byte(renderNoteMarkdown(item)), 0o644); err != nil {
+		if err := os.WriteFile(s.NotePath(item.ID), []byte(renderStoredNoteMarkdown(item)), 0o644); err != nil {
 			return err
 		}
 	}
@@ -200,6 +248,44 @@ func (s *Store) saveNotes(items []Item) error {
 		}
 	}
 	return nil
+}
+
+func (s Store) loadActivity() (map[string][]WorkLogEntry, error) {
+	raw, err := os.ReadFile(s.ActivityPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string][]WorkLogEntry{}, nil
+		}
+		return nil, err
+	}
+
+	entries := map[string][]WorkLogEntry{}
+	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var record storedActivity
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			return nil, fmt.Errorf("parse activity.ndjson: %w", err)
+		}
+		entry := WorkLogEntry{
+			Date:   strings.TrimSpace(record.Date),
+			Action: strings.TrimSpace(record.Action),
+			Note:   strings.TrimSpace(record.Note),
+		}
+		if entry.Action == "" || strings.TrimSpace(record.ItemID) == "" {
+			continue
+		}
+		entries[strings.TrimSpace(record.ItemID)] = append(entries[strings.TrimSpace(record.ItemID)], entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 func (s Store) loadNote(item *Item) error {
@@ -260,17 +346,11 @@ func itemFromStored(record storedItem) Item {
 		CreatedAt:           strings.TrimSpace(record.CreatedAt),
 		UpdatedAt:           strings.TrimSpace(record.UpdatedAt),
 	}
-	if item.Kind == "" {
-		item.Kind = KindTask
-	}
-	if item.Status == "" {
-		item.Status = "open"
-	}
 	return item
 }
 
 func itemHasNoteContent(item Item) bool {
-	return len(item.Notes) > 0 || len(item.Log) > 0
+	return strings.TrimSpace(item.NoteMarkdown) != "" || len(item.Notes) > 0
 }
 
 func renderNoteMarkdown(item Item) string {
@@ -289,21 +369,20 @@ func renderNoteMarkdown(item Item) string {
 		}
 	}
 
-	if len(item.Log) > 0 {
-		lines = append(lines, "", "## Activity")
-		for _, entry := range item.Log {
-			lines = append(lines, "- "+renderLogEntry(entry))
-		}
-	}
-
 	lines = append(lines, "")
 	return strings.Join(lines, "\n")
+}
+
+func renderStoredNoteMarkdown(item Item) string {
+	if raw := strings.TrimSpace(item.NoteMarkdown); raw != "" {
+		return raw + "\n"
+	}
+	return renderNoteMarkdown(item)
 }
 
 func parseNoteMarkdown(raw string, item *Item) {
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	lines := strings.Split(raw, "\n")
-	section := "body"
 	var noteLines []string
 	flushNote := func() {
 		note := strings.TrimSpace(strings.Join(noteLines, "\n"))
@@ -314,34 +393,19 @@ func parseNoteMarkdown(raw string, item *Item) {
 	}
 
 	item.Notes = nil
-	item.Log = nil
+	item.NoteMarkdown = strings.TrimRight(raw, "\n")
 
-	for _, line := range lines {
+	for idx, line := range lines {
 		switch {
-		case strings.HasPrefix(line, "# "):
+		case idx == 0 && strings.HasPrefix(line, "# "):
 			flushNote()
 			title := strings.TrimSpace(strings.TrimPrefix(line, "# "))
 			if title != "" {
 				item.Title = title
 			}
-			section = "body"
-		case line == "## Notes":
+		case strings.TrimSpace(line) == "":
 			flushNote()
-			section = "body"
-		case line == "## Activity", line == "## Log":
-			flushNote()
-			section = "log"
-		case strings.HasPrefix(line, "## "):
-			flushNote()
-			section = ""
-		case strings.HasPrefix(line, "- ") && section == "log":
-			entry := parseLogEntry(strings.TrimSpace(strings.TrimPrefix(line, "- ")))
-			if entry.Action != "" {
-				item.Log = append(item.Log, entry)
-			}
-		case section == "body" && strings.TrimSpace(line) == "":
-			flushNote()
-		case section == "body":
+		default:
 			noteLines = append(noteLines, line)
 		}
 	}
