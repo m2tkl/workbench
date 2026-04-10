@@ -1964,9 +1964,12 @@ func wrapText(text string, width int) []string {
 				lines = append(lines, current)
 				current = ""
 			}
-			runes := []rune(word)
-			lines = append(lines, string(runes[:width]))
-			word = string(runes[width:])
+			head, tail := splitStringByWidth(word, width)
+			if head == "" {
+				break
+			}
+			lines = append(lines, head)
+			word = tail
 		}
 		if current == "" {
 			current = word
@@ -1985,6 +1988,28 @@ func wrapText(text string, width int) []string {
 	return lines
 }
 
+func splitStringByWidth(text string, width int) (string, string) {
+	if width < 1 || text == "" {
+		return "", text
+	}
+
+	runes := []rune(text)
+	used := 0
+	cut := 0
+	for idx, r := range runes {
+		runeWidth := lipgloss.Width(string(r))
+		if used+runeWidth > width {
+			break
+		}
+		used += runeWidth
+		cut = idx + 1
+	}
+	if cut == 0 {
+		return string(runes[:1]), string(runes[1:])
+	}
+	return string(runes[:cut]), string(runes[cut:])
+}
+
 func sliceLines(lines []string, offset, count int) []string {
 	if offset >= len(lines) {
 		return []string{}
@@ -1997,14 +2022,17 @@ func truncateRunes(text string, width int) string {
 	if width < 1 {
 		return ""
 	}
-	runes := []rune(text)
-	if len(runes) <= width {
+	if lipgloss.Width(text) <= width {
 		return text
 	}
 	if width == 1 {
-		return string(runes[:1])
+		return "…"
 	}
-	return string(runes[:width-1]) + "…"
+	head, _ := splitStringByWidth(text, width-1)
+	if head == "" {
+		return "…"
+	}
+	return head + "…"
 }
 
 func min(a, b int) int {

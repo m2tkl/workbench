@@ -786,6 +786,28 @@ func TestViewHandlesLongDetailContentWithinViewport(t *testing.T) {
 	}
 }
 
+func TestWrapTextHandlesWideRunesWithoutPanicking(t *testing.T) {
+	lines := wrapText(strings.Repeat("界", 72), 70)
+	if len(lines) < 2 {
+		t.Fatalf("expected wrapped lines for wide runes, got %#v", lines)
+	}
+	for _, line := range lines {
+		if lipgloss.Width(line) > 70 {
+			t.Fatalf("wrapped line exceeded width: %d %q", lipgloss.Width(line), line)
+		}
+	}
+}
+
+func TestTruncateRunesHandlesWideRunesByDisplayWidth(t *testing.T) {
+	got := truncateRunes(strings.Repeat("界", 8), 7)
+	if lipgloss.Width(got) > 7 {
+		t.Fatalf("truncated string exceeded width: %d %q", lipgloss.Width(got), got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("expected ellipsis suffix, got %q", got)
+	}
+}
+
 func TestEditorProcessUsesEditorEnv(t *testing.T) {
 	t.Setenv("EDITOR", "nano -w")
 	cmd := editorProcess("/tmp/task.md")
