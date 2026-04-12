@@ -863,6 +863,73 @@ func TestWorkbenchThemeListShowsStateAndTitle(t *testing.T) {
 	}
 }
 
+func TestWorkbenchColumnsHaveMatchingHeight(t *testing.T) {
+	app := NewApp(newTestStore(t), demoState(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)))
+	app.view = viewWorkbench
+
+	bodyHeight := 18
+	width := 96
+	gutter := 1
+	leftWidth := max(22, width/4-gutter)
+	rightWidth := max(40, width-leftWidth-gutter)
+	if leftWidth+gutter+rightWidth > width {
+		leftWidth = max(22, width-rightWidth-gutter)
+	}
+	if rightWidth < 20 {
+		rightWidth = 20
+	}
+
+	listHeight := max(7, int(float64(bodyHeight)*0.45))
+	if listHeight > bodyHeight-4 {
+		listHeight = bodyHeight - 4
+	}
+	detailHeight := max(4, bodyHeight-listHeight)
+
+	left := app.renderWorkbenchNavPanel(leftWidth, bodyHeight)
+	list := app.renderWorkbenchIssuePanel(rightWidth, listHeight)
+	details := app.renderDetails(rightWidth, detailHeight)
+	right := lipgloss.JoinVertical(lipgloss.Left, list, details)
+
+	leftHeight := lipgloss.Height(left)
+	rightHeight := lipgloss.Height(right)
+	if leftHeight != rightHeight {
+		t.Fatalf("workbench columns height mismatch: left=%d right=%d", leftHeight, rightHeight)
+	}
+	if leftHeight != bodyHeight {
+		t.Fatalf("workbench column height = %d, want %d", leftHeight, bodyHeight)
+	}
+}
+
+func TestRenderPanelTruncatesLongTitleToKeepHeightStable(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	panel := app.renderPanel(paneList, 30, 8, strings.Repeat("LongTitle", 8), "one\ntwo")
+
+	if got := lipgloss.Height(panel); got != 8 {
+		t.Fatalf("panel height = %d, want 8", got)
+	}
+}
+
+func TestRenderPanelClampsLongBodyLinesToKeepHeightStable(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	panel := app.renderPanel(paneList, 30, 8, "Issues", strings.Repeat("LongBody", 20))
+
+	if got := lipgloss.Height(panel); got != 8 {
+		t.Fatalf("panel height = %d, want 8", got)
+	}
+}
+
+func TestWorkbenchBodyKeepsRequestedHeightAtNarrowWidth(t *testing.T) {
+	app := NewApp(newTestStore(t), demoState(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)))
+	app.view = viewWorkbench
+
+	for _, width := range []int{76, 68, 60, 52} {
+		body := app.renderWorkbenchBody(width, 14)
+		if got := lipgloss.Height(body); got != 14 {
+			t.Fatalf("width=%d workbench body height = %d, want 14", width, got)
+		}
+	}
+}
+
 func TestListRowShowsStateAndTitle(t *testing.T) {
 	app := NewApp(newTestStore(t), State{})
 	withNote := app.renderListRow(Item{

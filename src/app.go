@@ -665,11 +665,7 @@ func (a *App) renderHeader(width int) string {
 }
 
 func (a *App) renderListPanel(width, height int) string {
-	panelStyle := lipgloss.NewStyle().
-		Padding(0, 1).
-		Border(lipgloss.NormalBorder())
-	innerWidth := max(10, width-panelStyle.GetHorizontalFrameSize())
-	bodyHeight := max(1, height-panelStyle.GetVerticalFrameSize()-1)
+	innerWidth, bodyHeight := panelContentSize(width, height, true)
 	listHeight := max(1, bodyHeight-3)
 	items := a.itemsForSection(a.selectedSection)
 	a.ensureListOffset(listHeight, len(items))
@@ -706,11 +702,7 @@ func (a *App) listTitle() string {
 }
 
 func (a *App) renderThemeListPanel(width, height int) string {
-	panelStyle := lipgloss.NewStyle().
-		Padding(0, 1).
-		Border(lipgloss.NormalBorder())
-	innerWidth := max(10, width-panelStyle.GetHorizontalFrameSize())
-	bodyHeight := max(1, height-panelStyle.GetVerticalFrameSize()-1)
+	innerWidth, bodyHeight := panelContentSize(width, height, true)
 	listHeight := max(1, bodyHeight-3)
 	a.ensureListOffset(listHeight, len(a.themes))
 
@@ -775,9 +767,7 @@ func (a *App) selectedWorkbenchEntry() *workbenchEntry {
 
 func (a *App) renderWorkbenchNavPanel(width, height int) string {
 	entries := a.workbenchEntries()
-	panelStyle := lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.NormalBorder())
-	innerWidth := max(10, width-panelStyle.GetHorizontalFrameSize())
-	bodyHeight := max(1, height-panelStyle.GetVerticalFrameSize())
+	innerWidth, bodyHeight := panelContentSize(width, height, false)
 
 	type navLine struct {
 		label string
@@ -874,9 +864,7 @@ func (a *App) workbenchItems() []itemRef {
 }
 
 func (a *App) renderWorkbenchIssuePanel(width, height int) string {
-	panelStyle := lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.NormalBorder())
-	innerWidth := max(10, width-panelStyle.GetHorizontalFrameSize())
-	bodyHeight := max(1, height-panelStyle.GetVerticalFrameSize()-1)
+	innerWidth, bodyHeight := panelContentSize(width, height, true)
 	items := a.workbenchItems()
 	listHeight := max(1, bodyHeight-2)
 	a.ensureWorkbenchOffset(&a.workbenchIssueOffset, a.workbenchIssueCursor, listHeight, len(items))
@@ -994,12 +982,8 @@ func (a *App) renderSelectableLine(content string, width int, cursorSelected boo
 }
 
 func (a *App) renderDetails(width, height int) string {
-	panelStyle := lipgloss.NewStyle().
-		Padding(0, 1).
-		Border(lipgloss.NormalBorder())
-	innerWidth := max(10, width-panelStyle.GetHorizontalFrameSize())
+	innerWidth, maxLines := panelContentSize(width, height, true)
 	lines := a.detailLines(innerWidth)
-	maxLines := max(1, height-panelStyle.GetVerticalFrameSize()-1)
 	if a.detailOffset > max(0, len(lines)-maxLines) {
 		a.detailOffset = max(0, len(lines)-maxLines)
 	}
@@ -1209,35 +1193,83 @@ func (a *App) renderPanel(target pane, width, height int, title, body string) st
 		titleColor = lipgloss.Color("42")
 	}
 
-	panelStyle := lipgloss.NewStyle().
-		Padding(0, 1).
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(borderColor)
-	contentWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
-	contentHeight := max(1, height-panelStyle.GetVerticalFrameSize()-1)
-	if strings.TrimSpace(title) == "" {
-		contentHeight = max(1, height-panelStyle.GetVerticalFrameSize())
-	}
+	hasTitle := strings.TrimSpace(title) != ""
+	contentWidth, contentHeight := panelContentSize(width, height, hasTitle)
+	bodyLines := fitBlockToSize(strings.Split(body, "\n"), contentWidth, contentHeight)
+	panelStyle := panelStyleWithBorder(borderColor)
 
 	titleBar := lipgloss.NewStyle().
 		Foreground(titleColor).
 		Bold(true).
 		Width(contentWidth).
-		Render(title)
+		MaxWidth(contentWidth).
+		Render(truncateRunes(title, contentWidth))
 
 	content := lipgloss.NewStyle().
 		Width(contentWidth).
+		MaxWidth(contentWidth).
 		Height(contentHeight).
-		Render(body)
+		Render(strings.Join(bodyLines, "\n"))
 
 	renderedBody := titleBar + "\n" + content
-	if strings.TrimSpace(title) == "" {
+	if !hasTitle {
 		renderedBody = content
 	}
 
 	return panelStyle.
 		Width(max(1, width-2)).
 		Render(renderedBody)
+}
+
+func panelStyleWithBorder(borderColor lipgloss.TerminalColor) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Padding(0, 1).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(borderColor)
+}
+
+func basePanelStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Padding(0, 1).
+		Border(lipgloss.NormalBorder())
+}
+
+func panelContentSize(width, height int, hasTitle bool) (int, int) {
+	panelStyle := basePanelStyle()
+	contentWidth := max(10, width-panelStyle.GetHorizontalFrameSize())
+	contentHeight := max(1, height-panelStyle.GetVerticalFrameSize())
+	if hasTitle {
+		contentHeight = max(1, contentHeight-1)
+	}
+	return contentWidth, contentHeight
+}
+
+func fitBlockToSize(lines []string, width, height int) []string {
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+
+	out := make([]string, 0, height)
+	for _, line := range lines {
+		out = append(out, fitLineToWidth(line, width))
+		if len(out) == height {
+			return out
+		}
+	}
+	for len(out) < height {
+		out = append(out, "")
+	}
+	return out
+}
+
+func fitLineToWidth(line string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	rendered := lipgloss.NewStyle().
+		MaxWidth(width).
+		Render(line)
+	return strings.SplitN(rendered, "\n", 2)[0]
 }
 
 func (a *App) renderRecurringModal(width, height int, title string) string {
