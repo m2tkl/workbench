@@ -1,4 +1,5 @@
 .gopath/
+.dev/
 tasks/
 tasks.ndjson
 activity.ndjson

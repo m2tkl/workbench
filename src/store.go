@@ -24,7 +24,6 @@ type storedActivity struct {
 type storedItem struct {
 	ID                  string       `json:"id"`
 	Title               string       `json:"title"`
-	Kind                ItemKind     `json:"kind"`
 	Triage              Triage       `json:"triage"`
 	Stage               Stage        `json:"stage,omitempty"`
 	DeferredKind        DeferredKind `json:"deferred_kind,omitempty"`
@@ -304,7 +303,6 @@ func storedItemFromItem(item Item) storedItem {
 	return storedItem{
 		ID:                  item.ID,
 		Title:               item.Title,
-		Kind:                item.Kind,
 		Triage:              item.Triage,
 		Stage:               item.Stage,
 		DeferredKind:        item.DeferredKind,
@@ -328,7 +326,6 @@ func itemFromStored(record storedItem) Item {
 	item := Item{
 		ID:                  strings.TrimSpace(record.ID),
 		Title:               strings.TrimSpace(record.Title),
-		Kind:                record.Kind,
 		Triage:              record.Triage,
 		Stage:               record.Stage,
 		DeferredKind:        record.DeferredKind,

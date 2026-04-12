@@ -20,7 +20,7 @@ func newTestStore(t *testing.T) Store {
 }
 
 func TestNowItemHiddenOnlyForSameDay(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC), "Ship release", KindTask, PlacementNow)
+	item := NewItem(time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC), "Ship release", PlacementNow)
 	item.MarkDoneForDay(time.Date(2026, 4, 8, 17, 0, 0, 0, time.UTC), "continue tomorrow")
 
 	if item.IsVisibleToday(time.Date(2026, 4, 8, 18, 0, 0, 0, time.UTC)) {
@@ -32,7 +32,7 @@ func TestNowItemHiddenOnlyForSameDay(t *testing.T) {
 }
 
 func TestRecurringItemAppearsOnDueDay(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Check backups", KindTask, PlacementRecurring)
+	item := NewItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Check backups", PlacementRecurring)
 	item.SetRecurring(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), 2, "2026-04-06")
 
 	if !item.IsVisibleToday(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)) {
@@ -44,7 +44,7 @@ func TestRecurringItemAppearsOnDueDay(t *testing.T) {
 }
 
 func TestRecurringWeeklyTaskStaysHiddenUntilNextWeekAfterComplete(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Plan sprint", KindTask, PlacementRecurring)
+	item := NewItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Plan sprint", PlacementRecurring)
 	item.SetRecurringRule(
 		time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC),
 		[]string{"mon"},
@@ -72,7 +72,7 @@ func TestRecurringWeeklyTaskStaysHiddenUntilNextWeekAfterComplete(t *testing.T) 
 }
 
 func TestRecurringWeeksRequireWeekdays(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), "Invalid rule", KindTask, PlacementRecurring)
+	item := NewItem(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), "Invalid rule", PlacementRecurring)
 	item.SetRecurringRule(
 		time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC),
 		nil,
@@ -87,7 +87,7 @@ func TestRecurringWeeksRequireWeekdays(t *testing.T) {
 
 func TestDeferredSectionDisablesDoneActions(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Pay rent", KindTask, PlacementScheduled)
+	item := NewItem(now, "Pay rent", PlacementScheduled)
 	item.SetScheduledFor(now, "2026-04-08")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -125,7 +125,7 @@ func TestViewShortcutsUseInboxBeforeNext(t *testing.T) {
 
 func TestViewShortcutDoesNotMoveSelectedItems(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Draft email", KindTask, PlacementInbox)
+	item := NewItem(now, "Draft email", PlacementInbox)
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
 	app.selectedSection = sectionInbox
@@ -139,6 +139,462 @@ func TestViewShortcutDoesNotMoveSelectedItems(t *testing.T) {
 	}
 	if updated.state.Items[0].Placement() != PlacementInbox {
 		t.Fatalf("expected selected item to stay in Inbox, got %s", updated.state.Items[0].Placement())
+	}
+}
+
+func TestVaultModeShiftTConvertsInboxItemToTask(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewInboxItem(now, "Draft expense note")
+	item.EntityType = entityInbox
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.saveState = func(state State) error {
+		app.state = state
+		return nil
+	}
+	app.selectedSection = sectionInbox
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+	updated := model.(*App)
+
+	if updated.state.Items[0].EntityType != entityTask {
+		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityTask)
+	}
+	if updated.state.Items[0].Placement() != PlacementNext {
+		t.Fatalf("placement = %q, want %q", updated.state.Items[0].Placement(), PlacementNext)
+	}
+}
+
+func TestVaultModeShiftIConvertsInboxItemToIssue(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewInboxItem(now, "Investigate OTP edge case")
+	item.EntityType = entityInbox
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.saveState = func(state State) error {
+		app.state = state
+		return nil
+	}
+	app.selectedSection = sectionInbox
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
+	updated := model.(*App)
+
+	if updated.state.Items[0].EntityType != entityIssue {
+		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityIssue)
+	}
+	if updated.state.Items[0].Placement() != PlacementNext {
+		t.Fatalf("placement = %q, want %q", updated.state.Items[0].Placement(), PlacementNext)
+	}
+}
+
+func TestDetailLinesShowRefs(t *testing.T) {
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{{
+			ID:         "expense-submit",
+			Title:      "Submit expense",
+			EntityType: entityTask,
+			Refs:       []string{"knowledge/expense-submit.md", "themes/admin/context/policy.md"},
+			Triage:     TriageStock,
+			Stage:      StageNow,
+			Status:     "open",
+			CreatedAt:  "2026-04-12T00:00:00Z",
+			UpdatedAt:  "2026-04-12T00:00:00Z",
+		}},
+	})
+
+	lines := app.detailLines(80)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "refs:") || !strings.Contains(joined, "knowledge/expense-submit.md") {
+		t.Fatalf("expected refs in details: %q", joined)
+	}
+}
+
+func TestDetailLinesShowUserFacingTypeInsteadOfEntityOrKind(t *testing.T) {
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{{
+			ID:         "otp-tx-design",
+			Title:      "OTP Tx design",
+			EntityType: entityIssue,
+			Theme:      "auth-stepup",
+			Triage:     TriageStock,
+			Stage:      StageNext,
+			Status:     "open",
+			CreatedAt:  "2026-04-12T00:00:00Z",
+			UpdatedAt:  "2026-04-12T00:00:00Z",
+		}},
+	})
+	app.selectedSection = sectionNext
+
+	joined := strings.Join(app.detailLines(80), "\n")
+	if !strings.Contains(joined, "type: issue") {
+		t.Fatalf("expected user-facing type label: %q", joined)
+	}
+	if strings.Contains(joined, "entity:") || strings.Contains(joined, "kind:") {
+		t.Fatalf("did not expect internal labels in details: %q", joined)
+	}
+}
+
+func TestThemeDetailLinesShowRelatedIssues(t *testing.T) {
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup"},
+			{ID: "issue-2", Title: "Review challenge flow", EntityType: entityIssue, Theme: "auth-stepup"},
+		},
+	})
+	app.themes = []ThemeDoc{{
+		ID:      "auth-stepup",
+		Title:   "Auth step-up",
+		Created: "2026-04-12",
+		Updated: "2026-04-12",
+	}}
+	app.view = viewWorkbench
+	app.selectedSection = sectionIssueNoStatus
+	app.focus = paneSidebar
+	app.workbenchNavCursor = 8
+	app.themeAssetSummary = func(string) ThemeAssetSummary {
+		return ThemeAssetSummary{SourceFiles: 2, ContextFiles: 1}
+	}
+
+	joined := strings.Join(app.detailLines(80), "\n")
+	if !strings.Contains(joined, "issues: 2") || !strings.Contains(joined, "OTP Tx design") {
+		t.Fatalf("expected theme details with related issues: %q", joined)
+	}
+	if !strings.Contains(joined, "source files: 2") || !strings.Contains(joined, "context files: 1") {
+		t.Fatalf("expected theme asset counts: %q", joined)
+	}
+}
+
+func TestModeSwitchTogglesExecutionAndWorkbench(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
+	updated := model.(*App)
+	if updated.view != viewWorkbench || updated.selectedSection != sectionIssueNoStatus {
+		t.Fatalf("expected workbench mode, got view=%v section=%v", updated.view, updated.selectedSection)
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
+	updated = model.(*App)
+	if updated.view != viewExecution || updated.selectedSection != sectionToday {
+		t.Fatalf("expected execution mode, got view=%v section=%v", updated.view, updated.selectedSection)
+	}
+}
+
+func TestWorkbenchSectionsShowIssueStateBuckets(t *testing.T) {
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open", Triage: TriageStock, Stage: StageNow},
+			{ID: "issue-2", Title: "Queued issue", EntityType: entityIssue, Status: "open", Triage: TriageStock, Stage: StageNext},
+			{ID: "task-1", Title: "Task", EntityType: entityTask, Status: "open"},
+		},
+	})
+	app.view = viewWorkbench
+
+	if got := len(app.itemsForSection(sectionIssueNow)); got != 1 {
+		t.Fatalf("now issues = %d, want 1", got)
+	}
+	if got := len(app.itemsForSection(sectionIssueNext)); got != 1 {
+		t.Fatalf("next issues = %d, want 1", got)
+	}
+	if got := len(app.itemsForSection(sectionIssueNoStatus)); got != 2 {
+		t.Fatalf("all open issues = %d, want 2", got)
+	}
+}
+
+func TestWorkbenchThemeSelectionFiltersIssues(t *testing.T) {
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-2", Title: "Review challenge flow", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-3", Title: "Unthemed issue", EntityType: entityIssue, Status: "open"},
+		},
+	})
+	app.view = viewWorkbench
+	app.themes = []ThemeDoc{
+		{ID: "auth-stepup", Title: "Auth step-up"},
+	}
+	app.selectedSection = sectionIssueNoStatus
+	app.workbenchNavCursor = 8
+
+	issues := app.workbenchItems()
+	if len(issues) != 2 {
+		t.Fatalf("filtered issues = %d, want 2", len(issues))
+	}
+	if issues[0].item.Theme != "auth-stepup" || issues[1].item.Theme != "auth-stepup" {
+		t.Fatalf("unexpected filtered issues: %#v", issues)
+	}
+}
+
+func TestWorkbenchSidebarShowsBucketDetails(t *testing.T) {
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-2", Title: "Unthemed issue", EntityType: entityIssue, Status: "open"},
+		},
+	})
+	app.view = viewWorkbench
+	app.focus = paneSidebar
+	app.selectedSection = sectionIssueNoStatus
+	app.workbenchNavCursor = 7
+
+	joined := strings.Join(app.detailLines(80), "\n")
+	if !strings.Contains(joined, "title: No Theme") || !strings.Contains(joined, "issues: 1") {
+		t.Fatalf("expected no-theme bucket details: %q", joined)
+	}
+}
+
+func TestWorkbenchListShowsIssueWorkingSetDetails(t *testing.T) {
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{
+			{
+				ID:           "issue-1",
+				Title:        "OTP Tx design",
+				EntityType:   entityIssue,
+				Theme:        "auth-stepup",
+				Status:       "open",
+				Refs:         []string{"knowledge/otp.md"},
+				NoteMarkdown: "# OTP Tx design\n\nNeed a constraint table.",
+			},
+		},
+	})
+	app.view = viewWorkbench
+	app.focus = paneList
+	app.selectedSection = sectionIssueNoStatus
+	app.workbenchNavCursor = 8
+	app.themes = []ThemeDoc{{ID: "auth-stepup", Title: "Auth step-up"}}
+	app.issueAssetSummary = func(string) IssueAssetSummary {
+		return IssueAssetSummary{ContextFiles: 3, MemoFiles: 2, LogFiles: 1}
+	}
+
+	joined := strings.Join(app.detailLines(80), "\n")
+	if !strings.Contains(joined, "context files: 3") || !strings.Contains(joined, "memo files: 2") || !strings.Contains(joined, "log files: 1") {
+		t.Fatalf("expected issue working set details: %q", joined)
+	}
+	if !strings.Contains(joined, "Need a constraint table.") {
+		t.Fatalf("expected issue note summary: %q", joined)
+	}
+}
+
+func TestWorkbenchStateShortcutsMoveSelectedIssue(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open", Triage: TriageStock, Stage: StageNext},
+		},
+	})
+	app.now = func() time.Time { return now }
+	app.view = viewWorkbench
+	app.focus = paneList
+	app.selectedSection = sectionIssueNoStatus
+	app.themes = []ThemeDoc{{ID: "auth-stepup", Title: "Auth step-up"}}
+	app.workbenchNavCursor = 8
+	app.saveState = func(state State) error {
+		app.state = state
+		return nil
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	updated := model.(*App)
+	if updated.state.Items[0].Placement() != PlacementNow {
+		t.Fatalf("placement = %q, want %q", updated.state.Items[0].Placement(), PlacementNow)
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	updated = model.(*App)
+	if updated.state.Items[0].Placement() != PlacementLater {
+		t.Fatalf("placement = %q, want %q", updated.state.Items[0].Placement(), PlacementLater)
+	}
+}
+
+func TestWorkbenchTabSwitchesBetweenThemesAndIssues(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	app.view = viewWorkbench
+	app.focus = paneSidebar
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated := model.(*App)
+	if updated.focus != paneList {
+		t.Fatalf("focus = %v, want paneList", updated.focus)
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	updated = model.(*App)
+	if updated.focus != paneSidebar {
+		t.Fatalf("focus = %v, want paneSidebar", updated.focus)
+	}
+}
+
+func TestWorkbenchHLMovesAcrossPanels(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	app.view = viewWorkbench
+	app.focus = paneSidebar
+	app.selectedSection = sectionIssueNoStatus
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	updated := model.(*App)
+	if updated.focus != paneList {
+		t.Fatalf("expected workbench l to move to list, got focus=%v", updated.focus)
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	updated = model.(*App)
+	if updated.focus != paneSidebar {
+		t.Fatalf("expected workbench h to move back to sidebar, got focus=%v", updated.focus)
+	}
+}
+
+func TestWorkbenchArrowKeysSwitchIssueFilterTabs(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	app.view = viewWorkbench
+	app.selectedSection = sectionIssueNoStatus
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(*App)
+	if updated.selectedSection != sectionIssueNow {
+		t.Fatalf("selectedSection = %v, want %v", updated.selectedSection, sectionIssueNow)
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	updated = model.(*App)
+	if updated.selectedSection != sectionIssueNoStatus {
+		t.Fatalf("selectedSection = %v, want %v", updated.selectedSection, sectionIssueNoStatus)
+	}
+}
+
+func TestOpenRefsModalAndOpenSelectedRef(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Submit expense", PlacementNow)
+	item.EntityType = entityTask
+	item.Refs = []string{"knowledge/expense-submit.md", "themes/admin/context/policy.md"}
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+
+	var opened string
+	app.resolveRef = func(ref string) (string, error) {
+		return "/tmp/" + ref, nil
+	}
+	app.openEditor = func(path string) tea.Cmd {
+		opened = path
+		return nil
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	updated := model.(*App)
+	if updated.mode != modeOpenRef {
+		t.Fatalf("mode = %v, want modeOpenRef", updated.mode)
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	updated = model.(*App)
+	if updated.refIndex != 1 {
+		t.Fatalf("refIndex = %d, want 1", updated.refIndex)
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(*App)
+	if opened != "/tmp/themes/admin/context/policy.md" {
+		t.Fatalf("opened path = %q", opened)
+	}
+	if updated.mode != modeNormal {
+		t.Fatalf("mode = %v, want modeNormal", updated.mode)
+	}
+}
+
+func TestOpenRefsModalOpensWithUppercaseO(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Submit expense", PlacementNow)
+	item.EntityType = entityTask
+	item.Refs = []string{"knowledge/expense-submit.md"}
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	updated := model.(*App)
+	if updated.mode != modeOpenRef {
+		t.Fatalf("mode = %v, want modeOpenRef", updated.mode)
+	}
+}
+
+func TestEditRefsUpdatesSelectedItem(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Submit expense", PlacementNow)
+	item.EntityType = entityTask
+	item.Refs = []string{"knowledge/old.md"}
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.saveState = func(state State) error {
+		app.state = state
+		return nil
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	updated := model.(*App)
+	if updated.mode != modeEditRefs {
+		t.Fatalf("mode = %v, want modeEditRefs", updated.mode)
+	}
+
+	updated.inputs[0].SetValue("knowledge/expense-submit.md,themes/admin/context/policy.md")
+	updated.submitModal()
+
+	if len(updated.state.Items[0].Refs) != 2 {
+		t.Fatalf("refs = %#v", updated.state.Items[0].Refs)
+	}
+	if updated.state.Items[0].Refs[0] != "knowledge/expense-submit.md" {
+		t.Fatalf("unexpected refs = %#v", updated.state.Items[0].Refs)
+	}
+}
+
+func TestEditThemeUpdatesIssue(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewIssueItem(now, "OTP Tx design", PlacementNext)
+	item.EntityType = entityIssue
+	item.Theme = "auth-old"
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionNext
+	app.saveState = func(state State) error {
+		app.state = state
+		return nil
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	updated := model.(*App)
+	if updated.mode != modeEditTheme {
+		t.Fatalf("mode = %v, want modeEditTheme", updated.mode)
+	}
+
+	updated.inputs[0].SetValue("auth-stepup")
+	updated.submitModal()
+
+	if updated.state.Items[0].Theme != "auth-stepup" {
+		t.Fatalf("theme = %q, want auth-stepup", updated.state.Items[0].Theme)
+	}
+}
+
+func TestEditThemeRejectsTask(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Submit expense", PlacementNow)
+	item.EntityType = entityTask
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	updated := model.(*App)
+	if updated.mode != modeNormal {
+		t.Fatalf("mode = %v, want modeNormal", updated.mode)
+	}
+	if updated.status != "Selected item is not an issue." {
+		t.Fatalf("status = %q", updated.status)
 	}
 }
 
@@ -162,8 +618,8 @@ func TestShiftJKCyclesViews(t *testing.T) {
 
 func TestNextSectionExcludesLaterItems(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	nextItem := NewItem(now, "Prepare PR", KindTask, PlacementNext)
-	laterItem := NewItem(now, "Someday cleanup", KindTask, PlacementLater)
+	nextItem := NewItem(now, "Prepare PR", PlacementNext)
+	laterItem := NewItem(now, "Someday cleanup", PlacementLater)
 
 	app := NewApp(newTestStore(t), State{Items: []Item{nextItem, laterItem}})
 	app.now = func() time.Time { return now }
@@ -177,7 +633,7 @@ func TestNextSectionExcludesLaterItems(t *testing.T) {
 	}
 }
 
-func TestTabsRenderSections(t *testing.T) {
+func TestViewDoesNotRenderTopTabs(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	app := NewApp(newTestStore(t), demoState(now))
 	app.now = func() time.Time { return now }
@@ -185,33 +641,8 @@ func TestTabsRenderSections(t *testing.T) {
 	app.height = 24
 
 	view := app.View()
-	if !strings.Contains(view, "Focus") || !strings.Contains(view, "Inbox") || !strings.Contains(view, "Next") || !strings.Contains(view, "Later") {
-		t.Fatalf("expected core tabs in view: %q", view)
-	}
-	if !strings.Contains(view, "Deferred") || !strings.Contains(view, "Done for Day") || !strings.Contains(view, "Complete") {
-		t.Fatalf("expected top tabs in view: %q", view)
-	}
-	if strings.Contains(view, "…") {
-		t.Fatalf("expected tabs to avoid ellipsis truncation: %q", view)
-	}
-}
-
-func TestTabsUseCompactLabelsWhenWidthIsTight(t *testing.T) {
-	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	app := NewApp(newTestStore(t), demoState(now))
-	app.now = func() time.Time { return now }
-	app.width = 72
-	app.height = 24
-
-	view := app.View()
-	if !strings.Contains(view, "Def") {
-		t.Fatalf("expected compact deferred tab label: %q", view)
-	}
-	if !strings.Contains(view, "Day") {
-		t.Fatalf("expected compact done-for-day tab label: %q", view)
-	}
-	if !strings.Contains(view, "Comp") {
-		t.Fatalf("expected compact complete tab label: %q", view)
+	if strings.Contains(view, "Focus  Inbox") || strings.Contains(view, "NoStatus") {
+		t.Fatalf("expected top tabs to be removed from view: %q", view)
 	}
 }
 
@@ -265,7 +696,7 @@ func TestTabCyclesSections(t *testing.T) {
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	updated = model.(*App)
 	if updated.selectedSection != sectionCompleted {
-		t.Fatalf("expected Shift+Tab from Focus to wrap to Completed, got %s", sectionLabel(updated.selectedSection))
+		t.Fatalf("expected Shift+Tab from Focus to wrap to Complete, got %s", sectionLabel(updated.selectedSection))
 	}
 }
 
@@ -291,44 +722,176 @@ func TestListHeaderAlignsWithRows(t *testing.T) {
 	app := NewApp(newTestStore(t), State{})
 	header := app.renderListHeader(80)
 	row := fmt.Sprintf(">%s %s", " ", app.renderListRow(Item{
-		ID:    "12345678",
-		Title: "Example",
-		Notes: []string{"- [x] Done\n- [ ] Todo"},
+		ID:         "12345678",
+		Title:      "Example",
+		EntityType: entityTask,
+		Theme:      "auth-stepup",
+		Refs:       []string{"knowledge/example.md"},
+		Notes:      []string{"- [x] Done\n- [ ] Todo"},
 	}, 77))
 
-	if strings.Index(header, "TITLE") != strings.Index(row, "Example") {
-		t.Fatalf("title column misaligned: header=%q row=%q", header, row)
+	if !strings.Contains(header, "STATE") || !strings.Contains(header, "TITLE") {
+		t.Fatalf("expected state/title header: header=%q", header)
 	}
-	if strings.Index(header, "PROGRESS") != strings.Index(row, "████") {
-		t.Fatalf("progress column misaligned: header=%q row=%q", header, row)
+	if !strings.Contains(row, "Example") || !strings.Contains(row, "inbox") {
+		t.Fatalf("expected state/title row: row=%q", row)
 	}
 }
 
-func TestListRowMarksItemsWithNotes(t *testing.T) {
+func TestWorkbenchActionListShowsThemeInsteadOfState(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	entry := &workbenchEntry{kind: "now"}
+	header := app.renderWorkbenchListHeader(entry, 80)
+	row := app.renderWorkbenchListRow(entry, Item{
+		Title: "Example",
+		Theme: "auth-stepup",
+	}, 77)
+
+	if !strings.Contains(header, "THEME") || strings.Contains(header, "STATE") {
+		t.Fatalf("expected action workbench header to show theme: %q", header)
+	}
+	if !strings.Contains(row, "auth-stepup") || !strings.Contains(row, "Example") {
+		t.Fatalf("expected action workbench row to show theme and title: %q", row)
+	}
+}
+
+func TestWorkbenchInboxListShowsTitleOnly(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	entry := &workbenchEntry{kind: "inbox"}
+	header := app.renderWorkbenchListHeader(entry, 80)
+	row := app.renderWorkbenchListRow(entry, Item{
+		Title: "Example",
+		Theme: "auth-stepup",
+	}, 77)
+
+	if !strings.Contains(header, "TITLE") || strings.Contains(header, "THEME") || strings.Contains(header, "STATE") {
+		t.Fatalf("expected inbox workbench header to show title only: %q", header)
+	}
+	if strings.TrimSpace(row) != "Example" {
+		t.Fatalf("expected inbox workbench row to show title only: %q", row)
+	}
+}
+
+func TestWorkbenchListShowsMultiSelectMarker(t *testing.T) {
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+		},
+	})
+	app.view = viewWorkbench
+	app.focus = paneList
+	app.selectedSection = sectionIssueNoStatus
+	app.themes = []ThemeDoc{{ID: "auth-stepup", Title: "Auth step-up"}}
+	app.workbenchNavCursor = 8
+	app.selectedIDs["issue-1"] = struct{}{}
+	panel := app.renderWorkbenchIssuePanel(60, 10)
+
+	if !strings.Contains(panel, ">* ") {
+		t.Fatalf("expected workbench list to show combined cursor/select marker: %q", panel)
+	}
+}
+
+func TestWorkbenchListKeepsLastSelectedItemVisible(t *testing.T) {
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{
+			{ID: "issue-1", Title: "First", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-2", Title: "Second", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-3", Title: "Third", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+		},
+	})
+	app.view = viewWorkbench
+	app.focus = paneList
+	app.selectedSection = sectionIssueNoStatus
+	app.themes = []ThemeDoc{{ID: "auth-stepup", Title: "Auth step-up"}}
+	app.workbenchNavCursor = 8
+	app.workbenchIssueCursor = 2
+
+	panel := app.renderWorkbenchIssuePanel(40, 6)
+	if !strings.Contains(panel, "Third") {
+		t.Fatalf("expected last selected item to remain visible: %q", panel)
+	}
+}
+
+func TestWorkbenchSpaceSelectionKeepsCursorOnLastFilteredItem(t *testing.T) {
+	app := NewApp(newTestStore(t), State{
+		Items: []Item{
+			{ID: "issue-1", Title: "Theme First", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-2", Title: "Theme Last", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-3", Title: "Other Theme", EntityType: entityIssue, Theme: "other", Status: "open"},
+		},
+	})
+	app.view = viewWorkbench
+	app.focus = paneList
+	app.selectedSection = sectionIssueNoStatus
+	app.themes = []ThemeDoc{
+		{ID: "auth-stepup", Title: "Auth step-up"},
+		{ID: "other", Title: "Other"},
+	}
+	app.workbenchNavCursor = 8
+	app.workbenchIssueCursor = 1
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	updated := model.(*App)
+
+	if updated.workbenchIssueCursor != 1 {
+		t.Fatalf("expected cursor to stay on last filtered item, got %d", updated.workbenchIssueCursor)
+	}
+	if !updated.isSelected("issue-2") {
+		t.Fatal("expected last filtered item to be selected")
+	}
+	panel := updated.renderWorkbenchIssuePanel(40, 6)
+	if !strings.Contains(panel, "Theme Last") {
+		t.Fatalf("expected last filtered item to remain visible after selection: %q", panel)
+	}
+}
+
+func TestWorkbenchThemeListShowsStateAndTitle(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	entry := &workbenchEntry{kind: "theme"}
+	header := app.renderWorkbenchListHeader(entry, 80)
+	row := app.renderWorkbenchListRow(entry, Item{
+		Title:  "Example",
+		Triage: TriageStock,
+		Stage:  StageNext,
+	}, 77)
+
+	if !strings.Contains(header, "STATE") || strings.Contains(header, "THEME") {
+		t.Fatalf("expected theme workbench header to show state: %q", header)
+	}
+	if !strings.Contains(row, "next") || !strings.Contains(row, "Example") {
+		t.Fatalf("expected theme workbench row to show state and title: %q", row)
+	}
+}
+
+func TestListRowShowsStateAndTitle(t *testing.T) {
 	app := NewApp(newTestStore(t), State{})
 	withNote := app.renderListRow(Item{
-		ID:    "12345678",
-		Title: "Example",
-		Notes: []string{"has note"},
+		ID:         "12345678",
+		Title:      "Example",
+		EntityType: entityTask,
+		Theme:      "auth-stepup",
+		Notes:      []string{"has note"},
 	}, 77)
 	withoutNote := app.renderListRow(Item{
-		ID:    "12345678",
-		Title: "Example",
+		ID:         "12345678",
+		Title:      "Example",
+		EntityType: entityTask,
 	}, 77)
 
-	if !strings.Contains(withNote, "12345678 * Example") {
-		t.Fatalf("expected note marker in row: %q", withNote)
+	if !strings.Contains(withNote, "inbox") || !strings.Contains(withNote, "Example") {
+		t.Fatalf("expected state/title row: %q", withNote)
 	}
-	if !strings.Contains(withoutNote, "12345678   Example") {
-		t.Fatalf("expected blank note marker in row: %q", withoutNote)
+	if !strings.Contains(withoutNote, "inbox") || !strings.Contains(withoutNote, "Example") {
+		t.Fatalf("expected state/title row: %q", withoutNote)
 	}
 }
 
-func TestListRowShowsChecklistProgress(t *testing.T) {
+func TestListRowDoesNotShowChecklistProgress(t *testing.T) {
 	app := NewApp(newTestStore(t), State{})
 	row := app.renderListRow(Item{
-		ID:    "12345678",
-		Title: "Example",
+		ID:         "12345678",
+		Title:      "Example",
+		EntityType: entityTask,
 		Notes: []string{strings.TrimSpace(`
 - [x] Write changelog
 - [ ] Tag release
@@ -336,14 +899,30 @@ func TestListRowShowsChecklistProgress(t *testing.T) {
 `)},
 	}, 77)
 
-	if !strings.Contains(row, "█████░░░  66%") {
-		t.Fatalf("expected checklist progress in row: %q", row)
+	if strings.Contains(row, "%") || strings.Contains(row, "█") {
+		t.Fatalf("did not expect checklist progress in row: %q", row)
+	}
+}
+
+func TestListRowDoesNotShowIssueType(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	row := app.renderListRow(Item{
+		ID:         "otp-tx",
+		Title:      "OTP Tx design",
+		EntityType: entityIssue,
+	}, 77)
+
+	if strings.Contains(row, "issue") {
+		t.Fatalf("did not expect type marker in row: %q", row)
+	}
+	if !strings.Contains(row, "inbox") || !strings.Contains(row, "OTP Tx design") {
+		t.Fatalf("expected state/title row: %q", row)
 	}
 }
 
 func TestDetailLinesDoNotShowChecklistProgressSection(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Ship release", KindTask, PlacementInbox)
+	item := NewItem(now, "Ship release", PlacementInbox)
 	item.Notes = []string{strings.TrimSpace(`
 - [x] Write changelog
 - [ ] Tag release
@@ -359,9 +938,9 @@ func TestDetailLinesDoNotShowChecklistProgressSection(t *testing.T) {
 	}
 }
 
-func TestDetailLinesShowFrontmatterLogAndNoteSections(t *testing.T) {
+func TestExecutionDetailLinesFocusOnImmediateContext(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Investigate parser", KindTask, PlacementInbox)
+	item := NewItem(now, "Investigate parser", PlacementInbox)
 	item.NoteMarkdown = strings.TrimSpace(`
 # Investigate parser
 
@@ -382,26 +961,26 @@ Keep this heading and body.
 
 	lines := app.detailLines(80)
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "Frontmatter:") {
-		t.Fatalf("expected frontmatter section, got:\n%s", joined)
+	if !strings.Contains(joined, "Execute:") {
+		t.Fatalf("expected execution detail header, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, "Log:") {
-		t.Fatalf("expected log section, got:\n%s", joined)
+	if !strings.Contains(joined, "Next context:") {
+		t.Fatalf("expected next context section, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, "Note:") {
-		t.Fatalf("expected note section, got:\n%s", joined)
+	if !strings.Contains(joined, "Intro paragraph.") {
+		t.Fatalf("expected first paragraph summary, got:\n%s", joined)
 	}
 	if strings.Contains(joined, "# Investigate parser") {
 		t.Fatalf("did not expect duplicated top-level note heading, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, "## Research Notes") {
-		t.Fatalf("expected note body to remain visible, got:\n%s", joined)
+	if strings.Contains(joined, "## Research Notes") {
+		t.Fatalf("did not expect deep note body in execution detail, got:\n%s", joined)
 	}
 }
 
 func TestCompletedSectionListsAndRestoresCompletedItems(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Ship release", KindTask, PlacementNow)
+	item := NewItem(now, "Ship release", PlacementNow)
 	item.Complete(now, "")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -422,7 +1001,7 @@ func TestCompletedSectionListsAndRestoresCompletedItems(t *testing.T) {
 
 func TestUndoRestoresCompletedItemWithinWindow(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Ship release", KindTask, PlacementNow)
+	item := NewItem(now, "Ship release", PlacementNow)
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -446,7 +1025,7 @@ func TestUndoRestoresCompletedItemWithinWindow(t *testing.T) {
 
 func TestUndoRestoresDeletedItemWithinWindow(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Clean inbox", KindTask, PlacementInbox)
+	item := NewItem(now, "Clean inbox", PlacementInbox)
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -468,7 +1047,7 @@ func TestUndoRestoresDeletedItemWithinWindow(t *testing.T) {
 
 func TestDeleteRequiresConfirmation(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Clean inbox", KindTask, PlacementInbox)
+	item := NewItem(now, "Clean inbox", PlacementInbox)
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -487,7 +1066,7 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 
 func TestMoveSelectionUsesMoveModal(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Draft email", KindTask, PlacementInbox)
+	item := NewItem(now, "Draft email", PlacementInbox)
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -509,7 +1088,7 @@ func TestMoveSelectionUsesMoveModal(t *testing.T) {
 
 func TestDeleteConfirmationEnterDeletesAndEscCancels(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Clean inbox", KindTask, PlacementInbox)
+	item := NewItem(now, "Clean inbox", PlacementInbox)
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -541,7 +1120,7 @@ func TestDeleteConfirmationEnterDeletesAndEscCancels(t *testing.T) {
 func TestUndoExpiresAfterWindow(t *testing.T) {
 	base := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	current := base
-	item := NewItem(base, "Ship release", KindTask, PlacementNow)
+	item := NewItem(base, "Ship release", PlacementNow)
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return current }
@@ -563,7 +1142,7 @@ func TestUndoExpiresAfterWindow(t *testing.T) {
 
 func TestSubmitRecurringUpdatesRuleFromModalInputs(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Water plants", KindTask, PlacementRecurring)
+	item := NewItem(now, "Water plants", PlacementRecurring)
 	item.SetRecurringDefault(now)
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -595,7 +1174,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	store := newTestStore(t)
 	state := State{
 		Items: []Item{
-			NewItem(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), "Prepare PR", KindWork, PlacementNext),
+			NewIssueItem(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), "Prepare PR", PlacementNext),
 		},
 	}
 
@@ -625,7 +1204,7 @@ func TestStoreRoundTrip(t *testing.T) {
 func TestStoreRoundTripPreservesRecurringMetadata(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Water plants", KindTask, PlacementRecurring)
+	item := NewItem(now, "Water plants", PlacementRecurring)
 	item.SetRecurringRule(now, []string{"mon", "wed"}, []string{"first"}, []int{3, 9}, DonePolicyPerMonth)
 	item.LastCompletedOn = "2026-03-03"
 
@@ -664,7 +1243,6 @@ func TestStoreLoadsNDJSONWithNoteFile(t *testing.T) {
 	record := storedItem{
 		ID:                  "edited-task",
 		Title:               "Prepare release notes",
-		Kind:                KindTask,
 		Triage:              TriageStock,
 		Stage:               StageNext,
 		Status:              "open",
@@ -735,7 +1313,7 @@ Include breaking changes and upgrade steps.
 func TestStorePersistsActivityOutsideNoteMarkdown(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewInboxItem(now, "Prepare release notes", KindTask)
+	item := NewInboxItem(now, "Prepare release notes")
 	item.AddNote(now, "Initial note.")
 	item.MoveTo(now.Add(time.Hour), PlacementNext)
 
@@ -846,7 +1424,7 @@ func TestViewRespectsViewportMargins(t *testing.T) {
 
 func TestViewHandlesLongDetailContentWithinViewport(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, strings.Repeat("VeryLongTitle", 8), KindTask, PlacementInbox)
+	item := NewItem(now, strings.Repeat("VeryLongTitle", 8), PlacementInbox)
 	item.Notes = []string{strings.Repeat("x", 160)}
 	item.Log = []WorkLogEntry{{
 		Date:   "2026-04-08",
@@ -912,7 +1490,7 @@ func TestReloadFromStoreReadsEditedMarkdown(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	state := State{
 		Items: []Item{
-			NewItem(now, "Old title", KindTask, PlacementInbox),
+			NewItem(now, "Old title", PlacementInbox),
 		},
 	}
 	if err := store.Save(state); err != nil {
@@ -948,7 +1526,7 @@ func TestStorePreservesUnknownMarkdownSectionsOnRoundTrip(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	state := State{
 		Items: []Item{
-			NewItem(now, "Investigate parser", KindTask, PlacementInbox),
+			NewItem(now, "Investigate parser", PlacementInbox),
 		},
 	}
 	if err := store.Save(state); err != nil {
@@ -1003,7 +1581,7 @@ func TestStoreDoesNotRewriteEditedNoteMarkdownOnSave(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	state := State{
 		Items: []Item{
-			NewItem(now, "Investigate parser", KindTask, PlacementInbox),
+			NewItem(now, "Investigate parser", PlacementInbox),
 		},
 	}
 	if err := store.Save(state); err != nil {

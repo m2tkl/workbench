@@ -16,7 +16,9 @@ import (
 type pane int
 
 const (
-	paneList pane = iota
+	paneSidebar pane = iota
+	paneList
+	paneAction
 	paneDetails
 )
 
@@ -31,6 +33,9 @@ const (
 	modeSchedule
 	modeRecurring
 	modeConfirmDelete
+	modeOpenRef
+	modeEditRefs
+	modeEditTheme
 )
 
 type section int
@@ -43,6 +48,17 @@ const (
 	sectionDeferred
 	sectionDoneToday
 	sectionCompleted
+	sectionIssueNoStatus
+	sectionIssueNow
+	sectionIssueNext
+	sectionIssueLater
+)
+
+type appView int
+
+const (
+	viewExecution appView = iota
+	viewWorkbench
 )
 
 type itemRef struct {
@@ -79,21 +95,37 @@ type App struct {
 	state      State
 	now        func() time.Time
 	openEditor func(path string) tea.Cmd
+	saveState  func(State) error
+	readOnly   bool
+	loadState  func() (State, error)
+	canEditMD  bool
+	resolveRef func(string) (string, error)
+	themes     []ThemeDoc
+	issueAssetSummary func(string) IssueAssetSummary
+	themeAssetSummary func(string) ThemeAssetSummary
 
 	today string
 
 	width  int
 	height int
 
-	focus           pane
-	mode            mode
-	selectedSection section
-	listCursor      int
-	listOffset      int
-	detailOffset    int
-	moveChoice      Placement
-	pendingTarget   Placement
-	selectedIDs     map[string]struct{}
+	focus                pane
+	view                 appView
+	mode                 mode
+	selectedSection      section
+	actionSection        section
+	listCursor           int
+	listOffset           int
+	actionCursor         int
+	actionOffset         int
+	detailOffset         int
+	workbenchNavCursor   int
+	workbenchNavOffset   int
+	workbenchIssueCursor int
+	workbenchIssueOffset int
+	moveChoice           Placement
+	pendingTarget        Placement
+	selectedIDs          map[string]struct{}
 
 	filter string
 	status string
@@ -104,6 +136,7 @@ type App struct {
 	recurringField  int
 	recurringOption int
 	recurringDraft  recurringDraft
+	refIndex        int
 
 	undo *undoState
 }
@@ -127,11 +160,21 @@ func NewApp(store Store, state State) *App {
 		width:           120,
 		height:          36,
 		focus:           paneList,
+		view:            viewExecution,
 		selectedSection: sectionToday,
+		actionSection:   sectionToday,
 		moveChoice:      PlacementNext,
 		selectedIDs:     map[string]struct{}{},
 		status:          "Focus = Now + active Deferred",
 	}
+	app.loadState = store.Load
+	app.saveState = store.Save
+	app.canEditMD = true
+	app.resolveRef = func(ref string) (string, error) {
+		return "", fmt.Errorf("refs are not configured in this mode")
+	}
+	app.issueAssetSummary = func(string) IssueAssetSummary { return IssueAssetSummary{} }
+	app.themeAssetSummary = func(string) ThemeAssetSummary { return ThemeAssetSummary{} }
 	app.syncSelection()
 	return app
 }
@@ -165,6 +208,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
+		if a.readOnly {
+			return a, tea.Quit
+		}
 		if err := a.store.Save(a.state); err != nil {
 			a.status = "save failed: " + err.Error()
 			return a, nil
@@ -173,9 +219,50 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		a.mode = modeHelp
 		return a, nil
-	case "tab", "l":
+	case "M", "shift+m":
+		a.toggleView()
+		return a, nil
+	case "tab":
+		if a.view == viewWorkbench {
+			a.nextWorkbenchPane()
+			return a, nil
+		}
 		a.nextPrimarySection()
-	case "shift+tab", "backtab", "h":
+	case "shift+tab", "backtab":
+		if a.view == viewWorkbench {
+			a.prevWorkbenchPane()
+			return a, nil
+		}
+		a.prevPrimarySection()
+	case "right":
+		if a.view == viewWorkbench {
+			if a.focus == paneAction {
+				a.nextActionSection()
+			} else {
+				a.nextPrimarySection()
+			}
+			return a, nil
+		}
+	case "left":
+		if a.view == viewWorkbench {
+			if a.focus == paneAction {
+				a.prevActionSection()
+			} else {
+				a.prevPrimarySection()
+			}
+			return a, nil
+		}
+	case "l":
+		if a.view == viewWorkbench {
+			a.nextWorkbenchPane()
+			return a, nil
+		}
+		a.nextPrimarySection()
+	case "h":
+		if a.view == viewWorkbench {
+			a.prevWorkbenchPane()
+			return a, nil
+		}
 		a.prevPrimarySection()
 	case "esc":
 		if a.selectedSection != sectionToday {
@@ -183,26 +270,71 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.status = "Returned to Focus."
 		}
 	case "1", "t":
-		a.jumpSection(sectionToday)
+		if a.handleWorkbenchStateShortcut(PlacementNow) {
+			return a, nil
+		}
+		a.jumpSection(a.primarySections()[0])
 	case "2", "n":
-		a.jumpSection(sectionInbox)
+		if a.handleWorkbenchStateShortcut(PlacementNext) {
+			return a, nil
+		}
+		if len(a.primarySections()) > 1 {
+			a.jumpSection(a.primarySections()[1])
+		}
 	case "3", "i":
-		a.jumpSection(sectionNext)
+		if a.handleWorkbenchStateShortcut(PlacementLater) {
+			return a, nil
+		}
+		if len(a.primarySections()) > 2 {
+			a.jumpSection(a.primarySections()[2])
+		}
 	case "4", "v":
-		a.jumpSection(sectionReview)
+		if len(a.primarySections()) > 3 {
+			a.jumpSection(a.primarySections()[3])
+		}
 	case "5":
-		a.jumpSection(sectionDeferred)
+		if len(a.primarySections()) > 4 {
+			a.jumpSection(a.primarySections()[4])
+		}
 	case "6", "o":
-		a.jumpSection(sectionDoneToday)
+		if len(a.primarySections()) > 5 {
+			a.jumpSection(a.primarySections()[5])
+		}
 	case "7", "p":
-		a.jumpSection(sectionCompleted)
+		if len(a.primarySections()) > 6 {
+			a.jumpSection(a.primarySections()[6])
+		}
+	case "8":
+		if len(a.primarySections()) > 7 {
+			a.jumpSection(a.primarySections()[7])
+		}
 	case "/":
 		a.startSearch()
 	case "a":
+		if a.ensureMutable("Vault mode is read-only for now.") {
+			return a, nil
+		}
 		a.startAdd()
 	case "e":
+		if !a.canEditMD {
+			a.status = "This mode cannot open editable note files yet."
+			return a, nil
+		}
 		return a, a.editSelectedItem()
+	case "O", "shift+o":
+		a.startOpenRefs()
+	case "G", "shift+g":
+		a.startEditRefs()
+	case "Y", "shift+y":
+		a.startEditTheme()
+	case "I", "shift+i":
+		a.convertInboxSelectionToIssue()
+	case "T", "shift+t":
+		a.convertInboxSelectionToTask()
 	case "m":
+		if a.ensureMutable("Vault mode is read-only for now.") {
+			return a, nil
+		}
 		if len(a.selectedIDs) > 0 {
 			a.mode = modeMove
 			a.moveChoice = normalizedMoveChoice(a.moveChoice)
@@ -216,26 +348,55 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.mode = modeMove
 		a.moveChoice = normalizedMoveChoice(item.Placement())
 	case "c":
+		if a.ensureMutable("Vault mode is read-only for now.") {
+			return a, nil
+		}
 		a.startEditDeferredCondition()
 	case "w":
+		if a.ensureMutable("Vault mode is read-only for now.") {
+			return a, nil
+		}
 		a.markDoneForToday()
 	case "d":
+		if a.ensureMutable("Vault mode is read-only for now.") {
+			return a, nil
+		}
 		a.completeItem()
 	case "r":
+		if a.ensureMutable("Vault mode is read-only for now.") {
+			return a, nil
+		}
 		a.reopenItem()
 	case "u":
+		if a.ensureMutable("Vault mode is read-only for now.") {
+			return a, nil
+		}
 		a.undoLastAction()
 	case "x":
+		if a.ensureMutable("Vault mode is read-only for now.") {
+			return a, nil
+		}
 		a.startDeleteConfirm()
 	case "s":
+		if a.ensureMutable("Vault mode is read-only for now.") {
+			return a, nil
+		}
 		a.save()
 	case "J":
 		a.nextSection()
 	case "K":
 		a.prevSection()
 	case "j", "down":
+		if a.view == viewWorkbench {
+			a.moveWorkbenchDown()
+			return a, nil
+		}
 		a.moveDown()
 	case "k", "up":
+		if a.view == viewWorkbench {
+			a.moveWorkbenchUp()
+			return a, nil
+		}
 		a.moveUp()
 	case " ":
 		a.toggleSelection()
@@ -247,6 +408,14 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	a.syncSelection()
 	return a, nil
+}
+
+func (a *App) ensureMutable(message string) bool {
+	if !a.readOnly {
+		return false
+	}
+	a.status = message
+	return true
 }
 
 func (a *App) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -292,6 +461,28 @@ func (a *App) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a, nil
+	case modeOpenRef:
+		switch msg.String() {
+		case "esc":
+			a.mode = modeNormal
+			a.status = "Closed refs."
+		case "j", "down":
+			item := a.selectedItem()
+			if item != nil && a.refIndex < len(item.Refs)-1 {
+				a.refIndex++
+			}
+		case "k", "up":
+			if a.refIndex > 0 {
+				a.refIndex--
+			}
+		case "enter":
+			return a, a.openSelectedRef()
+		}
+		return a, nil
+	case modeEditRefs:
+		break
+	case modeEditTheme:
+		break
 	case modeMove:
 		switch msg.String() {
 		case "esc":
@@ -373,9 +564,8 @@ func (a *App) View() string {
 	innerHeight := max(12, a.height-layoutStyle.GetVerticalFrameSize())
 
 	headerHeight := 2
-	tabsHeight := 2
 	footerHeight := 3
-	bodyHeight := max(6, innerHeight-headerHeight-tabsHeight-footerHeight-1)
+	bodyHeight := max(6, innerHeight-headerHeight-footerHeight-1)
 	mainWidth := innerWidth
 	listHeight := max(3, int(float64(bodyHeight)*0.42))
 	if listHeight > bodyHeight-3 {
@@ -384,12 +574,16 @@ func (a *App) View() string {
 	detailHeight := max(3, bodyHeight-listHeight)
 
 	header := a.renderHeader(innerWidth)
-	tabs := a.renderTabs(innerWidth)
-	list := a.renderListPanel(mainWidth, listHeight)
-	details := a.renderDetails(mainWidth, detailHeight)
-	body := lipgloss.JoinVertical(lipgloss.Left, list, details)
+	var body string
+	if a.view == viewWorkbench {
+		body = a.renderWorkbenchBody(mainWidth, bodyHeight)
+	} else {
+		list := a.renderListPanel(mainWidth, listHeight)
+		details := a.renderDetails(mainWidth, detailHeight)
+		body = lipgloss.JoinVertical(lipgloss.Left, list, details)
+	}
 	footer := a.renderFooter(innerWidth)
-	layout := layoutStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, tabs, body, footer))
+	layout := layoutStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body, footer))
 
 	if a.mode == modeNormal {
 		return layout
@@ -397,6 +591,47 @@ func (a *App) View() string {
 
 	modal := a.renderModal(max(52, a.width/2), max(8, a.height/3))
 	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+func (a *App) toggleView() {
+	if a.view == viewExecution {
+		a.view = viewWorkbench
+		a.selectedSection = sectionIssueNoStatus
+		a.focus = paneSidebar
+		a.status = "Switched to Plan."
+	} else {
+		a.view = viewExecution
+		a.selectedSection = sectionToday
+		a.focus = paneList
+		a.status = "Switched to Action."
+	}
+	a.resetViewState()
+	a.syncSelection()
+}
+
+func (a *App) renderWorkbenchBody(width, height int) string {
+	gutter := 1
+	leftWidth := max(22, width/4-gutter)
+	rightWidth := max(40, width-leftWidth-gutter)
+	if leftWidth+gutter+rightWidth > width {
+		leftWidth = max(22, width-rightWidth-gutter)
+	}
+	if rightWidth < 20 {
+		rightWidth = 20
+	}
+
+	listHeight := max(7, int(float64(height)*0.45))
+	if listHeight > height-4 {
+		listHeight = height - 4
+	}
+	detailHeight := max(4, height-listHeight)
+
+	left := a.renderWorkbenchNavPanel(leftWidth, height)
+	list := a.renderWorkbenchIssuePanel(rightWidth, listHeight)
+	details := a.renderDetails(rightWidth, detailHeight)
+	right := lipgloss.JoinVertical(lipgloss.Left, list, details)
+	gap := lipgloss.NewStyle().Width(gutter).Height(height).Render("")
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, gap, right)
 }
 
 func (a *App) renderHeader(width int) string {
@@ -410,12 +645,11 @@ func (a *App) renderHeader(width int) string {
 		left += " " + filterStyle.Render("filter:"+a.filter)
 	}
 
-	right := metaStyle.Render(fmt.Sprintf(
-		"focus:%d  inbox:%d  completed:%d",
-		a.sectionCount(sectionToday),
-		a.sectionCount(sectionInbox),
-		a.sectionCount(sectionCompleted),
-	))
+	modeLabel := "Action"
+	if a.view == viewWorkbench {
+		modeLabel = "Plan"
+	}
+	right := metaStyle.Render(fmt.Sprintf("mode:%s  items:%d", modeLabel, a.sectionCount(a.selectedSection)))
 	leftWidth := max(10, contentWidth-lipgloss.Width(right))
 
 	line := lipgloss.JoinHorizontal(
@@ -428,76 +662,6 @@ func (a *App) renderHeader(width int) string {
 		line,
 		a.renderRule(contentWidth),
 	})
-}
-
-func (a *App) renderTabs(width int) string {
-	items := []struct {
-		section section
-		label   string
-		short   string
-		compact string
-	}{
-		{section: sectionToday, label: "Focus", short: "Focus", compact: "F"},
-		{section: sectionInbox, label: "Inbox", short: "Inbox", compact: "I"},
-		{section: sectionNext, label: "Next", short: "Next", compact: "N"},
-		{section: sectionReview, label: "Later", short: "Later", compact: "L"},
-		{section: sectionDeferred, label: "Deferred", short: "Def", compact: "D"},
-		{section: sectionDoneToday, label: "Done for Day", short: "Day", compact: "Day"},
-		{section: sectionCompleted, label: "Complete", short: "Comp", compact: "C"},
-	}
-
-	labels := pickTabLabels(items, max(1, width-2))
-	parts := make([]string, 0, len(items))
-	for idx, item := range items {
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 1)
-		if item.section == a.selectedSection {
-			style = style.Foreground(lipgloss.Color("230")).Background(lipgloss.Color("35")).Bold(true)
-		}
-		parts = append(parts, style.Render(labels[idx]))
-	}
-
-	tabsLine := "  " + strings.Join(parts, " ")
-	contentWidth := max(1, width-2)
-
-	return a.renderFlatBlock(width, []string{
-		tabsLine,
-		a.renderRule(contentWidth),
-	})
-}
-
-func pickTabLabels(items []struct {
-	section section
-	label   string
-	short   string
-	compact string
-}, width int) []string {
-	sets := [][]string{
-		make([]string, len(items)),
-		make([]string, len(items)),
-		make([]string, len(items)),
-	}
-	for i, item := range items {
-		sets[0][i] = item.label
-		sets[1][i] = item.short
-		sets[2][i] = item.compact
-	}
-	for _, labels := range sets {
-		if tabLineWidth(labels) <= width {
-			return labels
-		}
-	}
-	return sets[len(sets)-1]
-}
-
-func tabLineWidth(labels []string) int {
-	width := 2
-	for idx, label := range labels {
-		width += lipgloss.Width(label) + 2
-		if idx > 0 {
-			width++
-		}
-	}
-	return width
 }
 
 func (a *App) renderListPanel(width, height int) string {
@@ -535,34 +699,298 @@ func (a *App) renderListPanel(width, height int) string {
 }
 
 func (a *App) listTitle() string {
+	if a.view == viewWorkbench {
+		return "Issues"
+	}
 	return "Tasks"
 }
 
+func (a *App) renderThemeListPanel(width, height int) string {
+	panelStyle := lipgloss.NewStyle().
+		Padding(0, 1).
+		Border(lipgloss.NormalBorder())
+	innerWidth := max(10, width-panelStyle.GetHorizontalFrameSize())
+	bodyHeight := max(1, height-panelStyle.GetVerticalFrameSize()-1)
+	listHeight := max(1, bodyHeight-3)
+	a.ensureListOffset(listHeight, len(a.themes))
+
+	lines := make([]string, 0, bodyHeight)
+	lines = append(lines,
+		truncateRunes("   "+strings.Join([]string{
+			padCell("ID", 16),
+			padCell("TITLE", max(12, innerWidth-(16+6+3))),
+			padCell("ISSUES", 6),
+		}, " "), innerWidth),
+		a.renderRule(innerWidth),
+	)
+	for row := a.listOffset; row < len(a.themes) && len(lines) < bodyHeight; row++ {
+		theme := a.themes[row]
+		cursor := " "
+		if row == a.listCursor {
+			cursor = ">"
+		}
+		line := fmt.Sprintf("%s  %s", cursor, truncateRunes(strings.Join([]string{
+			padCell(theme.ID, 16),
+			padCell(theme.Title, max(12, innerWidth-(16+6+3))),
+			padCell(fmt.Sprintf("%d", a.issueCountForTheme(theme.ID)), 6),
+		}, " "), innerWidth-3))
+		lines = append(lines, line)
+	}
+	for len(lines) < bodyHeight {
+		lines = append(lines, "")
+	}
+	return a.renderPanel(paneList, width, height, a.listTitle(), strings.Join(lines, "\n"))
+}
+
+type workbenchEntry struct {
+	id    string
+	title string
+	kind  string
+}
+
+func (a *App) workbenchEntries() []workbenchEntry {
+	entries := []workbenchEntry{
+		{id: "__inbox__", title: "Inbox", kind: "inbox"},
+		{id: "__now__", title: "Now", kind: "now"},
+		{id: "__next__", title: "Next", kind: "next"},
+		{id: "__later__", title: "Later", kind: "later"},
+		{id: "__deferred__", title: "Deferred", kind: "deferred"},
+		{id: "__done_today__", title: "Done for Day", kind: "done_today"},
+		{id: "__complete__", title: "Complete", kind: "complete"},
+		{id: "__unthemed__", title: "No Theme", kind: "unthemed"},
+	}
+	for _, theme := range a.themes {
+		entries = append(entries, workbenchEntry{id: theme.ID, title: theme.Title, kind: "theme"})
+	}
+	return entries
+}
+
+func (a *App) selectedWorkbenchEntry() *workbenchEntry {
+	entries := a.workbenchEntries()
+	if a.workbenchNavCursor < 0 || a.workbenchNavCursor >= len(entries) {
+		return nil
+	}
+	return &entries[a.workbenchNavCursor]
+}
+
+func (a *App) renderWorkbenchNavPanel(width, height int) string {
+	entries := a.workbenchEntries()
+	panelStyle := lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.NormalBorder())
+	innerWidth := max(10, width-panelStyle.GetHorizontalFrameSize())
+	bodyHeight := max(1, height-panelStyle.GetVerticalFrameSize())
+
+	type navLine struct {
+		label string
+		index int
+	}
+
+	linesDef := []navLine{
+		{label: "Inbox", index: -1},
+		{label: entries[0].title, index: 0},
+		{label: "", index: -1},
+		{label: "Action", index: -1},
+	}
+	for i := 1; i <= 6; i++ {
+		linesDef = append(linesDef, navLine{label: entries[i].title, index: i})
+	}
+	linesDef = append(linesDef, navLine{label: "", index: -1}, navLine{label: "Themes", index: -1})
+	for i := 7; i < len(entries); i++ {
+		linesDef = append(linesDef, navLine{label: entries[i].title, index: i})
+	}
+
+	selectedRow := 0
+	for i, line := range linesDef {
+		if line.index == a.workbenchNavCursor {
+			selectedRow = i
+			break
+		}
+	}
+	a.ensureWorkbenchOffset(&a.workbenchNavOffset, selectedRow, bodyHeight, len(linesDef))
+
+	lines := make([]string, 0, bodyHeight)
+	for row := a.workbenchNavOffset; row < len(linesDef) && len(lines) < bodyHeight; row++ {
+		line := linesDef[row]
+		switch {
+		case line.index >= 0:
+			selected := line.index == a.workbenchNavCursor
+			lines = append(lines, a.renderSelectableLine(truncateRunes(line.label, max(1, innerWidth-3)), innerWidth, selected, false))
+		case line.label == "":
+			lines = append(lines, "")
+		default:
+			lines = append(lines, renderWorkbenchNavHeading(line.label, innerWidth))
+		}
+	}
+	for len(lines) < bodyHeight {
+		lines = append(lines, "")
+	}
+	return a.renderPanel(paneSidebar, width, height, "", strings.Join(lines, "\n"))
+}
+
+func renderWorkbenchNavHeading(label string, width int) string {
+	return lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("245")).
+		Width(max(1, width)).
+		MaxWidth(max(1, width)).
+		Render(label)
+}
+
+func (a *App) workbenchItems() []itemRef {
+	entry := a.selectedWorkbenchEntry()
+	if entry == nil {
+		return nil
+	}
+	switch entry.kind {
+	case "inbox":
+		return a.itemsForSection(sectionInbox)
+	case "now":
+		return a.itemsForSection(sectionToday)
+	case "next":
+		return a.itemsForSection(sectionNext)
+	case "later":
+		return a.itemsForSection(sectionReview)
+	case "deferred":
+		return a.itemsForSection(sectionDeferred)
+	case "done_today":
+		return a.itemsForSection(sectionDoneToday)
+	case "complete":
+		return a.itemsForSection(sectionCompleted)
+	}
+	all := a.itemsForSection(a.selectedSection)
+	filtered := []itemRef{}
+	for _, item := range all {
+		switch entry.kind {
+		case "unthemed":
+			if strings.TrimSpace(item.item.Theme) == "" {
+				filtered = append(filtered, item)
+			}
+		case "theme":
+			if item.item.Theme == entry.id {
+				filtered = append(filtered, item)
+			}
+		}
+	}
+	return filtered
+}
+
+func (a *App) renderWorkbenchIssuePanel(width, height int) string {
+	panelStyle := lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.NormalBorder())
+	innerWidth := max(10, width-panelStyle.GetHorizontalFrameSize())
+	bodyHeight := max(1, height-panelStyle.GetVerticalFrameSize()-1)
+	items := a.workbenchItems()
+	listHeight := max(1, bodyHeight-2)
+	a.ensureWorkbenchOffset(&a.workbenchIssueOffset, a.workbenchIssueCursor, listHeight, len(items))
+
+	lines := make([]string, 0, bodyHeight)
+	entry := a.selectedWorkbenchEntry()
+	lines = append(lines, a.renderWorkbenchListHeader(entry, innerWidth), a.renderRule(innerWidth))
+	for row := a.workbenchIssueOffset; row < len(items) && len(lines) < bodyHeight; row++ {
+		item := items[row].item
+		cursorSelected := row == a.workbenchIssueCursor
+		line := a.renderSelectableLine(a.renderWorkbenchListRow(entry, item, max(1, innerWidth-4)), innerWidth, cursorSelected, a.isSelected(item.ID))
+		lines = append(lines, line)
+	}
+	for len(lines) < bodyHeight {
+		lines = append(lines, "")
+	}
+	title := "Issues"
+	if entry != nil {
+		title = entry.title
+	}
+	return a.renderPanel(paneList, width, height, title, strings.Join(lines, "\n"))
+}
+
 func (a *App) renderListHeader(width int) string {
-	titleWidth := listTitleWidth(max(1, width-3))
+	return a.renderSimpleListHeader(width)
+}
+
+func (a *App) renderSimpleListHeader(width int) string {
 	return truncateRunes(
 		"   "+strings.Join([]string{
-			padCell("ID", 8),
-			padCell("N", 1),
-			padCell("TITLE", titleWidth),
-			padCell("PROGRESS", listProgressWidth),
+			padCell("STATE", 8),
+			padCell("TITLE", max(1, width-(8+1+3))),
 		}, " "),
 		width,
 	)
 }
 
+func (a *App) renderTitleOnlyHeader(width int) string {
+	return truncateRunes("   TITLE", width)
+}
+
 func (a *App) renderListRow(item Item, width int) string {
-	noteMark := " "
-	if itemHasNoteContent(item) {
-		noteMark = "*"
-	}
-	titleWidth := listTitleWidth(width)
+	titleWidth := max(1, width-(8+1))
 	return strings.Join([]string{
-		padCell(item.ID, 8),
-		padCell(noteMark, 1),
+		padCell(listStateLabel(item), 8),
 		padCell(item.Title, titleWidth),
-		padCell(listChecklistProgress(item.Notes), listProgressWidth),
 	}, " ")
+}
+
+func (a *App) renderWorkbenchListHeader(entry *workbenchEntry, width int) string {
+	if entry != nil && entry.kind == "inbox" {
+		return a.renderTitleOnlyHeader(width)
+	}
+	if entry != nil && isActionWorkbenchKind(entry.kind) {
+		return truncateRunes(
+			"   "+strings.Join([]string{
+				padCell("THEME", 12),
+				padCell("TITLE", max(1, width-(12+1+3))),
+			}, " "),
+			width,
+		)
+	}
+	return truncateRunes(
+		"   "+strings.Join([]string{
+			padCell("STATE", 8),
+			padCell("TITLE", max(1, width-(8+1+3))),
+		}, " "),
+		width,
+	)
+}
+
+func (a *App) renderWorkbenchListRow(entry *workbenchEntry, item Item, width int) string {
+	if entry != nil && entry.kind == "inbox" {
+		return padCell(item.Title, max(1, width))
+	}
+	if entry != nil && isActionWorkbenchKind(entry.kind) {
+		titleWidth := max(1, width-(12+1))
+		return strings.Join([]string{
+			padCell(listThemeLabel(item), 12),
+			padCell(item.Title, titleWidth),
+		}, " ")
+	}
+	return a.renderListRow(item, width)
+}
+
+func isActionWorkbenchKind(kind string) bool {
+	switch kind {
+	case "inbox", "now", "next", "later", "deferred", "done_today", "complete":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) renderSelectableLine(content string, width int, cursorSelected bool, multiSelected bool) string {
+	prefix := "   "
+	switch {
+	case cursorSelected && multiSelected:
+		prefix = ">* "
+	case cursorSelected:
+		prefix = ">  "
+	case multiSelected:
+		prefix = " * "
+	}
+	line := truncateRunes(prefix+content, width)
+	if !cursorSelected {
+		return line
+	}
+	style := lipgloss.NewStyle().
+		Width(max(1, width)).
+		MaxWidth(max(1, width)).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+	return style.Render(line)
 }
 
 func (a *App) renderDetails(width, height int) string {
@@ -579,11 +1007,14 @@ func (a *App) renderDetails(width, height int) string {
 	for len(visible) < maxLines {
 		visible = append(visible, "")
 	}
-	return a.renderPanel(paneDetails, width, height, "Details", strings.Join(visible, "\n"))
+	return a.renderPanel(paneDetails, width, height, a.detailTitle(), strings.Join(visible, "\n"))
 }
 
 func (a *App) renderFooter(width int) string {
 	helpText := "tab next tab  shift+tab prev tab  a add to inbox  q quit"
+	if a.readOnly {
+		helpText = "tab next tab  shift+tab prev tab  j/k move  q quit"
+	}
 	help := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245")).
 		Render(truncateRunes(helpText, width-2))
@@ -632,13 +1063,19 @@ func (a *App) renderModal(width, height int) string {
 			"5    Deferred",
 			"6/o  Done for Day",
 			"7/p  Complete",
+			"8    extra action tab",
 			"",
 			"j/k  move cursor",
-			"tab/l  next tab",
-			"shift+tab/h  previous tab",
+			"M    switch Plan/Action",
+			"tab  next tab or workbench pane",
+			"shift+tab  previous tab or workbench pane",
+			"h/l  action tabs only",
 			"/    search",
 			"a    add task",
 			"e    edit markdown",
+			"O    open refs",
+			"G    edit refs",
+			"Y    edit theme on issue",
 			"space  select item",
 			"m    move item or selection",
 			"c    edit deferred rule",
@@ -665,6 +1102,12 @@ func (a *App) renderModal(width, height int) string {
 	case modeAdd:
 		title = "Add Inbox Item"
 		body = append(body, "new tasks always enter Inbox")
+	case modeEditRefs:
+		title = "Edit Refs"
+		body = append(body, "comma-separated paths such as knowledge/foo.md")
+	case modeEditTheme:
+		title = "Edit Theme"
+		body = append(body, "set theme id for the selected issue, or leave blank to clear it")
 	case modeSchedule:
 		title = "Set Scheduled Date"
 		body = append(body, "use YYYY-MM-DD")
@@ -714,6 +1157,29 @@ func (a *App) renderModal(width, height int) string {
 			Width(width).
 			Height(height).
 			Render(strings.Join(append([]string{title, ""}, body...), "\n"))
+	case modeOpenRef:
+		title = "Open Ref"
+		item := a.selectedItem()
+		if item == nil || len(item.Refs) == 0 {
+			body = append(body, "No refs on the selected item.")
+		} else {
+			body = append(body, "Choose a ref to open.", "")
+			for idx, ref := range item.Refs {
+				cursor := " "
+				if idx == a.refIndex {
+					cursor = ">"
+				}
+				body = append(body, fmt.Sprintf("%s %s", cursor, ref))
+			}
+		}
+		body = append(body, "", "j/k move, Enter open, Esc cancel")
+		return lipgloss.NewStyle().
+			Padding(1, 2).
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(lipgloss.Color("86")).
+			Width(width).
+			Height(height).
+			Render(strings.Join(append([]string{title, ""}, body...), "\n"))
 	}
 
 	body = append(body, "")
@@ -749,6 +1215,9 @@ func (a *App) renderPanel(target pane, width, height int, title, body string) st
 		BorderForeground(borderColor)
 	contentWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
 	contentHeight := max(1, height-panelStyle.GetVerticalFrameSize()-1)
+	if strings.TrimSpace(title) == "" {
+		contentHeight = max(1, height-panelStyle.GetVerticalFrameSize())
+	}
 
 	titleBar := lipgloss.NewStyle().
 		Foreground(titleColor).
@@ -761,9 +1230,14 @@ func (a *App) renderPanel(target pane, width, height int, title, body string) st
 		Height(contentHeight).
 		Render(body)
 
+	renderedBody := titleBar + "\n" + content
+	if strings.TrimSpace(title) == "" {
+		renderedBody = content
+	}
+
 	return panelStyle.
 		Width(max(1, width-2)).
-		Render(titleBar + "\n" + content)
+		Render(renderedBody)
 }
 
 func (a *App) renderRecurringModal(width, height int, title string) string {
@@ -816,6 +1290,43 @@ func (a *App) startSearch() {
 	a.inputCursor = 0
 	a.mode = modeSearch
 	a.focusInputs()
+}
+
+func (a *App) startOpenRefs() {
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
+		return
+	}
+	if len(item.Refs) == 0 {
+		a.status = "Selected item has no refs."
+		return
+	}
+	a.refIndex = 0
+	a.mode = modeOpenRef
+	a.status = "Choose a ref to open."
+}
+
+func (a *App) startEditRefs() {
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
+		return
+	}
+	a.startSingleInput(modeEditRefs, "knowledge/foo.md,themes/bar/context/baz.md", strings.Join(item.Refs, ","))
+}
+
+func (a *App) startEditTheme() {
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
+		return
+	}
+	if item.EntityType != entityIssue {
+		a.status = "Selected item is not an issue."
+		return
+	}
+	a.startSingleInput(modeEditTheme, "theme-id", item.Theme)
 }
 
 func (a *App) startDeleteConfirm() {
@@ -914,6 +1425,10 @@ func (a *App) submitModal() {
 		a.status = "Filter updated."
 	case modeAdd:
 		a.submitAdd()
+	case modeEditRefs:
+		a.submitEditRefs()
+	case modeEditTheme:
+		a.submitEditTheme()
 	case modeSchedule:
 		a.submitSchedule()
 	case modeRecurring:
@@ -933,13 +1448,45 @@ func (a *App) submitAdd() {
 		return
 	}
 
-	item := NewInboxItem(a.now(), title, KindTask)
+	item := NewInboxItem(a.now(), title)
 	item.AddNote(a.now(), a.inputs[1].Value())
 
 	a.captureUndo("add " + item.ID)
 	a.state.AddItem(item)
 	a.save()
 	a.status = a.undoStatus("Added " + item.ID + " to Inbox.")
+}
+
+func (a *App) submitEditRefs() {
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
+		return
+	}
+	a.captureUndo("edit refs " + item.ID)
+	item.Refs = splitCSV(a.inputs[0].Value())
+	a.save()
+	a.status = a.undoStatus("Updated refs for " + item.ID)
+}
+
+func (a *App) submitEditTheme() {
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
+		return
+	}
+	if item.EntityType != entityIssue {
+		a.status = "Selected item is not an issue."
+		return
+	}
+	a.captureUndo("edit theme " + item.ID)
+	item.Theme = strings.TrimSpace(a.inputs[0].Value())
+	a.save()
+	if item.Theme == "" {
+		a.status = a.undoStatus("Cleared theme for " + item.ID)
+		return
+	}
+	a.status = a.undoStatus("Updated theme for " + item.ID)
 }
 
 func (a *App) submitSchedule() {
@@ -1292,8 +1839,15 @@ func cloneSelectedIDs(selected map[string]struct{}) map[string]struct{} {
 }
 
 func (a *App) save() {
+	if a.readOnly {
+		return
+	}
 	a.state.Sort()
-	if err := a.store.Save(a.state); err != nil {
+	saveState := a.saveState
+	if saveState == nil {
+		saveState = a.store.Save
+	}
+	if err := saveState(a.state); err != nil {
 		a.status = "save failed: " + err.Error()
 		return
 	}
@@ -1318,54 +1872,110 @@ func (a *App) editSelectedItem() tea.Cmd {
 	return a.openEditor(path)
 }
 
+func (a *App) openSelectedRef() tea.Cmd {
+	item := a.selectedItem()
+	if item == nil {
+		a.mode = modeNormal
+		a.status = "No item selected."
+		return nil
+	}
+	if len(item.Refs) == 0 {
+		a.mode = modeNormal
+		a.status = "Selected item has no refs."
+		return nil
+	}
+	if a.refIndex < 0 || a.refIndex >= len(item.Refs) {
+		a.refIndex = 0
+	}
+	resolveRef := a.resolveRef
+	if resolveRef == nil {
+		a.mode = modeNormal
+		a.status = "Ref resolver is not configured."
+		return nil
+	}
+	path, err := resolveRef(item.Refs[a.refIndex])
+	if err != nil {
+		a.mode = modeNormal
+		a.status = "open ref failed: " + err.Error()
+		return nil
+	}
+	a.mode = modeNormal
+	a.status = "Opening ref..."
+	return a.openEditor(path)
+}
+
 func (a *App) reloadFromStore(editErr error) {
 	if editErr != nil {
 		a.status = "edit failed: " + editErr.Error()
 		return
 	}
-	state, err := a.store.Load()
+	loadState := a.loadState
+	if loadState == nil {
+		loadState = a.store.Load
+	}
+	state, err := loadState()
 	if err != nil {
 		a.status = "reload failed: " + err.Error()
 		return
 	}
 	a.state = state
 	a.syncSelection()
+	if a.readOnly {
+		a.status = "Reloaded work from vault."
+		return
+	}
 	a.status = "Reloaded tasks from storage."
 }
 
 func (a *App) prevSection() {
-	if a.selectedSection > sectionToday {
-		a.selectedSection--
-	} else {
-		a.selectedSection = sectionCompleted
-	}
-	a.resetViewState()
+	a.cyclePrimarySection(a.primarySections(), -1)
 }
 
 func (a *App) nextSection() {
-	if a.selectedSection < sectionCompleted {
-		a.selectedSection++
-	} else {
-		a.selectedSection = sectionToday
-	}
-	a.resetViewState()
+	a.cyclePrimarySection(a.primarySections(), 1)
 }
 
 func (a *App) nextPrimarySection() {
-	order := []section{
-		sectionToday,
-		sectionInbox,
-		sectionNext,
-		sectionReview,
-		sectionDeferred,
-		sectionDoneToday,
-		sectionCompleted,
-	}
-	a.cyclePrimarySection(order, 1)
+	a.cyclePrimarySection(a.primarySections(), 1)
 }
 
 func (a *App) prevPrimarySection() {
-	order := []section{
+	a.cyclePrimarySection(a.primarySections(), -1)
+}
+
+func (a *App) nextActionSection() {
+	order := []section{sectionInbox, sectionToday, sectionNext}
+	index := slices.Index(order, a.actionSection)
+	if index < 0 {
+		index = 0
+	} else {
+		index = (index + 1) % len(order)
+	}
+	a.actionSection = order[index]
+	a.actionCursor = 0
+	a.actionOffset = 0
+	a.detailOffset = 0
+}
+
+func (a *App) prevActionSection() {
+	order := []section{sectionInbox, sectionToday, sectionNext}
+	index := slices.Index(order, a.actionSection)
+	if index < 0 {
+		index = 0
+	} else {
+		index = (index - 1 + len(order)) % len(order)
+	}
+	a.actionSection = order[index]
+	a.actionCursor = 0
+	a.actionOffset = 0
+	a.detailOffset = 0
+}
+
+func (a *App) primarySections() []section {
+	if a.view == viewWorkbench {
+		return []section{sectionIssueNoStatus, sectionIssueNow, sectionIssueNext, sectionIssueLater}
+	}
+	return []section{
 		sectionToday,
 		sectionInbox,
 		sectionNext,
@@ -1374,7 +1984,36 @@ func (a *App) prevPrimarySection() {
 		sectionDoneToday,
 		sectionCompleted,
 	}
-	a.cyclePrimarySection(order, -1)
+}
+
+func (a *App) handleWorkbenchStateShortcut(target Placement) bool {
+	if a.view != viewWorkbench {
+		return false
+	}
+	if a.focus == paneSidebar {
+		return false
+	}
+	if a.ensureMutable("Vault mode is read-only for now.") {
+		return true
+	}
+	item := a.selectedWorkbenchIssue()
+	if item == nil {
+		a.status = "No issue selected."
+		return true
+	}
+	if item.Status != "open" {
+		a.status = "Selected issue is not open."
+		return true
+	}
+	if item.Placement() == target {
+		a.status = fmt.Sprintf("%s is already %s.", item.ID, target)
+		return true
+	}
+	a.captureUndo("move " + item.ID)
+	item.MoveTo(a.now(), target)
+	a.save()
+	a.status = a.undoStatus(fmt.Sprintf("Moved %s to %s.", item.ID, target))
+	return true
 }
 
 func (a *App) cyclePrimarySection(order []section, delta int) {
@@ -1390,9 +2029,110 @@ func (a *App) cyclePrimarySection(order []section, delta int) {
 	a.jumpSection(order[index])
 }
 
+func (a *App) nextWorkbenchPane() {
+	switch a.focus {
+	case paneSidebar:
+		a.focus = paneList
+	case paneList:
+		a.focus = paneDetails
+	default:
+		a.focus = paneSidebar
+	}
+}
+
+func (a *App) prevWorkbenchPane() {
+	switch a.focus {
+	case paneDetails:
+		a.focus = paneList
+	case paneList:
+		a.focus = paneSidebar
+	default:
+		a.focus = paneDetails
+	}
+}
+
+func (a *App) moveWorkbenchDown() {
+	switch a.focus {
+	case paneSidebar:
+		if a.workbenchNavCursor < len(a.workbenchEntries())-1 {
+			a.workbenchNavCursor++
+			a.workbenchIssueCursor = 0
+			a.workbenchIssueOffset = 0
+			a.detailOffset = 0
+		}
+	case paneList:
+		items := a.workbenchItems()
+		if a.workbenchIssueCursor < len(items)-1 {
+			a.workbenchIssueCursor++
+			a.detailOffset = 0
+		}
+	case paneDetails:
+		lines := a.detailLines(max(20, a.width/2))
+		maxOffset := max(0, len(lines)-max(1, a.height-6))
+		if a.detailOffset < maxOffset {
+			a.detailOffset++
+		}
+	}
+}
+
+func (a *App) moveWorkbenchUp() {
+	switch a.focus {
+	case paneSidebar:
+		if a.workbenchNavCursor > 0 {
+			a.workbenchNavCursor--
+			a.workbenchIssueCursor = 0
+			a.workbenchIssueOffset = 0
+			a.detailOffset = 0
+		}
+	case paneList:
+		if a.workbenchIssueCursor > 0 {
+			a.workbenchIssueCursor--
+			a.detailOffset = 0
+		}
+	case paneDetails:
+		if a.detailOffset > 0 {
+			a.detailOffset--
+		}
+	}
+}
+
+func (a *App) ensureWorkbenchOffset(offset *int, cursor, visibleHeight, total int) {
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+	if total <= visibleHeight {
+		*offset = 0
+		return
+	}
+	if cursor < *offset {
+		*offset = cursor
+	}
+	if cursor >= *offset+visibleHeight {
+		*offset = cursor - visibleHeight + 1
+	}
+}
+
+func (a *App) ensureUnifiedActionOffset(visibleHeight, total int) {
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+	if total <= visibleHeight {
+		a.actionOffset = 0
+		return
+	}
+	if a.actionCursor < a.actionOffset {
+		a.actionOffset = a.actionCursor
+	}
+	if a.actionCursor >= a.actionOffset+visibleHeight {
+		a.actionOffset = a.actionCursor - visibleHeight + 1
+	}
+}
+
 func (a *App) resetViewState() {
 	a.listCursor = 0
 	a.listOffset = 0
+	a.actionCursor = 0
+	a.actionOffset = 0
 	a.detailOffset = 0
 }
 
@@ -1405,10 +2145,10 @@ func (a *App) moveDown() {
 		}
 		return
 	}
-	items := a.itemsForSection(a.selectedSection)
-	if a.listCursor < len(items)-1 {
+	total := a.sectionCount(a.selectedSection)
+	if a.listCursor < total-1 {
 		a.listCursor++
-		a.ensureListOffset(max(1, a.height-8), len(items))
+		a.ensureListOffset(max(1, a.height-8), total)
 		a.detailOffset = 0
 	}
 }
@@ -1433,9 +2173,9 @@ func (a *App) pageDown() {
 		a.detailOffset += step
 		return
 	}
-	items := a.itemsForSection(a.selectedSection)
-	a.listCursor = min(max(0, len(items)-1), a.listCursor+step)
-	a.ensureListOffset(max(1, a.height-8), len(items))
+	total := a.sectionCount(a.selectedSection)
+	a.listCursor = min(max(0, total-1), a.listCursor+step)
+	a.ensureListOffset(max(1, a.height-8), total)
 }
 
 func (a *App) pageUp() {
@@ -1449,20 +2189,52 @@ func (a *App) pageUp() {
 }
 
 func (a *App) syncSelection() {
-	items := a.itemsForSection(a.selectedSection)
-	if len(items) == 0 {
+	if a.view == viewWorkbench {
+		planTotal := len(a.workbenchItems())
+		if planTotal == 0 {
+			a.workbenchIssueCursor = 0
+			a.workbenchIssueOffset = 0
+		} else {
+			if a.workbenchIssueCursor >= planTotal {
+				a.workbenchIssueCursor = planTotal - 1
+			}
+			if a.workbenchIssueCursor < 0 {
+				a.workbenchIssueCursor = 0
+			}
+			a.ensureWorkbenchOffset(&a.workbenchIssueOffset, a.workbenchIssueCursor, max(1, a.height-8), planTotal)
+		}
+		actionTotal := len(a.actionItems())
+		if actionTotal == 0 {
+			a.actionCursor = 0
+			a.actionOffset = 0
+		} else {
+			if a.actionCursor >= actionTotal {
+				a.actionCursor = actionTotal - 1
+			}
+			if a.actionCursor < 0 {
+				a.actionCursor = 0
+			}
+			a.ensureUnifiedActionOffset(max(1, a.height-8), actionTotal)
+		}
+		if a.detailOffset < 0 {
+			a.detailOffset = 0
+		}
+		return
+	}
+	total := a.sectionCount(a.selectedSection)
+	if total == 0 {
 		a.listCursor = 0
 		a.listOffset = 0
 		a.detailOffset = 0
 		return
 	}
-	if a.listCursor >= len(items) {
-		a.listCursor = len(items) - 1
+	if a.listCursor >= total {
+		a.listCursor = total - 1
 	}
 	if a.listCursor < 0 {
 		a.listCursor = 0
 	}
-	a.ensureListOffset(max(1, a.height-8), len(items))
+	a.ensureListOffset(max(1, a.height-8), total)
 	if a.detailOffset < 0 {
 		a.detailOffset = 0
 	}
@@ -1486,6 +2258,10 @@ func (a *App) ensureListOffset(visibleHeight, total int) {
 
 func (a *App) sectionCount(s section) int {
 	return len(a.itemsForSection(s))
+}
+
+func (a *App) actionItems() []itemRef {
+	return a.itemsForSection(a.actionSection)
 }
 
 func (a *App) itemsForSection(s section) []itemRef {
@@ -1524,6 +2300,22 @@ func (a *App) itemsForSection(s section) []itemRef {
 			if item.Status == "done" {
 				out = append(out, itemRef{index: idx, item: item})
 			}
+		case sectionIssueNoStatus:
+			if item.EntityType == entityIssue && item.Status == "open" {
+				out = append(out, itemRef{index: idx, item: item})
+			}
+		case sectionIssueNow:
+			if item.EntityType == entityIssue && item.Status == "open" && item.Placement() == PlacementNow {
+				out = append(out, itemRef{index: idx, item: item})
+			}
+		case sectionIssueNext:
+			if item.EntityType == entityIssue && item.Status == "open" && item.Placement() == PlacementNext {
+				out = append(out, itemRef{index: idx, item: item})
+			}
+		case sectionIssueLater:
+			if item.EntityType == entityIssue && item.Status == "open" && (item.Placement() == PlacementLater || item.Placement() == PlacementScheduled || item.Placement() == PlacementRecurring) {
+				out = append(out, itemRef{index: idx, item: item})
+			}
 		}
 	}
 	return out
@@ -1549,6 +2341,17 @@ func (a *App) matchesFilter(item Item) bool {
 }
 
 func (a *App) selectedItem() *Item {
+	if a.view == viewWorkbench {
+		if a.focus == paneSidebar {
+			return nil
+		}
+		items := a.workbenchItems()
+		if len(items) == 0 || a.workbenchIssueCursor < 0 || a.workbenchIssueCursor >= len(items) {
+			return nil
+		}
+		idx := items[a.workbenchIssueCursor].index
+		return &a.state.Items[idx]
+	}
 	items := a.itemsForSection(a.selectedSection)
 	if len(items) == 0 || a.listCursor >= len(items) {
 		return nil
@@ -1557,7 +2360,65 @@ func (a *App) selectedItem() *Item {
 	return &a.state.Items[idx]
 }
 
+func (a *App) selectedTheme() *ThemeDoc {
+	if a.workbenchNavCursor < 0 {
+		return nil
+	}
+	entry := a.selectedWorkbenchEntry()
+	if entry == nil || entry.kind != "theme" {
+		return nil
+	}
+	for i := range a.themes {
+		if a.themes[i].ID == entry.id {
+			return &a.themes[i]
+		}
+	}
+	return nil
+}
+
 func (a *App) detailLines(width int) []string {
+	if a.view == viewWorkbench {
+		return a.workbenchDetailLines(width)
+	}
+	return a.executionDetailLines(width)
+}
+
+func (a *App) detailTitle() string {
+	if a.view == viewWorkbench {
+		if a.focus == paneList || a.focus == paneDetails {
+			if item := a.selectedWorkbenchIssue(); item != nil {
+				entry := a.selectedWorkbenchEntry()
+				if entry != nil && (entry.kind == "inbox" || entry.kind == "now" || entry.kind == "next") {
+					return "Action"
+				}
+				return "Issue"
+			}
+		}
+		switch entry := a.selectedWorkbenchEntry(); {
+		case entry == nil:
+			return "Plan"
+		case entry.kind == "theme":
+			return "Theme"
+		default:
+			return "Bucket"
+		}
+	}
+	return "Action"
+}
+
+func (a *App) selectedWorkbenchIssue() *Item {
+	if a.view != viewWorkbench {
+		return nil
+	}
+	items := a.workbenchItems()
+	if len(items) == 0 || a.workbenchIssueCursor >= len(items) {
+		return nil
+	}
+	idx := items[a.workbenchIssueCursor].index
+	return &a.state.Items[idx]
+}
+
+func (a *App) executionDetailLines(width int) []string {
 	item := a.selectedItem()
 	if item == nil {
 		return []string{
@@ -1567,52 +2428,50 @@ func (a *App) detailLines(width int) []string {
 		}
 	}
 
-	lines := []string{"Frontmatter:"}
+	return a.executionDetailLinesForItem(width, item)
+}
+
+func (a *App) executionDetailLinesForItem(width int, item *Item) []string {
+	lines := []string{"Execute:"}
 	frontmatter := []string{
 		"title: " + item.Title,
 		"id: " + item.ID,
-		"kind: " + string(item.Kind),
-		"triage: " + string(item.Triage),
-		"stage: " + string(item.Stage),
-		"deferred: " + string(item.DeferredKind),
+		"type: " + itemTypeLabel(*item),
+		"theme: " + emptyDash(item.Theme),
+		"state: " + executionStateLabel(*item),
 		"status: " + item.Status,
-		"updated: " + item.UpdatedAt,
 	}
-	if item.ScheduledFor != "" {
-		frontmatter = append(frontmatter, "scheduled_for: "+item.ScheduledFor)
-	}
-	if item.RecurringEveryDays > 0 {
-		frontmatter = append(frontmatter, fmt.Sprintf("recurring: %s", item.RecurringSummary()))
-	} else if item.Placement() == PlacementRecurring {
-		frontmatter = append(frontmatter, fmt.Sprintf("recurring: %s", item.RecurringSummary()))
+	if item.UpdatedAt != "" {
+		frontmatter = append(frontmatter, "updated: "+item.UpdatedAt)
 	}
 	if item.DoneForDayOn != "" {
 		frontmatter = append(frontmatter, "done_for_day_on: "+item.DoneForDayOn)
 	}
-	if item.LastReviewedOn != "" {
-		frontmatter = append(frontmatter, "last_reviewed_on: "+item.LastReviewedOn)
+	if item.ScheduledFor != "" {
+		frontmatter = append(frontmatter, "scheduled_for: "+item.ScheduledFor)
+	}
+	if item.RecurringEveryDays > 0 || item.Placement() == PlacementRecurring {
+		frontmatter = append(frontmatter, fmt.Sprintf("recurring: %s", item.RecurringSummary()))
+	}
+	if len(item.Refs) > 0 {
+		frontmatter = append(frontmatter, fmt.Sprintf("refs: %d", len(item.Refs)))
 	}
 	for _, line := range frontmatter {
 		lines = append(lines, wrapText("  "+line, width)...)
 	}
 
-	lines = append(lines, "", "Log:")
-	if len(item.Log) == 0 {
+	lines = append(lines, "", "Refs:")
+	if len(item.Refs) == 0 {
 		lines = append(lines, "  -")
 	} else {
-		for _, entry := range item.Log {
-			line := fmt.Sprintf("  - %s  %s", entry.Date, entry.Action)
-			if entry.Note != "" {
-				line += "  " + entry.Note
-			}
-			lines = append(lines, wrapText(line, width)...)
+		for _, ref := range item.Refs {
+			lines = append(lines, wrapText("  - "+ref, width)...)
 		}
 	}
 
-	lines = append(lines, "", "Note:")
+	lines = append(lines, "", "Next context:")
 	if raw := strings.TrimSpace(detailNoteMarkdown(item)); raw != "" {
-		lines = append(lines, "")
-		for _, part := range strings.Split(raw, "\n") {
+		for _, part := range strings.Split(firstParagraph(raw), "\n") {
 			if strings.TrimSpace(part) == "" {
 				lines = append(lines, "")
 				continue
@@ -1623,6 +2482,323 @@ func (a *App) detailLines(width int) []string {
 		lines = append(lines, "  -")
 	}
 	return lines
+}
+
+func (a *App) workbenchDetailLines(width int) []string {
+	if a.focus == paneList || a.focus == paneDetails {
+		if item := a.selectedWorkbenchIssue(); item != nil {
+			entry := a.selectedWorkbenchEntry()
+			if entry != nil && (entry.kind == "inbox" || entry.kind == "now" || entry.kind == "next") {
+				return a.executionDetailLinesForItem(width, item)
+			}
+			return a.workbenchIssueDetailLines(width, item)
+		}
+	}
+	return a.workbenchBucketDetailLines(width)
+}
+
+func (a *App) workbenchIssueDetailLines(width int, item *Item) []string {
+	summary := a.issueAssetSummary(item.ID)
+	lines := []string{"Issue:"}
+	for _, line := range []string{
+		"title: " + item.Title,
+		"id: " + item.ID,
+		"theme: " + emptyDash(item.Theme),
+		"state: " + executionStateLabel(*item),
+		fmt.Sprintf("refs: %d", len(item.Refs)),
+	} {
+		lines = append(lines, wrapText("  "+line, width)...)
+	}
+
+	lines = append(lines, "", "Working set:")
+	for _, line := range []string{
+		fmt.Sprintf("  context files: %d", summary.ContextFiles),
+		fmt.Sprintf("  memo files: %d", summary.MemoFiles),
+		fmt.Sprintf("  log files: %d", summary.LogFiles),
+	} {
+		lines = append(lines, wrapText(line, width)...)
+	}
+
+	lines = append(lines, "", "Refs:")
+	if len(item.Refs) == 0 {
+		lines = append(lines, "  -")
+	} else {
+		for _, ref := range item.Refs {
+			lines = append(lines, wrapText("  - "+ref, width)...)
+		}
+	}
+
+	lines = append(lines, "", "Issue note:")
+	if raw := strings.TrimSpace(detailNoteMarkdown(item)); raw != "" {
+		for _, part := range strings.Split(firstParagraph(raw), "\n") {
+			if strings.TrimSpace(part) == "" {
+				lines = append(lines, "")
+				continue
+			}
+			lines = append(lines, wrapText(part, width)...)
+		}
+	} else {
+		lines = append(lines, "  -")
+	}
+	return lines
+}
+
+func (a *App) workbenchBucketDetailLines(width int) []string {
+	entry := a.selectedWorkbenchEntry()
+	if entry == nil {
+		return []string{
+			"No theme bucket selected.",
+		}
+	}
+	switch entry.kind {
+	case "inbox":
+		return []string{
+			"Bucket:",
+			"",
+			"  title: Inbox",
+			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
+			"",
+			"Use this view to classify captured items into tasks or issues.",
+		}
+	case "now":
+		return []string{
+			"Bucket:",
+			"",
+			"  title: Now",
+			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
+			"",
+			"Use this view to inspect work that should be done now.",
+		}
+	case "next":
+		return []string{
+			"Bucket:",
+			"",
+			"  title: Next",
+			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
+			"",
+			"Use this view to choose what to pull into now next.",
+		}
+	case "later":
+		return []string{
+			"Bucket:",
+			"",
+			"  title: Later",
+			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
+			"",
+			"Use this view to review work kept for later.",
+		}
+	case "deferred":
+		return []string{
+			"Bucket:",
+			"",
+			"  title: Deferred",
+			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
+			"",
+			"Use this view to inspect scheduled and recurring work.",
+		}
+	case "done_today":
+		return []string{
+			"Bucket:",
+			"",
+			"  title: Done for Day",
+			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
+			"",
+			"Use this view to revisit work closed for the day.",
+		}
+	case "complete":
+		return []string{
+			"Bucket:",
+			"",
+			"  title: Complete",
+			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
+			"",
+			"Use this view to inspect completed work.",
+		}
+	case "theme":
+		return a.themeDetailLines(width)
+	case "unthemed":
+		return []string{
+			"Bucket:",
+			"",
+			"  title: No Theme",
+			fmt.Sprintf("  issues: %d", len(a.workbenchItems())),
+			"",
+			"Use this view to classify issues that still lack a theme.",
+		}
+	}
+	return []string{"No workbench bucket selected."}
+}
+
+func (a *App) themeDetailLines(width int) []string {
+	theme := a.selectedTheme()
+	if theme == nil {
+		return []string{
+			"No theme selected.",
+			"",
+			"Use the Themes pane and j/k to pick a theme.",
+		}
+	}
+
+	summary := a.themeAssetSummary(theme.ID)
+	lines := []string{"Theme:"}
+	for _, line := range []string{
+		"id: " + theme.ID,
+		"title: " + theme.Title,
+		"created: " + theme.Created,
+		"updated: " + theme.Updated,
+		fmt.Sprintf("issues: %d", a.issueCountForTheme(theme.ID)),
+	} {
+		lines = append(lines, wrapText("  "+line, width)...)
+	}
+	if len(theme.Tags) > 0 {
+		lines = append(lines, wrapText("  tags: "+strings.Join(theme.Tags, ", "), width)...)
+	}
+
+	lines = append(lines, "", "Theme assets:")
+	for _, line := range []string{
+		fmt.Sprintf("  source files: %d", summary.SourceFiles),
+		fmt.Sprintf("  context files: %d", summary.ContextFiles),
+	} {
+		lines = append(lines, wrapText(line, width)...)
+	}
+
+	lines = append(lines, "", "Issues:")
+	related := a.issueTitlesForTheme(theme.ID)
+	if len(related) == 0 {
+		lines = append(lines, "  -")
+	} else {
+		for _, title := range related {
+			lines = append(lines, wrapText("  - "+title, width)...)
+		}
+	}
+	return lines
+}
+
+func firstParagraph(raw string) string {
+	raw = strings.TrimSpace(strings.ReplaceAll(raw, "\r\n", "\n"))
+	if raw == "" {
+		return ""
+	}
+	parts := strings.Split(raw, "\n\n")
+	return strings.TrimSpace(parts[0])
+}
+
+func executionStateLabel(item Item) string {
+	switch item.Placement() {
+	case PlacementInbox:
+		return "inbox"
+	case PlacementNow:
+		return "now"
+	case PlacementNext:
+		return "next"
+	case PlacementLater:
+		return "later"
+	case PlacementScheduled, PlacementRecurring:
+		return "later"
+	default:
+		return "-"
+	}
+}
+
+func emptyDash(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
+func listStateLabel(item Item) string {
+	if item.Status == "done" {
+		return "done"
+	}
+	if item.DoneForDayOn != "" {
+		return "day"
+	}
+	switch item.Placement() {
+	case PlacementInbox:
+		return "inbox"
+	case PlacementNow:
+		return "now"
+	case PlacementNext:
+		return "next"
+	case PlacementLater:
+		return "later"
+	case PlacementScheduled:
+		return "sched"
+	case PlacementRecurring:
+		return "recur"
+	default:
+		return "-"
+	}
+}
+
+func (a *App) issueCountForTheme(themeID string) int {
+	count := 0
+	for _, item := range a.state.Items {
+		if item.EntityType == entityIssue && item.Theme == themeID {
+			count++
+		}
+	}
+	return count
+}
+
+func (a *App) issueTitlesForTheme(themeID string) []string {
+	var titles []string
+	for _, item := range a.state.Items {
+		if item.EntityType == entityIssue && item.Theme == themeID {
+			titles = append(titles, item.Title)
+		}
+	}
+	slices.Sort(titles)
+	return titles
+}
+
+func itemTypeLabel(item Item) string {
+	switch item.EntityType {
+	case entityInbox:
+		return "inbox"
+	case entityIssue:
+		return "issue"
+	case entityTask:
+		return "task"
+	default:
+		return "item"
+	}
+}
+
+func (a *App) convertInboxSelectionToIssue() {
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
+		return
+	}
+	if item.EntityType != entityInbox || item.Placement() != PlacementInbox {
+		a.status = "Select an inbox item to convert."
+		return
+	}
+	a.captureUndo("convert " + item.ID + " to issue")
+	item.EntityType = entityIssue
+	item.MoveTo(a.now(), PlacementNext)
+	a.save()
+	a.status = a.undoStatus("Converted " + item.ID + " to Issue in Next.")
+}
+
+func (a *App) convertInboxSelectionToTask() {
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
+		return
+	}
+	if item.EntityType != entityInbox || item.Placement() != PlacementInbox {
+		a.status = "Select an inbox item to convert."
+		return
+	}
+	a.captureUndo("convert " + item.ID + " to task")
+	item.EntityType = entityTask
+	item.MoveTo(a.now(), PlacementNext)
+	a.save()
+	a.status = a.undoStatus("Converted " + item.ID + " to Task in Next.")
 }
 
 func detailNoteMarkdown(item *Item) string {
@@ -1645,7 +2821,7 @@ func detailNoteMarkdown(item *Item) string {
 }
 
 func listTitleWidth(width int) int {
-	return max(8, width-(8+1+listProgressWidth+3))
+	return max(8, width-(8+listTypeWidth+listThemeWidth+listRefsWidth+1+listProgressWidth+6))
 }
 
 func listChecklistProgress(notes []string) string {
@@ -1664,7 +2840,24 @@ func listChecklistProgress(notes []string) string {
 	return fmt.Sprintf("%s %3d%%", bar, percent)
 }
 
+const listTypeWidth = 5
+const listThemeWidth = 12
+const listRefsWidth = 3
 const listProgressWidth = 15
+
+func listThemeLabel(item Item) string {
+	if strings.TrimSpace(item.Theme) == "" {
+		return "-"
+	}
+	return item.Theme
+}
+
+func listRefsLabel(item Item) string {
+	if len(item.Refs) == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", len(item.Refs))
+}
 
 func padCell(text string, width int) string {
 	text = truncateRunes(text, width)
@@ -1730,6 +2923,14 @@ func sectionLabel(s section) string {
 		return "Done for Day"
 	case sectionCompleted:
 		return "Complete"
+	case sectionIssueNoStatus:
+		return "NoStatus"
+	case sectionIssueNow:
+		return "Now"
+	case sectionIssueNext:
+		return "Next"
+	case sectionIssueLater:
+		return "Later"
 	default:
 		return "Unknown"
 	}

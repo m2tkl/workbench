@@ -52,14 +52,6 @@ const (
 	DeferredKindRecurring DeferredKind = "recurring"
 )
 
-type ItemKind string
-
-const (
-	KindTask     ItemKind = "task"
-	KindArtifact ItemKind = "artifact"
-	KindWork     ItemKind = "work"
-)
-
 type WorkLogEntry struct {
 	Date   string `json:"date"`
 	Action string `json:"action"`
@@ -78,7 +70,9 @@ const (
 type Item struct {
 	ID                  string         `json:"id"`
 	Title               string         `json:"title"`
-	Kind                ItemKind       `json:"kind"`
+	Theme               string         `json:"theme,omitempty"`
+	EntityType          string         `json:"entity_type,omitempty"`
+	Refs                []string       `json:"refs,omitempty"`
 	Triage              Triage         `json:"triage"`
 	Stage               Stage          `json:"stage,omitempty"`
 	DeferredKind        DeferredKind   `json:"deferred_kind,omitempty"`
@@ -105,15 +99,19 @@ type State struct {
 	Items []Item `json:"items"`
 }
 
-func NewItem(now time.Time, title string, kind ItemKind, placement Placement) Item {
+func NewItem(now time.Time, title string, placement Placement) Item {
 	ts := now.Format(time.RFC3339)
 	item := Item{
 		ID:        newID(),
 		Title:     strings.TrimSpace(title),
-		Kind:      kind,
 		Status:    "open",
 		CreatedAt: ts,
 		UpdatedAt: ts,
+	}
+	if placement == PlacementInbox {
+		item.EntityType = entityInbox
+	} else {
+		item.EntityType = entityTask
 	}
 	item.MoveTo(now, placement)
 	item.Log = nil
@@ -121,8 +119,14 @@ func NewItem(now time.Time, title string, kind ItemKind, placement Placement) It
 	return item
 }
 
-func NewInboxItem(now time.Time, title string, kind ItemKind) Item {
-	return NewItem(now, title, kind, PlacementInbox)
+func NewInboxItem(now time.Time, title string) Item {
+	return NewItem(now, title, PlacementInbox)
+}
+
+func NewIssueItem(now time.Time, title string, placement Placement) Item {
+	item := NewItem(now, title, placement)
+	item.EntityType = entityIssue
+	return item
 }
 
 func (s *State) FindItem(id string) (*Item, error) {
@@ -464,19 +468,6 @@ func (i Item) Placement() Placement {
 
 func dateKey(now time.Time) string {
 	return now.Format("2006-01-02")
-}
-
-func parseKind(raw string) (ItemKind, error) {
-	switch ItemKind(strings.ToLower(strings.TrimSpace(raw))) {
-	case KindTask:
-		return KindTask, nil
-	case KindArtifact:
-		return KindArtifact, nil
-	case KindWork:
-		return KindWork, nil
-	default:
-		return "", fmt.Errorf("unknown kind: %s", raw)
-	}
 }
 
 func parseDate(raw string) (string, error) {
