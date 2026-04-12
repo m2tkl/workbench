@@ -359,6 +359,46 @@ func TestDetailLinesDoNotShowChecklistProgressSection(t *testing.T) {
 	}
 }
 
+func TestDetailLinesShowFrontmatterLogAndNoteSections(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Investigate parser", KindTask, PlacementInbox)
+	item.NoteMarkdown = strings.TrimSpace(`
+# Investigate parser
+
+Intro paragraph.
+
+## Research Notes
+Keep this heading and body.
+`)
+	item.Log = []WorkLogEntry{{
+		Date:   "2026-04-08",
+		Action: "note",
+		Note:   "seeded by hand",
+	}}
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+
+	lines := app.detailLines(80)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Frontmatter:") {
+		t.Fatalf("expected frontmatter section, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Log:") {
+		t.Fatalf("expected log section, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Note:") {
+		t.Fatalf("expected note section, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "# Investigate parser") {
+		t.Fatalf("did not expect duplicated top-level note heading, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "## Research Notes") {
+		t.Fatalf("expected note body to remain visible, got:\n%s", joined)
+	}
+}
+
 func TestCompletedSectionListsAndRestoresCompletedItems(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	item := NewItem(now, "Ship release", KindTask, PlacementNow)

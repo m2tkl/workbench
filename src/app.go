@@ -1567,44 +1567,33 @@ func (a *App) detailLines(width int) []string {
 		}
 	}
 
-	lines := append([]string{}, wrapText(item.Title, width)...)
-	lines = append(lines,
-		"",
-		"ID: "+item.ID,
-		"Triage: "+string(item.Triage),
-		"Stage: "+string(item.Stage),
-		"Deferred: "+string(item.DeferredKind),
-		"Status: "+item.Status,
-		"Updated: "+item.UpdatedAt,
-	)
+	lines := []string{"Frontmatter:"}
+	frontmatter := []string{
+		"title: " + item.Title,
+		"id: " + item.ID,
+		"kind: " + string(item.Kind),
+		"triage: " + string(item.Triage),
+		"stage: " + string(item.Stage),
+		"deferred: " + string(item.DeferredKind),
+		"status: " + item.Status,
+		"updated: " + item.UpdatedAt,
+	}
 	if item.ScheduledFor != "" {
-		lines = append(lines, wrapText("Scheduled for: "+item.ScheduledFor, width)...)
+		frontmatter = append(frontmatter, "scheduled_for: "+item.ScheduledFor)
 	}
 	if item.RecurringEveryDays > 0 {
-		lines = append(lines, wrapText(fmt.Sprintf("Recurring: %s", item.RecurringSummary()), width)...)
+		frontmatter = append(frontmatter, fmt.Sprintf("recurring: %s", item.RecurringSummary()))
 	} else if item.Placement() == PlacementRecurring {
-		lines = append(lines, wrapText(fmt.Sprintf("Recurring: %s", item.RecurringSummary()), width)...)
+		frontmatter = append(frontmatter, fmt.Sprintf("recurring: %s", item.RecurringSummary()))
 	}
 	if item.DoneForDayOn != "" {
-		lines = append(lines, wrapText("Done for day: "+item.DoneForDayOn, width)...)
+		frontmatter = append(frontmatter, "done_for_day_on: "+item.DoneForDayOn)
 	}
 	if item.LastReviewedOn != "" {
-		lines = append(lines, wrapText("Last reviewed: "+item.LastReviewedOn, width)...)
+		frontmatter = append(frontmatter, "last_reviewed_on: "+item.LastReviewedOn)
 	}
-
-	if len(item.Notes) == 0 {
-		lines = append(lines, "", "-")
-	} else {
-		for _, note := range item.Notes {
-			lines = append(lines, "")
-			for _, part := range strings.Split(note, "\n") {
-				if strings.TrimSpace(part) == "" {
-					lines = append(lines, "")
-					continue
-				}
-				lines = append(lines, wrapText(part, width)...)
-			}
-		}
+	for _, line := range frontmatter {
+		lines = append(lines, wrapText("  "+line, width)...)
 	}
 
 	lines = append(lines, "", "Log:")
@@ -1619,7 +1608,9 @@ func (a *App) detailLines(width int) []string {
 			lines = append(lines, wrapText(line, width)...)
 		}
 	}
-	if raw := strings.TrimSpace(item.NoteMarkdown); raw != "" {
+
+	lines = append(lines, "", "Note:")
+	if raw := strings.TrimSpace(detailNoteMarkdown(item)); raw != "" {
 		lines = append(lines, "")
 		for _, part := range strings.Split(raw, "\n") {
 			if strings.TrimSpace(part) == "" {
@@ -1628,8 +1619,29 @@ func (a *App) detailLines(width int) []string {
 			}
 			lines = append(lines, wrapText(part, width)...)
 		}
+	} else {
+		lines = append(lines, "  -")
 	}
 	return lines
+}
+
+func detailNoteMarkdown(item *Item) string {
+	raw := strings.TrimSpace(strings.ReplaceAll(item.NoteMarkdown, "\r\n", "\n"))
+	if raw == "" && len(item.Notes) > 0 {
+		raw = strings.TrimSpace(strings.Join(item.Notes, "\n\n"))
+	}
+	if raw == "" {
+		return ""
+	}
+
+	lines := strings.Split(raw, "\n")
+	if len(lines) > 0 && strings.HasPrefix(lines[0], "# ") {
+		lines = lines[1:]
+		if len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+			lines = lines[1:]
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func listTitleWidth(width int) int {

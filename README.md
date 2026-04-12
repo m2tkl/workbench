@@ -96,7 +96,7 @@ See [docs/storage-model.md](docs/storage-model.md) for the storage and archive d
 
 - Top tabs: `Focus`, `Inbox`, `Next`, `Later`, `Deferred`, `Done for Day`, and `Complete`
 - Main pane: current list for the selected section
-- Bottom pane: notes and work log for the selected item
+- Bottom pane: frontmatter, work log, and note for the selected item
 - Bottom bar: active key bindings and current status
 
 ## Keys
