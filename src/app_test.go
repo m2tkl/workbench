@@ -807,8 +807,138 @@ func TestHelpExplainsDoneForDayVsComplete(t *testing.T) {
 	if !strings.Contains(help, "7/p  Complete") {
 		t.Fatalf("expected Complete shortcut in help: %q", help)
 	}
+	if !strings.Contains(help, ":    open command palette") {
+		t.Fatalf("expected command palette shortcut in help: %q", help)
+	}
 	if !strings.Contains(help, "Done for Day keeps the task open. Complete finishes it.") {
 		t.Fatalf("expected help to explain status difference: %q", help)
+	}
+}
+
+func TestCommandPaletteOpensWithCtrlP(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	updated := model.(*App)
+	if updated.mode != modeCommandPalette {
+		t.Fatalf("mode = %v, want modeCommandPalette", updated.mode)
+	}
+	if command := updated.selectedPaletteCommand(); command == nil || command.title != "Open Focus" {
+		t.Fatalf("unexpected default command: %#v", command)
+	}
+}
+
+func TestCommandPaletteExecutesNavigationCommand(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionToday
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	updated := model.(*App)
+	updated.inputs[0].SetValue("open inbox")
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(*App)
+	if updated.mode != modeNormal {
+		t.Fatalf("mode = %v, want modeNormal", updated.mode)
+	}
+	if updated.selectedSection != sectionInbox {
+		t.Fatalf("selectedSection = %v, want %v", updated.selectedSection, sectionInbox)
+	}
+}
+
+func TestCommandPaletteCanOpenAddModal(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	updated := model.(*App)
+	updated.inputs[0].SetValue("add inbox")
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(*App)
+	if updated.mode != modeAdd {
+		t.Fatalf("mode = %v, want modeAdd", updated.mode)
+	}
+	if len(updated.inputs) != 2 {
+		t.Fatalf("inputs = %d, want 2", len(updated.inputs))
+	}
+}
+
+func TestCommandPaletteFuzzyMatchFindsAbbreviations(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+	app.startCommandPalette()
+	app.inputs[0].SetValue("oi")
+
+	commands := app.filteredPaletteCommands()
+	if len(commands) == 0 {
+		t.Fatal("expected fuzzy matches")
+	}
+	if commands[0].title != "Open Inbox" {
+		t.Fatalf("top command = %q, want %q", commands[0].title, "Open Inbox")
+	}
+}
+
+func TestCommandPaletteFuzzyMatchPrefersTitlePrefix(t *testing.T) {
+	command := paletteCommand{
+		title:       "Open Inbox",
+		description: "Jump to Inbox.",
+		aliases:     []string{"capture triage"},
+	}
+	other := paletteCommand{
+		title:       "Help",
+		description: "Open the shortcut reference.",
+		aliases:     []string{"open info"},
+	}
+
+	commandScore, ok := paletteCommandScore(command, "op in")
+	if !ok {
+		t.Fatal("expected Open Inbox to match")
+	}
+	otherScore, ok := paletteCommandScore(other, "op in")
+	if !ok {
+		t.Fatal("expected Help to weakly match through description/alias")
+	}
+	if commandScore <= otherScore {
+		t.Fatalf("expected title prefix score %d to beat weaker match %d", commandScore, otherScore)
+	}
+}
+
+func TestFuzzyHighlightIndexesSupportsSubsequence(t *testing.T) {
+	indexes := fuzzyHighlightIndexes("Open Inbox", "oi")
+	if !slices.Equal(indexes, []int{0, 5}) {
+		t.Fatalf("indexes = %#v, want %#v", indexes, []int{0, 5})
+	}
+}
+
+func TestPaletteDescriptionHighlightTurnsOffWhenTitleAlreadyMatches(t *testing.T) {
+	if shouldHighlightPaletteDescription("Move To Next", "move") {
+		t.Fatal("expected description highlight to be suppressed when title already matches strongly")
+	}
+	if !shouldHighlightPaletteDescription("Help", "move") {
+		t.Fatal("expected description highlight to remain available when title does not match")
+	}
+}
+
+func TestCommandPaletteRowStacksTitleAndDescription(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	line := app.renderPaletteCommandLine(
+		paletteCommand{title: "Open Inbox", description: "Jump to Inbox."},
+		"oi",
+		false,
+		60,
+	)
+	if !strings.Contains(line, "\n") {
+		t.Fatalf("expected multi-line palette row in %q", line)
+	}
+	if !strings.Contains(line, "Open Inbox") || !strings.Contains(line, "Jump to Inbox.") {
+		t.Fatalf("expected both title and description in %q", line)
 	}
 }
 

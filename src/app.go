@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ type mode int
 const (
 	modeNormal mode = iota
 	modeHelp
+	modeCommandPalette
 	modeSearch
 	modeAdd
 	modeMove
@@ -90,6 +92,19 @@ type recurringDraft struct {
 	donePolicy DonePolicy
 }
 
+type paletteCommand struct {
+	title       string
+	description string
+	aliases     []string
+	run         func(*App) tea.Cmd
+}
+
+type scoredPaletteCommand struct {
+	command paletteCommand
+	score   int
+	index   int
+}
+
 const undoWindow = 10 * time.Second
 
 type undoState struct {
@@ -148,6 +163,8 @@ type App struct {
 	inputs        []textinput.Model
 	inputCursor   int
 	keepModalOpen bool
+	paletteCursor int
+	paletteOffset int
 
 	recurringField           int
 	recurringOption          int
@@ -241,6 +258,9 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 	case "?":
 		a.mode = modeHelp
+		return a, nil
+	case "ctrl+p", ":":
+		a.startCommandPalette()
 		return a, nil
 	case "M", "shift+m":
 		a.toggleView()
@@ -452,6 +472,8 @@ func (a *App) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.status = "Closed help."
 		}
 		return a, nil
+	case modeCommandPalette:
+		return a.updateCommandPalette(msg)
 	case modeSourceWorkbench:
 		switch msg.String() {
 		case "esc", "enter", "q", "?":
@@ -622,7 +644,7 @@ func (a *App) View() string {
 		return layout
 	}
 
-	modal := a.renderModal(max(52, a.width/2), max(8, a.height/3))
+	modal := a.renderModal(max(72, a.width*2/3), max(8, a.height/3))
 	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center, modal)
 }
 
@@ -1059,6 +1081,7 @@ func (a *App) renderModal(width, height int) string {
 			"8    extra action tab",
 			"",
 			"j/k  move cursor",
+			":    open command palette",
 			"M    switch Plan/Action",
 			"tab  next tab or workbench pane",
 			"shift+tab  previous tab or workbench pane",
@@ -1093,6 +1116,9 @@ func (a *App) renderModal(width, height int) string {
 			Width(width).
 			Height(height).
 			Render(strings.Join(append([]string{title, ""}, body...), "\n"))
+	case modeCommandPalette:
+		title = "Command Palette"
+		return a.renderCommandPaletteModal(width, height, title)
 	case modeSourceWorkbench:
 		title = "Source Inbox"
 		body = append(body,
@@ -1347,6 +1373,560 @@ func (a *App) renderRecurringOptions(field int, options []any) []string {
 		lines = append(lines, fmt.Sprintf("  %s %s %s", cursor, recurringSelectedMark(field, a.recurringDraft, option), recurringOptionLabel(option)))
 	}
 	return lines
+}
+
+func (a *App) startCommandPalette() {
+	a.inputs = []textinput.Model{newInput("type a command", "")}
+	a.inputCursor = 0
+	a.paletteCursor = 0
+	a.paletteOffset = 0
+	a.mode = modeCommandPalette
+	a.focusInputs()
+}
+
+func (a *App) updateCommandPalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if len(a.inputs) == 0 {
+		a.startCommandPalette()
+	}
+
+	switch msg.String() {
+	case "esc":
+		a.mode = modeNormal
+		a.inputs = nil
+		a.inputCursor = 0
+		a.paletteCursor = 0
+		a.paletteOffset = 0
+		a.status = "Canceled."
+		return a, nil
+	case "enter":
+		return a, a.executePaletteSelection()
+	case "tab", "down", "j":
+		commands := a.filteredPaletteCommands()
+		if len(commands) > 0 {
+			a.paletteCursor = (a.paletteCursor + 1) % len(commands)
+		}
+		return a, nil
+	case "shift+tab", "backtab", "up", "k":
+		commands := a.filteredPaletteCommands()
+		if len(commands) > 0 {
+			a.paletteCursor--
+			if a.paletteCursor < 0 {
+				a.paletteCursor = len(commands) - 1
+			}
+		}
+		return a, nil
+	}
+
+	var cmd tea.Cmd
+	a.inputs[0], cmd = a.inputs[0].Update(msg)
+	commands := a.filteredPaletteCommands()
+	if len(commands) == 0 {
+		a.paletteCursor = 0
+	} else if a.paletteCursor >= len(commands) {
+		a.paletteCursor = len(commands) - 1
+	}
+	a.paletteOffset = 0
+	return a, cmd
+}
+
+func (a *App) renderCommandPaletteModal(width, height int, title string) string {
+	commands := a.filteredPaletteCommands()
+	body := []string{" " + a.inputs[0].View(), ""}
+	listHeight := max(2, (height-7)/2)
+	a.ensureWorkbenchOffset(&a.paletteOffset, a.paletteCursor, listHeight, len(commands))
+	query := ""
+	if len(a.inputs) > 0 {
+		query = strings.TrimSpace(a.inputs[0].Value())
+	}
+
+	if len(commands) == 0 {
+		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("  No matching commands."))
+	} else {
+		for row := a.paletteOffset; row < len(commands) && row < a.paletteOffset+listHeight; row++ {
+			command := commands[row]
+			body = append(body, a.renderPaletteCommandLine(command, query, row == a.paletteCursor, max(1, width-4)))
+			if row < len(commands)-1 && row < a.paletteOffset+listHeight-1 {
+				body = append(body, "")
+			}
+		}
+	}
+
+	body = append(body, "", "Type to filter. j/k or Tab move. Enter run. Esc cancel.")
+	return lipgloss.NewStyle().
+		Padding(1, 2).
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color("86")).
+		Width(width).
+		Height(height).
+		Render(strings.Join(append([]string{title, ""}, body...), "\n"))
+}
+
+func (a *App) renderPaletteCommandLine(command paletteCommand, query string, selected bool, width int) string {
+	prefix := " "
+	if selected {
+		prefix = ">"
+	}
+	contentWidth := max(1, width-2)
+
+	rowStyle := lipgloss.NewStyle()
+	titleBase := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
+	descBase := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	highlight := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	if selected {
+		rowStyle = rowStyle.Background(lipgloss.Color("24"))
+		titleBase = titleBase.Background(lipgloss.Color("24"))
+		descBase = descBase.Background(lipgloss.Color("24"))
+		highlight = highlight.Background(lipgloss.Color("24"))
+	}
+
+	title := highlightMatchRunes(command.title, query, titleBase, highlight)
+	descHighlight := highlight
+	if !shouldHighlightPaletteDescription(command.title, query) {
+		descHighlight = descBase
+	}
+	desc := highlightMatchRunes(command.description, query, descBase, descHighlight)
+
+	titleLine := prefix + " " + titleBase.Width(contentWidth).MaxWidth(contentWidth).Render(title)
+	descLine := "  " + descBase.Width(contentWidth).MaxWidth(contentWidth).Render(desc)
+	return rowStyle.Width(width).MaxWidth(width).Render(titleLine + "\n" + descLine)
+}
+
+func shouldHighlightPaletteDescription(title, query string) bool {
+	score, ok := fuzzyScore(strings.ToLower(title), strings.ToLower(strings.TrimSpace(query)))
+	return !ok || score == 0
+}
+
+func (a *App) filteredPaletteCommands() []paletteCommand {
+	commands := a.paletteCommands()
+	query := ""
+	if len(a.inputs) > 0 {
+		query = strings.ToLower(strings.TrimSpace(a.inputs[0].Value()))
+	}
+	if query == "" {
+		return commands
+	}
+
+	scored := make([]scoredPaletteCommand, 0, len(commands))
+	for idx, command := range commands {
+		score, ok := paletteCommandScore(command, query)
+		if ok {
+			scored = append(scored, scoredPaletteCommand{
+				command: command,
+				score:   score,
+				index:   idx,
+			})
+		}
+	}
+
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].index < scored[j].index
+		}
+		return scored[i].score > scored[j].score
+	})
+
+	filtered := make([]paletteCommand, 0, len(scored))
+	for _, entry := range scored {
+		filtered = append(filtered, entry.command)
+	}
+	return filtered
+}
+
+func paletteCommandScore(command paletteCommand, query string) (int, bool) {
+	tokens := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	if len(tokens) == 0 {
+		return 0, true
+	}
+
+	fields := []struct {
+		value      string
+		baseWeight int
+	}{
+		{value: strings.ToLower(command.title), baseWeight: 1000},
+		{value: strings.ToLower(command.description), baseWeight: 400},
+	}
+	for _, alias := range command.aliases {
+		fields = append(fields, struct {
+			value      string
+			baseWeight int
+		}{value: strings.ToLower(alias), baseWeight: 700})
+	}
+
+	total := 0
+	for _, token := range tokens {
+		best := -1
+		for _, field := range fields {
+			score, ok := fuzzyScore(field.value, token)
+			if !ok {
+				continue
+			}
+			score += field.baseWeight
+			if best < score {
+				best = score
+			}
+		}
+		if best < 0 {
+			return 0, false
+		}
+		total += best
+	}
+
+	if strings.HasPrefix(strings.ToLower(command.title), strings.Join(tokens, " ")) {
+		total += 300
+	}
+	return total, true
+}
+
+func fuzzyScore(text, query string) (int, bool) {
+	text = strings.TrimSpace(strings.ToLower(text))
+	query = strings.TrimSpace(strings.ToLower(query))
+	if query == "" {
+		return 0, true
+	}
+	if text == "" {
+		return 0, false
+	}
+
+	if idx := strings.Index(text, query); idx >= 0 {
+		score := 800 - idx*8
+		if idx == 0 {
+			score += 180
+		}
+		if idx > 0 && isBoundaryRune(text[idx-1]) {
+			score += 90
+		}
+		return score + len(query)*20, true
+	}
+
+	last := -1
+	score := 0
+	consecutive := 0
+	for _, q := range query {
+		pos := strings.IndexRune(text[last+1:], q)
+		if pos < 0 {
+			return 0, false
+		}
+		actual := last + 1 + pos
+		if actual == last+1 {
+			consecutive++
+			score += 45 + consecutive*12
+		} else {
+			consecutive = 0
+			gap := actual - last - 1
+			score += 28 - min(gap, 18)
+		}
+		if actual == 0 {
+			score += 80
+		} else if isBoundaryRune(text[actual-1]) {
+			score += 35
+		}
+		last = actual
+	}
+	score += len(query) * 12
+	return score, true
+}
+
+func highlightMatchRunes(text, query string, base, highlight lipgloss.Style) string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return ""
+	}
+	matches := make([]bool, len(runes))
+	for _, token := range strings.Fields(strings.TrimSpace(query)) {
+		for _, idx := range fuzzyHighlightIndexes(text, token) {
+			if idx >= 0 && idx < len(matches) {
+				matches[idx] = true
+			}
+		}
+	}
+
+	var out strings.Builder
+	for idx, r := range runes {
+		style := base
+		if matches[idx] {
+			style = highlight
+		}
+		out.WriteString(style.Render(string(r)))
+	}
+	return out.String()
+}
+
+func fuzzyHighlightIndexes(text, query string) []int {
+	textRunes := []rune(strings.ToLower(strings.TrimSpace(text)))
+	queryRunes := []rune(strings.ToLower(strings.TrimSpace(query)))
+	if len(textRunes) == 0 || len(queryRunes) == 0 {
+		return nil
+	}
+
+	if start := runeSliceIndex(textRunes, queryRunes); start >= 0 {
+		indexes := make([]int, 0, len(queryRunes))
+		for i := range queryRunes {
+			indexes = append(indexes, start+i)
+		}
+		return indexes
+	}
+
+	indexes := make([]int, 0, len(queryRunes))
+	searchStart := 0
+	for _, target := range queryRunes {
+		found := -1
+		for i := searchStart; i < len(textRunes); i++ {
+			if textRunes[i] == target {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			return nil
+		}
+		indexes = append(indexes, found)
+		searchStart = found + 1
+	}
+	return indexes
+}
+
+func runeSliceIndex(haystack, needle []rune) int {
+	if len(needle) == 0 {
+		return 0
+	}
+	if len(needle) > len(haystack) {
+		return -1
+	}
+	for start := 0; start <= len(haystack)-len(needle); start++ {
+		matched := true
+		for i := range needle {
+			if haystack[start+i] != needle[i] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return start
+		}
+	}
+	return -1
+}
+
+func isBoundaryRune(b byte) bool {
+	switch b {
+	case ' ', '-', '_', '/', '.':
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) selectedPaletteCommand() *paletteCommand {
+	commands := a.filteredPaletteCommands()
+	if len(commands) == 0 {
+		return nil
+	}
+	if a.paletteCursor < 0 {
+		a.paletteCursor = 0
+	}
+	if a.paletteCursor >= len(commands) {
+		a.paletteCursor = len(commands) - 1
+	}
+	return &commands[a.paletteCursor]
+}
+
+func (a *App) executePaletteSelection() tea.Cmd {
+	command := a.selectedPaletteCommand()
+	if command == nil {
+		a.status = "No matching command."
+		return nil
+	}
+	a.mode = modeNormal
+	a.inputs = nil
+	a.inputCursor = 0
+	a.paletteCursor = 0
+	a.paletteOffset = 0
+	return command.run(a)
+}
+
+func (a *App) paletteCommands() []paletteCommand {
+	return []paletteCommand{
+		{title: "Open Focus", description: "Jump to the Focus list.", aliases: []string{"today now tasks"}, run: func(a *App) tea.Cmd {
+			if a.view == viewWorkbench {
+				a.focus = paneSidebar
+				a.workbenchNavCursor = 1
+				a.syncSelection()
+				a.status = "Opened Now."
+				return nil
+			}
+			a.jumpSection(sectionToday)
+			a.status = "Opened Focus."
+			return nil
+		}},
+		{title: "Open Inbox", description: "Jump to Inbox.", aliases: []string{"capture triage"}, run: func(a *App) tea.Cmd {
+			if a.view == viewWorkbench {
+				a.focus = paneSidebar
+				a.workbenchNavCursor = 0
+				a.syncSelection()
+				a.status = "Opened Inbox."
+				return nil
+			}
+			a.jumpSection(sectionInbox)
+			a.status = "Opened Inbox."
+			return nil
+		}},
+		{title: "Open Next", description: "Jump to the Next list.", aliases: []string{"queue"}, run: func(a *App) tea.Cmd {
+			if a.view == viewWorkbench {
+				a.focus = paneSidebar
+				a.workbenchNavCursor = 2
+				a.syncSelection()
+				a.status = "Opened Next."
+				return nil
+			}
+			a.jumpSection(sectionNext)
+			a.status = "Opened Next."
+			return nil
+		}},
+		{title: "Open Later", description: "Jump to the Later list.", aliases: []string{"review"}, run: func(a *App) tea.Cmd {
+			if a.view == viewWorkbench {
+				a.focus = paneSidebar
+				a.workbenchNavCursor = 3
+				a.syncSelection()
+				a.status = "Opened Later."
+				return nil
+			}
+			a.jumpSection(sectionReview)
+			a.status = "Opened Later."
+			return nil
+		}},
+		{title: "Open Deferred", description: "Jump to Deferred.", aliases: []string{"scheduled recurring"}, run: func(a *App) tea.Cmd {
+			if a.view == viewWorkbench {
+				a.focus = paneSidebar
+				a.workbenchNavCursor = 4
+				a.syncSelection()
+				a.status = "Opened Deferred."
+				return nil
+			}
+			a.jumpSection(sectionDeferred)
+			a.status = "Opened Deferred."
+			return nil
+		}},
+		{title: "Toggle Plan/Action View", description: "Switch between workbench and execution.", aliases: []string{"toggle mode workbench execution plan action"}, run: func(a *App) tea.Cmd {
+			a.toggleView()
+			return nil
+		}},
+		{title: "Search Items", description: "Open the filter dialog.", aliases: []string{"filter find"}, run: func(a *App) tea.Cmd {
+			a.startSearch()
+			return nil
+		}},
+		{title: "Add Inbox Item", description: "Create a new inbox task.", aliases: []string{"new create capture"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.startAdd()
+			return nil
+		}},
+		{title: "Complete Item", description: "Mark the current item done.", aliases: []string{"done finish close"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.completeItem()
+			return nil
+		}},
+		{title: "Done For Today", description: "Hide the current Focus item until tomorrow.", aliases: []string{"snooze today"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.markDoneForToday()
+			return nil
+		}},
+		{title: "Reopen Item", description: "Restore a completed or done-for-day item.", aliases: []string{"restore undo close"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.reopenItem()
+			return nil
+		}},
+		{title: "Move To Now", description: "Move the current item or selection to Now.", aliases: []string{"focus stage now"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.moveChoice = moveToNow
+			a.applyMoveChoice()
+			return nil
+		}},
+		{title: "Move To Next", description: "Move the current item or selection to Next.", aliases: []string{"stage next"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.moveChoice = moveToNext
+			a.applyMoveChoice()
+			return nil
+		}},
+		{title: "Move To Later", description: "Move the current item or selection to Later.", aliases: []string{"review stage later"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.moveChoice = moveToLater
+			a.applyMoveChoice()
+			return nil
+		}},
+		{title: "Schedule Item", description: "Set a scheduled date for the current item or selection.", aliases: []string{"date defer"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.moveChoice = moveToScheduled
+			a.applyMoveChoice()
+			return nil
+		}},
+		{title: "Make Recurring", description: "Turn the current item or selection into recurring work.", aliases: []string{"repeat recurring cadence"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.moveChoice = moveToRecurring
+			a.applyMoveChoice()
+			return nil
+		}},
+		{title: "Open Refs", description: "Browse refs on the selected item.", aliases: []string{"references links"}, run: func(a *App) tea.Cmd {
+			a.startOpenRefs()
+			return nil
+		}},
+		{title: "Edit Refs", description: "Edit refs on the selected item.", aliases: []string{"references links"}, run: func(a *App) tea.Cmd {
+			a.startEditRefs()
+			return nil
+		}},
+		{title: "Edit Theme", description: "Change the selected issue theme.", aliases: []string{"issue theme"}, run: func(a *App) tea.Cmd {
+			a.startEditTheme()
+			return nil
+		}},
+		{title: "Convert Inbox Item To Issue", description: "Turn the current inbox item into an issue.", aliases: []string{"inbox issue"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.startConvertInboxSelectionToIssue()
+			return nil
+		}},
+		{title: "Convert Inbox Item To Task", description: "Turn the current inbox item into a task.", aliases: []string{"inbox task"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.convertInboxSelectionToTask()
+			return nil
+		}},
+		{title: "Open Source Inbox", description: "Show the upload dialog for source files.", aliases: []string{"sources upload"}, run: func(a *App) tea.Cmd {
+			a.openSourceInboxDialog()
+			return nil
+		}},
+		{title: "Save", description: "Write the current state to storage.", aliases: []string{"persist write"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.save()
+			if !strings.HasPrefix(a.status, "save failed:") {
+				a.status = "Saved."
+			}
+			return nil
+		}},
+		{title: "Help", description: "Open the shortcut reference.", aliases: []string{"shortcuts"}, run: func(a *App) tea.Cmd {
+			a.mode = modeHelp
+			return nil
+		}},
+	}
 }
 
 func (a *App) startSearch() {
