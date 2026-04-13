@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestDefaultStorePathUsesTaskbenchDataDir(t *testing.T) {
@@ -74,16 +73,6 @@ func TestParseRunOptionsPrefersExplicitDataDir(t *testing.T) {
 	}
 }
 
-func TestParseRunOptionsReadsVaultFlag(t *testing.T) {
-	options, err := parseRunOptions([]string{"taskbench", "--vault"})
-	if err != nil {
-		t.Fatalf("parseRunOptions returned error: %v", err)
-	}
-	if !options.useVault {
-		t.Fatal("expected useVault to be true")
-	}
-}
-
 func TestParseRunOptionsRejectsUnexpectedArgs(t *testing.T) {
 	if _, err := parseRunOptions([]string{"taskbench", "extra"}); err == nil {
 		t.Fatal("expected parseRunOptions to reject unexpected arguments")
@@ -132,41 +121,5 @@ func TestRunConfigSetWritesConfig(t *testing.T) {
 	}
 	if config.DataDir != want {
 		t.Fatalf("data dir = %q, want %q", config.DataDir, want)
-	}
-}
-
-func TestRunMigrateVaultImportsLegacyState(t *testing.T) {
-	root := t.TempDir()
-	store := NewStore(root)
-
-	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
-	inbox := NewInboxItem(now, "Clarify import format")
-	inbox.AddNote(now, "Raw capture note.")
-	next := NewItem(now, "Prepare release notes", PlacementNext)
-	next.AddNote(now, "Needs draft.")
-
-	if err := store.Save(State{Items: []Item{inbox, next}}); err != nil {
-		t.Fatalf("store.Save returned error: %v", err)
-	}
-
-	if code := runMigrateVault([]string{"taskbench", "migrate-vault", "--data-dir", root}); code != 0 {
-		t.Fatalf("runMigrateVault exit code = %d, want 0", code)
-	}
-
-	vault := NewVault(root)
-	inboxItems, err := vault.LoadInbox()
-	if err != nil {
-		t.Fatalf("LoadInbox returned error: %v", err)
-	}
-	if len(inboxItems) != 1 || inboxItems[0].Title != inbox.Title {
-		t.Fatalf("LoadInbox = %#v", inboxItems)
-	}
-
-	tasks, err := vault.LoadTasks()
-	if err != nil {
-		t.Fatalf("LoadTasks returned error: %v", err)
-	}
-	if len(tasks) != 1 || tasks[0].Title != next.Title || tasks[0].State != WorkStateNext {
-		t.Fatalf("LoadTasks = %#v", tasks)
 	}
 }

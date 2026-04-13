@@ -7,34 +7,32 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
 
-type WorkState string
-
-const (
-	WorkStateNow   WorkState = "now"
-	WorkStateNext  WorkState = "next"
-	WorkStateLater WorkState = "later"
-	WorkStateDone  WorkState = "done"
-)
-
-var allWorkStates = []WorkState{
-	WorkStateNow,
-	WorkStateNext,
-	WorkStateLater,
-	WorkStateDone,
-}
-
 type Metadata struct {
-	ID      string
-	Title   string
-	State   WorkState
-	Created string
-	Updated string
-	Tags    []string
-	Refs    []string
+	ID                  string
+	Title               string
+	Status              string
+	Triage              Triage
+	Stage               Stage
+	DeferredKind        DeferredKind
+	DoneForDayOn        string
+	LastReviewedOn      string
+	ScheduledFor        string
+	RecurringEveryDays  int
+	RecurringAnchor     string
+	RecurringWeekdays   []string
+	RecurringWeeks      []string
+	RecurringMonths     []int
+	RecurringDonePolicy DonePolicy
+	LastCompletedOn     string
+	Created             string
+	Updated             string
+	Tags                []string
+	Refs                []string
 }
 
 type InboxItem struct {
@@ -48,11 +46,13 @@ type InboxItem struct {
 
 type TaskDoc struct {
 	Metadata
+	Body string
 }
 
 type IssueDoc struct {
 	Metadata
 	Theme string
+	Body  string
 }
 
 type ThemeDoc struct {
@@ -61,6 +61,7 @@ type ThemeDoc struct {
 	Created string
 	Updated string
 	Tags    []string
+	Body    string
 }
 
 type KnowledgeDoc struct {
@@ -126,7 +127,7 @@ func (v VaultFS) TaskDir(id string) string {
 }
 
 func (v VaultFS) TaskMetaPath(id string) string {
-	return filepath.Join(v.TaskDir(id), "task.yaml")
+	return filepath.Join(v.TaskDir(id), "task.md")
 }
 
 func (v VaultFS) TaskMemosDir(id string) string {
@@ -138,7 +139,7 @@ func (v VaultFS) IssueDir(id string) string {
 }
 
 func (v VaultFS) IssueMetaPath(id string) string {
-	return filepath.Join(v.IssueDir(id), "issue.yaml")
+	return filepath.Join(v.IssueDir(id), "issue.md")
 }
 
 func (v VaultFS) IssueContextDir(id string) string {
@@ -158,7 +159,7 @@ func (v VaultFS) ThemeDir(id string) string {
 }
 
 func (v VaultFS) ThemeMetaPath(id string) string {
-	return filepath.Join(v.ThemeDir(id), "theme.yaml")
+	return filepath.Join(v.ThemeDir(id), "theme.md")
 }
 
 func (v VaultFS) ThemeSourcesDir(id string) string {
@@ -208,15 +209,15 @@ func (v VaultFS) LoadInbox() ([]InboxItem, error) {
 }
 
 func (v VaultFS) LoadTasks() ([]TaskDoc, error) {
-	return loadDirectoryItems(v.TasksDir(), "task.yaml", readTaskDoc)
+	return loadDirectoryItems(v.TasksDir(), "task.md", readTaskDoc)
 }
 
 func (v VaultFS) LoadIssues() ([]IssueDoc, error) {
-	return loadDirectoryItems(v.IssuesDir(), "issue.yaml", readIssueDoc)
+	return loadDirectoryItems(v.IssuesDir(), "issue.md", readIssueDoc)
 }
 
 func (v VaultFS) LoadThemes() ([]ThemeDoc, error) {
-	return loadDirectoryItems(v.ThemesDir(), "theme.yaml", readThemeDoc)
+	return loadDirectoryItems(v.ThemesDir(), "theme.md", readThemeDoc)
 }
 
 func (v VaultFS) LoadKnowledgeIndex() ([]KnowledgeDoc, error) {
@@ -383,32 +384,38 @@ func NewInboxCapture(now time.Time, title, body string, tags []string) InboxItem
 	}
 }
 
-func TaskFromInbox(item InboxItem, now time.Time, state WorkState) TaskDoc {
+func TaskFromInbox(item InboxItem, now time.Time, triage Triage, stage Stage, deferredKind DeferredKind) TaskDoc {
 	updated := now.Format("2006-01-02")
 	return TaskDoc{
 		Metadata: Metadata{
-			ID:      item.ID,
-			Title:   item.Title,
-			State:   state,
-			Created: item.Created,
-			Updated: updated,
-			Tags:    append([]string(nil), item.Tags...),
-			Refs:    nil,
+			ID:           item.ID,
+			Title:        item.Title,
+			Status:       "open",
+			Triage:       triage,
+			Stage:        stage,
+			DeferredKind: deferredKind,
+			Created:      item.Created,
+			Updated:      updated,
+			Tags:         append([]string(nil), item.Tags...),
+			Refs:         nil,
 		},
 	}
 }
 
-func IssueFromInbox(item InboxItem, now time.Time, state WorkState, theme string) IssueDoc {
+func IssueFromInbox(item InboxItem, now time.Time, triage Triage, stage Stage, deferredKind DeferredKind, theme string) IssueDoc {
 	updated := now.Format("2006-01-02")
 	return IssueDoc{
 		Metadata: Metadata{
-			ID:      item.ID,
-			Title:   item.Title,
-			State:   state,
-			Created: item.Created,
-			Updated: updated,
-			Tags:    append([]string(nil), item.Tags...),
-			Refs:    nil,
+			ID:           item.ID,
+			Title:        item.Title,
+			Status:       "open",
+			Triage:       triage,
+			Stage:        stage,
+			DeferredKind: deferredKind,
+			Created:      item.Created,
+			Updated:      updated,
+			Tags:         append([]string(nil), item.Tags...),
+			Refs:         nil,
 		},
 		Theme: strings.TrimSpace(theme),
 	}
@@ -417,10 +424,19 @@ func IssueFromInbox(item InboxItem, now time.Time, state WorkState, theme string
 func normalizeMetadata(meta Metadata) Metadata {
 	meta.ID = strings.TrimSpace(meta.ID)
 	meta.Title = strings.TrimSpace(meta.Title)
+	meta.Status = strings.TrimSpace(meta.Status)
 	meta.Created = strings.TrimSpace(meta.Created)
 	meta.Updated = strings.TrimSpace(meta.Updated)
+	meta.DoneForDayOn = strings.TrimSpace(meta.DoneForDayOn)
+	meta.LastReviewedOn = strings.TrimSpace(meta.LastReviewedOn)
+	meta.ScheduledFor = strings.TrimSpace(meta.ScheduledFor)
+	meta.RecurringAnchor = strings.TrimSpace(meta.RecurringAnchor)
+	meta.LastCompletedOn = strings.TrimSpace(meta.LastCompletedOn)
 	meta.Tags = normalizeStrings(meta.Tags)
 	meta.Refs = normalizeStrings(meta.Refs)
+	meta.RecurringWeekdays = normalizeStrings(meta.RecurringWeekdays)
+	meta.RecurringWeeks = normalizeStrings(meta.RecurringWeeks)
+	meta.RecurringMonths = normalizeInts(meta.RecurringMonths)
 	return meta
 }
 
@@ -430,6 +446,7 @@ func normalizeThemeDoc(theme ThemeDoc) ThemeDoc {
 	theme.Created = strings.TrimSpace(theme.Created)
 	theme.Updated = strings.TrimSpace(theme.Updated)
 	theme.Tags = normalizeStrings(theme.Tags)
+	theme.Body = normalizeMarkdown(theme.Body)
 	return theme
 }
 
@@ -450,8 +467,46 @@ func validateMetadata(meta Metadata) error {
 	if meta.Title == "" {
 		return errors.New("title is required")
 	}
-	if !slices.Contains(allWorkStates, meta.State) {
-		return fmt.Errorf("invalid state: %q", meta.State)
+	switch meta.Status {
+	case "open", "done":
+	default:
+		return fmt.Errorf("invalid status: %q", meta.Status)
+	}
+	switch meta.Triage {
+	case TriageInbox, TriageStock, TriageDeferred:
+	default:
+		return fmt.Errorf("invalid triage: %q", meta.Triage)
+	}
+	switch meta.Triage {
+	case TriageInbox:
+		if meta.Stage != "" || meta.DeferredKind != "" {
+			return errors.New("inbox items cannot have stage or deferred_kind")
+		}
+	case TriageStock:
+		switch meta.Stage {
+		case StageNow, StageNext, StageLater:
+		default:
+			return fmt.Errorf("invalid stage: %q", meta.Stage)
+		}
+		if meta.DeferredKind != "" {
+			return errors.New("stock items cannot have deferred_kind")
+		}
+	case TriageDeferred:
+		if meta.Stage != "" {
+			return errors.New("deferred items cannot have stage")
+		}
+		switch meta.DeferredKind {
+		case DeferredKindScheduled:
+			if meta.ScheduledFor == "" {
+				return errors.New("scheduled items require scheduled_for")
+			}
+		case DeferredKindRecurring:
+			if meta.RecurringEveryDays == 0 && len(meta.RecurringWeekdays) == 0 && len(meta.RecurringWeeks) == 0 && len(meta.RecurringMonths) == 0 {
+				return errors.New("recurring items require recurring schedule fields")
+			}
+		default:
+			return fmt.Errorf("invalid deferred_kind: %q", meta.DeferredKind)
+		}
 	}
 	if meta.Created == "" {
 		return errors.New("created is required")
@@ -495,15 +550,29 @@ func validateInboxItem(item InboxItem) error {
 }
 
 func renderTaskDoc(task TaskDoc) string {
-	return renderYAMLMap([]yamlField{
+	meta := renderYAMLMap([]yamlField{
 		{Key: "id", Value: task.ID},
 		{Key: "title", Value: task.Title},
-		{Key: "state", Value: string(task.State)},
+		{Key: "status", Value: task.Status},
+		{Key: "triage", Value: string(task.Triage)},
+		{Key: "stage", Value: string(task.Stage)},
+		{Key: "deferred_kind", Value: string(task.DeferredKind)},
+		{Key: "done_for_day_on", Value: task.DoneForDayOn},
+		{Key: "last_reviewed_on", Value: task.LastReviewedOn},
+		{Key: "scheduled_for", Value: task.ScheduledFor},
+		{Key: "recurring_every_days", Value: formatInt(task.RecurringEveryDays)},
+		{Key: "recurring_anchor", Value: task.RecurringAnchor},
+		{Key: "recurring_weekdays", List: task.RecurringWeekdays},
+		{Key: "recurring_weeks", List: task.RecurringWeeks},
+		{Key: "recurring_months", IntList: task.RecurringMonths},
+		{Key: "recurring_done_policy", Value: string(task.RecurringDonePolicy)},
+		{Key: "last_completed_on", Value: task.LastCompletedOn},
 		{Key: "created", Value: task.Created},
 		{Key: "updated", Value: task.Updated},
 		{Key: "tags", List: task.Tags},
 		{Key: "refs", List: task.Refs},
 	})
+	return renderFrontmatterDoc(meta, task.Body)
 }
 
 func renderIssueDoc(issue IssueDoc) string {
@@ -515,23 +584,37 @@ func renderIssueDoc(issue IssueDoc) string {
 		fields = append(fields, yamlField{Key: "theme", Value: issue.Theme})
 	}
 	fields = append(fields,
-		yamlField{Key: "state", Value: string(issue.State)},
+		yamlField{Key: "status", Value: issue.Status},
+		yamlField{Key: "triage", Value: string(issue.Triage)},
+		yamlField{Key: "stage", Value: string(issue.Stage)},
+		yamlField{Key: "deferred_kind", Value: string(issue.DeferredKind)},
+		yamlField{Key: "done_for_day_on", Value: issue.DoneForDayOn},
+		yamlField{Key: "last_reviewed_on", Value: issue.LastReviewedOn},
+		yamlField{Key: "scheduled_for", Value: issue.ScheduledFor},
+		yamlField{Key: "recurring_every_days", Value: formatInt(issue.RecurringEveryDays)},
+		yamlField{Key: "recurring_anchor", Value: issue.RecurringAnchor},
+		yamlField{Key: "recurring_weekdays", List: issue.RecurringWeekdays},
+		yamlField{Key: "recurring_weeks", List: issue.RecurringWeeks},
+		yamlField{Key: "recurring_months", IntList: issue.RecurringMonths},
+		yamlField{Key: "recurring_done_policy", Value: string(issue.RecurringDonePolicy)},
+		yamlField{Key: "last_completed_on", Value: issue.LastCompletedOn},
 		yamlField{Key: "created", Value: issue.Created},
 		yamlField{Key: "updated", Value: issue.Updated},
 		yamlField{Key: "tags", List: issue.Tags},
 		yamlField{Key: "refs", List: issue.Refs},
 	)
-	return renderYAMLMap(fields)
+	return renderFrontmatterDoc(renderYAMLMap(fields), issue.Body)
 }
 
 func renderThemeDoc(theme ThemeDoc) string {
-	return renderYAMLMap([]yamlField{
+	meta := renderYAMLMap([]yamlField{
 		{Key: "id", Value: theme.ID},
 		{Key: "title", Value: theme.Title},
 		{Key: "created", Value: theme.Created},
 		{Key: "updated", Value: theme.Updated},
 		{Key: "tags", List: theme.Tags},
 	})
+	return renderFrontmatterDoc(meta, theme.Body)
 }
 
 func renderInboxItem(item InboxItem) string {
@@ -542,22 +625,26 @@ func renderInboxItem(item InboxItem) string {
 		{Key: "updated", Value: item.Updated},
 		{Key: "tags", List: item.Tags},
 	})
-	body := strings.TrimSpace(item.Body)
-	if body == "" {
-		return fmt.Sprintf("---\n%s---\n", meta)
-	}
-	return fmt.Sprintf("---\n%s---\n\n%s\n", meta, body)
+	return renderFrontmatterDoc(meta, item.Body)
 }
 
 type yamlField struct {
 	Key   string
 	Value string
 	List  []string
+	IntList []int
 }
 
 func renderYAMLMap(fields []yamlField) string {
 	var b strings.Builder
 	for _, field := range fields {
+		if len(field.IntList) > 0 {
+			fmt.Fprintf(&b, "%s:\n", field.Key)
+			for _, item := range field.IntList {
+				fmt.Fprintf(&b, "  - %d\n", item)
+			}
+			continue
+		}
 		if len(field.List) > 0 {
 			fmt.Fprintf(&b, "%s:\n", field.Key)
 			for _, item := range field.List {
@@ -565,9 +652,27 @@ func renderYAMLMap(fields []yamlField) string {
 			}
 			continue
 		}
+		if strings.TrimSpace(field.Value) == "" {
+			continue
+		}
 		fmt.Fprintf(&b, "%s: %s\n", field.Key, escapeYAMLScalar(field.Value))
 	}
 	return b.String()
+}
+
+func formatInt(v int) string {
+	if v == 0 {
+		return ""
+	}
+	return strconv.Itoa(v)
+}
+
+func renderFrontmatterDoc(meta, body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return fmt.Sprintf("---\n%s---\n", meta)
+	}
+	return fmt.Sprintf("---\n%s---\n\n%s\n", meta, body)
 }
 
 func escapeYAMLScalar(value string) string {
@@ -582,48 +687,77 @@ func escapeYAMLScalar(value string) string {
 }
 
 func readTaskDoc(path string) (TaskDoc, error) {
-	fields, err := parseYAMLFile(path)
+	fields, body, err := parseMetadataDoc(path)
 	if err != nil {
 		return TaskDoc{}, err
 	}
 	task := TaskDoc{
 		Metadata: Metadata{
-			ID:      fields["id"],
-			Title:   fields["title"],
-			State:   WorkState(fields["state"]),
-			Created: fields["created"],
-			Updated: fields["updated"],
-			Tags:    parseYAMLList(fields["_tags"]),
-			Refs:    parseYAMLList(fields["_refs"]),
+			ID:                  fields["id"],
+			Title:               fields["title"],
+			Status:              fields["status"],
+			Triage:              Triage(fields["triage"]),
+			Stage:               Stage(fields["stage"]),
+			DeferredKind:        DeferredKind(fields["deferred_kind"]),
+			DoneForDayOn:        fields["done_for_day_on"],
+			LastReviewedOn:      fields["last_reviewed_on"],
+			ScheduledFor:        fields["scheduled_for"],
+			RecurringEveryDays:  parseYAMLInt(fields["recurring_every_days"]),
+			RecurringAnchor:     fields["recurring_anchor"],
+			RecurringWeekdays:   parseYAMLList(fields["_recurring_weekdays"]),
+			RecurringWeeks:      parseYAMLList(fields["_recurring_weeks"]),
+			RecurringMonths:     parseYAMLIntList(fields["_recurring_months"]),
+			RecurringDonePolicy: DonePolicy(fields["recurring_done_policy"]),
+			LastCompletedOn:     fields["last_completed_on"],
+			Created:             fields["created"],
+			Updated:             fields["updated"],
+			Tags:                parseYAMLList(fields["_tags"]),
+			Refs:                parseYAMLList(fields["_refs"]),
 		},
+		Body: body,
 	}
 	return task, validateMetadata(normalizeMetadata(task.Metadata))
 }
 
 func readIssueDoc(path string) (IssueDoc, error) {
-	fields, err := parseYAMLFile(path)
+	fields, body, err := parseMetadataDoc(path)
 	if err != nil {
 		return IssueDoc{}, err
 	}
 	issue := IssueDoc{
 		Metadata: Metadata{
-			ID:      fields["id"],
-			Title:   fields["title"],
-			State:   WorkState(fields["state"]),
-			Created: fields["created"],
-			Updated: fields["updated"],
-			Tags:    parseYAMLList(fields["_tags"]),
-			Refs:    parseYAMLList(fields["_refs"]),
+			ID:                  fields["id"],
+			Title:               fields["title"],
+			Status:              fields["status"],
+			Triage:              Triage(fields["triage"]),
+			Stage:               Stage(fields["stage"]),
+			DeferredKind:        DeferredKind(fields["deferred_kind"]),
+			DoneForDayOn:        fields["done_for_day_on"],
+			LastReviewedOn:      fields["last_reviewed_on"],
+			ScheduledFor:        fields["scheduled_for"],
+			RecurringEveryDays:  parseYAMLInt(fields["recurring_every_days"]),
+			RecurringAnchor:     fields["recurring_anchor"],
+			RecurringWeekdays:   parseYAMLList(fields["_recurring_weekdays"]),
+			RecurringWeeks:      parseYAMLList(fields["_recurring_weeks"]),
+			RecurringMonths:     parseYAMLIntList(fields["_recurring_months"]),
+			RecurringDonePolicy: DonePolicy(fields["recurring_done_policy"]),
+			LastCompletedOn:     fields["last_completed_on"],
+			Created:             fields["created"],
+			Updated:             fields["updated"],
+			Tags:                parseYAMLList(fields["_tags"]),
+			Refs:                parseYAMLList(fields["_refs"]),
 		},
 		Theme: fields["theme"],
+		Body:  body,
 	}
 	issue.Metadata = normalizeMetadata(issue.Metadata)
 	issue.Theme = strings.TrimSpace(issue.Theme)
+	issue.Body = normalizeMarkdown(issue.Body)
 	return issue, validateMetadata(issue.Metadata)
 }
 
 func readThemeDoc(path string) (ThemeDoc, error) {
-	fields, err := parseYAMLFile(path)
+	fields, body, err := parseMetadataDoc(path)
 	if err != nil {
 		return ThemeDoc{}, err
 	}
@@ -633,6 +767,7 @@ func readThemeDoc(path string) (ThemeDoc, error) {
 		Created: fields["created"],
 		Updated: fields["updated"],
 		Tags:    parseYAMLList(fields["_tags"]),
+		Body:    body,
 	})
 	return theme, validateThemeDoc(theme)
 }
@@ -680,12 +815,20 @@ func splitFrontMatter(raw string) (string, string, error) {
 	return meta, body, nil
 }
 
-func parseYAMLFile(path string) (map[string]string, error) {
+func parseMetadataDoc(path string) (map[string]string, string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return parseYAMLContent(string(raw))
+	metaRaw, body, err := splitFrontMatter(string(raw))
+	if err != nil {
+		return nil, "", err
+	}
+	fields, err := parseYAMLContent(metaRaw)
+	if err != nil {
+		return nil, "", err
+	}
+	return fields, normalizeMarkdown(body), nil
 }
 
 func parseYAMLContent(raw string) (map[string]string, error) {
@@ -751,6 +894,38 @@ func parseYAMLList(raw string) []string {
 		values = append(values, line)
 	}
 	return normalizeStrings(values)
+}
+
+func parseYAMLInt(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+func parseYAMLIntList(raw string) []int {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	lines := strings.Split(raw, "\n")
+	values := make([]int, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		value, err := strconv.Atoi(line)
+		if err != nil {
+			continue
+		}
+		values = append(values, value)
+	}
+	return normalizeInts(values)
 }
 
 func unquoteYAMLScalar(value string) string {
@@ -902,6 +1077,7 @@ func itemFromInbox(vault VaultFS, inbox InboxItem) Item {
 func itemFromTaskDoc(vault VaultFS, task TaskDoc) (Item, error) {
 	item := itemFromMetadata(task.Metadata, entityTask)
 	item.EntityType = entityTask
+	item.NoteMarkdown = task.Body
 	memos, err := loadMarkdownSnippets(vault.TaskMemosDir(task.ID))
 	if err != nil {
 		return Item{}, err
@@ -914,6 +1090,7 @@ func itemFromIssueDoc(vault VaultFS, issue IssueDoc) (Item, error) {
 	item := itemFromMetadata(issue.Metadata, entityIssue)
 	item.Theme = issue.Theme
 	item.EntityType = entityIssue
+	item.NoteMarkdown = issue.Body
 	memos, err := loadMarkdownSnippets(vault.IssueMemosDir(issue.ID))
 	if err != nil {
 		return Item{}, err
@@ -927,34 +1104,33 @@ func itemFromIssueDoc(vault VaultFS, issue IssueDoc) (Item, error) {
 }
 
 func itemFromMetadata(meta Metadata, entityType string) Item {
-	created := parseDateFallback(meta.Created)
-	item := NewItem(created, meta.Title, placementFromWorkState(meta.State))
-	item.EntityType = entityType
-	item.ID = meta.ID
-	item.CreatedAt = normalizeRFC3339FromDate(meta.Created)
-	item.UpdatedAt = normalizeRFC3339FromDate(meta.Updated)
-	item.LastReviewedOn = meta.Updated
-	item.Refs = append([]string(nil), meta.Refs...)
-	if meta.State == WorkStateDone {
-		item.Status = "done"
+	item := Item{
+		ID:                  meta.ID,
+		Title:               meta.Title,
+		EntityType:          entityType,
+		Refs:                append([]string(nil), meta.Refs...),
+		Triage:              meta.Triage,
+		Stage:               meta.Stage,
+		DeferredKind:        meta.DeferredKind,
+		Status:              meta.Status,
+		DoneForDayOn:        meta.DoneForDayOn,
+		LastReviewedOn:      meta.LastReviewedOn,
+		ScheduledFor:        meta.ScheduledFor,
+		RecurringEveryDays:  meta.RecurringEveryDays,
+		RecurringAnchor:     meta.RecurringAnchor,
+		RecurringWeekdays:   append([]string(nil), meta.RecurringWeekdays...),
+		RecurringWeeks:      append([]string(nil), meta.RecurringWeeks...),
+		RecurringMonths:     append([]int(nil), meta.RecurringMonths...),
+		RecurringDonePolicy: meta.RecurringDonePolicy,
+		LastCompletedOn:     meta.LastCompletedOn,
+		CreatedAt:           normalizeRFC3339FromDate(meta.Created),
+		UpdatedAt:           normalizeRFC3339FromDate(meta.Updated),
+		Log:                 nil,
 	}
-	item.Log = nil
+	if item.LastReviewedOn == "" {
+		item.LastReviewedOn = meta.Updated
+	}
 	return item
-}
-
-func placementFromWorkState(state WorkState) Placement {
-	switch state {
-	case WorkStateNow:
-		return PlacementNow
-	case WorkStateNext:
-		return PlacementNext
-	case WorkStateLater:
-		return PlacementLater
-	case WorkStateDone:
-		return PlacementLater
-	default:
-		return PlacementInbox
-	}
 }
 
 func loadMarkdownSnippets(dir string) ([]string, error) {
@@ -995,7 +1171,7 @@ func applyMarkdownSnippets(item *Item, snippets []string) {
 	if len(clean) == 0 {
 		return
 	}
-	item.NoteMarkdown = strings.Join(clean, "\n\n---\n\n")
+	item.NoteTailMarkdown = strings.Join(clean, "\n\n---\n\n")
 	item.Notes = append([]string(nil), clean...)
 }
 
@@ -1070,12 +1246,12 @@ func normalizeEntityForSave(item Item) string {
 	case entityTask, entityIssue:
 		return item.EntityType
 	case entityInbox:
-		if item.Placement() == PlacementInbox {
+		if item.Triage == TriageInbox {
 			return entityInbox
 		}
 		return entityTask
 	default:
-		if item.Placement() == PlacementInbox {
+		if item.Triage == TriageInbox {
 			return entityInbox
 		}
 		return entityTask
@@ -1086,8 +1262,8 @@ func inboxFromItem(item Item) InboxItem {
 	return normalizeInboxItem(InboxItem{
 		ID:      item.ID,
 		Title:   item.Title,
-		Created: legacyDate(item.CreatedAt),
-		Updated: legacyDate(item.UpdatedAt),
+		Created: vaultDate(item.CreatedAt),
+		Updated: vaultDate(item.UpdatedAt),
 		Body:    noteBodyFromItem(item),
 	})
 }
@@ -1095,58 +1271,85 @@ func inboxFromItem(item Item) InboxItem {
 func taskFromItem(item Item) TaskDoc {
 	return TaskDoc{
 		Metadata: Metadata{
-			ID:      item.ID,
-			Title:   item.Title,
-			State:   workStateFromItem(item),
-			Created: legacyDate(item.CreatedAt),
-			Updated: legacyDate(item.UpdatedAt),
-			Refs:    append([]string(nil), item.Refs...),
+			ID:                  item.ID,
+			Title:               item.Title,
+			Status:              item.Status,
+			Triage:              item.Triage,
+			Stage:               item.Stage,
+			DeferredKind:        item.DeferredKind,
+			DoneForDayOn:        item.DoneForDayOn,
+			LastReviewedOn:      item.LastReviewedOn,
+			ScheduledFor:        item.ScheduledFor,
+			RecurringEveryDays:  item.RecurringEveryDays,
+			RecurringAnchor:     item.RecurringAnchor,
+			RecurringWeekdays:   append([]string(nil), item.RecurringWeekdays...),
+			RecurringWeeks:      append([]string(nil), item.RecurringWeeks...),
+			RecurringMonths:     append([]int(nil), item.RecurringMonths...),
+			RecurringDonePolicy: item.RecurringDonePolicy,
+			LastCompletedOn:     item.LastCompletedOn,
+			Created:             vaultDate(item.CreatedAt),
+			Updated:             vaultDate(item.UpdatedAt),
+			Refs:                append([]string(nil), item.Refs...),
 		},
+		Body: noteBodyFromItem(item),
 	}
 }
 
 func issueFromItem(item Item) IssueDoc {
 	return IssueDoc{
 		Metadata: Metadata{
-			ID:      item.ID,
-			Title:   item.Title,
-			State:   workStateFromItem(item),
-			Created: legacyDate(item.CreatedAt),
-			Updated: legacyDate(item.UpdatedAt),
-			Refs:    append([]string(nil), item.Refs...),
+			ID:                  item.ID,
+			Title:               item.Title,
+			Status:              item.Status,
+			Triage:              item.Triage,
+			Stage:               item.Stage,
+			DeferredKind:        item.DeferredKind,
+			DoneForDayOn:        item.DoneForDayOn,
+			LastReviewedOn:      item.LastReviewedOn,
+			ScheduledFor:        item.ScheduledFor,
+			RecurringEveryDays:  item.RecurringEveryDays,
+			RecurringAnchor:     item.RecurringAnchor,
+			RecurringWeekdays:   append([]string(nil), item.RecurringWeekdays...),
+			RecurringWeeks:      append([]string(nil), item.RecurringWeeks...),
+			RecurringMonths:     append([]int(nil), item.RecurringMonths...),
+			RecurringDonePolicy: item.RecurringDonePolicy,
+			LastCompletedOn:     item.LastCompletedOn,
+			Created:             vaultDate(item.CreatedAt),
+			Updated:             vaultDate(item.UpdatedAt),
+			Refs:                append([]string(nil), item.Refs...),
 		},
 		Theme: strings.TrimSpace(item.Theme),
-	}
-}
-
-func workStateFromItem(item Item) WorkState {
-	if item.Status == "done" {
-		return WorkStateDone
-	}
-	switch item.Placement() {
-	case PlacementNow:
-		return WorkStateNow
-	case PlacementNext:
-		return WorkStateNext
-	case PlacementLater, PlacementScheduled, PlacementRecurring:
-		return WorkStateLater
-	default:
-		return WorkStateNext
+		Body:  noteBodyFromItem(item),
 	}
 }
 
 func noteBodyFromItem(item Item) string {
-	if raw := strings.TrimSpace(detailNoteMarkdown(&item)); raw != "" {
-		return raw
-	}
-	if raw := strings.TrimSpace(strings.Join(item.Notes, "\n\n")); raw != "" {
+	if raw := strings.TrimSpace(strings.ReplaceAll(item.NoteMarkdown, "\r\n", "\n")); raw != "" {
 		return raw
 	}
 	return ""
 }
 
+func vaultDate(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if ts, err := time.Parse(time.RFC3339, raw); err == nil {
+		return ts.Format("2006-01-02")
+	}
+	if ts, err := time.Parse("2006-01-02", raw); err == nil {
+		return ts.Format("2006-01-02")
+	}
+	return raw
+}
+
+func itemHasCapturedMemo(item Item) bool {
+	return strings.TrimSpace(item.NoteTailMarkdown) != ""
+}
+
 func maybeWriteCapturedTaskMemo(vault VaultFS, item Item) error {
-	if !itemHasNoteContent(item) {
+	if !itemHasCapturedMemo(item) {
 		return nil
 	}
 	existing, err := loadMarkdownSnippets(vault.TaskMemosDir(item.ID))
@@ -1156,11 +1359,11 @@ func maybeWriteCapturedTaskMemo(vault VaultFS, item Item) error {
 	if len(existing) > 0 {
 		return nil
 	}
-	return vault.WriteTaskMemo(item.ID, "captured", noteBodyFromItem(item))
+	return vault.WriteTaskMemo(item.ID, "captured", item.NoteTailMarkdown)
 }
 
 func maybeWriteCapturedIssueMemo(vault VaultFS, item Item) error {
-	if !itemHasNoteContent(item) {
+	if !itemHasCapturedMemo(item) {
 		return nil
 	}
 	existing, err := loadMarkdownSnippets(vault.IssueMemosDir(item.ID))
@@ -1170,7 +1373,7 @@ func maybeWriteCapturedIssueMemo(vault VaultFS, item Item) error {
 	if len(existing) > 0 {
 		return nil
 	}
-	return vault.WriteIssueMemo(item.ID, "captured", noteBodyFromItem(item))
+	return vault.WriteIssueMemo(item.ID, "captured", item.NoteTailMarkdown)
 }
 
 func removeMissingInboxItems(vault VaultFS, keep map[string]struct{}) error {

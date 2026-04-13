@@ -37,8 +37,8 @@ func TestRunVaultAddCommandsCreateFiles(t *testing.T) {
 
 	tests := [][]string{
 		{"taskbench", "vault", "add", "inbox", "--data-dir", root, "--id", "capture-1", "--title", "Capture", "--body", "raw note", "--tags", "a,b"},
-		{"taskbench", "vault", "add", "task", "--data-dir", root, "--id", "expense-submit", "--title", "Submit expense", "--state", "now", "--tags", "admin", "--refs", "knowledge/expense-submit.md"},
-		{"taskbench", "vault", "add", "issue", "--data-dir", root, "--id", "otp-tx-design", "--title", "OTP Tx design", "--theme", "auth-stepup", "--state", "next", "--tags", "otp,tx", "--refs", "themes/auth-stepup/context/constraints.md"},
+		{"taskbench", "vault", "add", "task", "--data-dir", root, "--id", "expense-submit", "--title", "Submit expense", "--stage", "now", "--tags", "admin", "--refs", "knowledge/expense-submit.md"},
+		{"taskbench", "vault", "add", "issue", "--data-dir", root, "--id", "otp-tx-design", "--title", "OTP Tx design", "--theme", "auth-stepup", "--stage", "next", "--tags", "otp,tx", "--refs", "themes/auth-stepup/context/constraints.md"},
 		{"taskbench", "vault", "add", "theme", "--data-dir", root, "--id", "auth-stepup", "--title", "Auth step-up", "--tags", "auth,stepup"},
 	}
 
@@ -89,7 +89,9 @@ func TestRunVaultListLoadsAddedItems(t *testing.T) {
 		Metadata: Metadata{
 			ID:      "expense-submit",
 			Title:   "Submit expense",
-			State:   WorkStateNow,
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNow,
 			Created: "2026-04-12",
 			Updated: "2026-04-12",
 		},

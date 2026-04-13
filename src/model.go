@@ -9,26 +9,6 @@ import (
 	"time"
 )
 
-type Placement string
-
-const (
-	PlacementInbox     Placement = "inbox"
-	PlacementNow       Placement = "now"
-	PlacementNext      Placement = "next"
-	PlacementLater     Placement = "later"
-	PlacementScheduled Placement = "scheduled"
-	PlacementRecurring Placement = "recurring"
-)
-
-var allPlacements = []Placement{
-	PlacementInbox,
-	PlacementNow,
-	PlacementNext,
-	PlacementLater,
-	PlacementScheduled,
-	PlacementRecurring,
-}
-
 type Triage string
 
 const (
@@ -99,7 +79,7 @@ type State struct {
 	Items []Item `json:"items"`
 }
 
-func NewItem(now time.Time, title string, placement Placement) Item {
+func NewItem(now time.Time, title string, triage Triage, stage Stage, deferredKind DeferredKind) Item {
 	ts := now.Format(time.RFC3339)
 	item := Item{
 		ID:        newID(),
@@ -108,23 +88,23 @@ func NewItem(now time.Time, title string, placement Placement) Item {
 		CreatedAt: ts,
 		UpdatedAt: ts,
 	}
-	if placement == PlacementInbox {
+	if triage == TriageInbox {
 		item.EntityType = entityInbox
 	} else {
 		item.EntityType = entityTask
 	}
-	item.MoveTo(now, placement)
+	item.MoveTo(now, triage, stage, deferredKind)
 	item.Log = nil
 	item.LastReviewedOn = ""
 	return item
 }
 
 func NewInboxItem(now time.Time, title string) Item {
-	return NewItem(now, title, PlacementInbox)
+	return NewItem(now, title, TriageInbox, "", "")
 }
 
-func NewIssueItem(now time.Time, title string, placement Placement) Item {
-	item := NewItem(now, title, placement)
+func NewIssueItem(now time.Time, title string, triage Triage, stage Stage, deferredKind DeferredKind) Item {
+	item := NewItem(now, title, triage, stage, deferredKind)
 	item.EntityType = entityIssue
 	return item
 }
@@ -162,8 +142,8 @@ func (s *State) Sort() {
 				return 1
 			}
 		}
-		if a.Placement() != b.Placement() {
-			return slices.Index(allPlacements, a.Placement()) - slices.Index(allPlacements, b.Placement())
+		if actionStateSortRank(a) != actionStateSortRank(b) {
+			return actionStateSortRank(a) - actionStateSortRank(b)
 		}
 		return strings.Compare(a.CreatedAt, b.CreatedAt)
 	})
@@ -199,18 +179,21 @@ func appendNoteMarkdown(raw, title, note string) string {
 	return strings.TrimSpace(raw + "\n\n" + note)
 }
 
-func (i *Item) MoveTo(now time.Time, placement Placement) {
-	i.setPlacement(placement)
+func (i *Item) MoveTo(now time.Time, triage Triage, stage Stage, deferredKind DeferredKind) {
+	i.Triage = triage
+	i.Stage = stage
+	i.DeferredKind = deferredKind
 	i.LastReviewedOn = dateKey(now)
-	if placement != PlacementScheduled {
+	if deferredKind != DeferredKindScheduled {
 		i.ScheduledFor = ""
 	}
-	if placement != PlacementRecurring {
+	if deferredKind != DeferredKindRecurring {
 		i.clearRecurringRule()
 	}
+	actionLabel := stageActionLabel(triage, stage, deferredKind)
 	i.Log = append(i.Log, WorkLogEntry{
 		Date:   dateKey(now),
-		Action: "move:" + string(placement),
+		Action: "move:" + actionLabel,
 	})
 	i.touch(now)
 }
@@ -317,7 +300,7 @@ func (i *Item) ReopenComplete(now time.Time) {
 }
 
 func (i *Item) Complete(now time.Time, note string) {
-	if i.Placement() == PlacementRecurring {
+	if i.Triage == TriageDeferred && i.DeferredKind == DeferredKindRecurring {
 		i.markRecurringComplete(now, note)
 		return
 	}
@@ -354,14 +337,14 @@ func (i Item) IsVisibleToday(now time.Time) bool {
 	if i.Status == "done" || i.DoneForDayOn == dateKey(now) {
 		return false
 	}
-	return i.Placement() == PlacementNow || i.IsActiveDeferred(now)
+	return i.Triage == TriageStock && i.Stage == StageNow || i.IsActiveDeferred(now)
 }
 
 func (i Item) IsClosedForToday(now time.Time) bool {
 	if i.Status != "open" || i.DoneForDayOn != dateKey(now) {
 		return false
 	}
-	return i.Placement() == PlacementNow || i.IsActiveDeferred(now)
+	return i.Triage == TriageStock && i.Stage == StageNow || i.IsActiveDeferred(now)
 }
 
 func (i Item) ReviewAnchorOn() string {
@@ -379,8 +362,9 @@ func (i Item) IsReviewCandidate(now time.Time, staleAfterDays int) bool {
 	if i.Status != "open" {
 		return false
 	}
-	switch i.Placement() {
-	case PlacementInbox, PlacementNext, PlacementLater:
+	switch {
+	case i.Triage == TriageInbox:
+	case i.Triage == TriageStock && (i.Stage == StageNext || i.Stage == StageLater):
 	default:
 		return false
 	}
@@ -413,57 +397,41 @@ func (i *Item) clearRecurringRule() {
 	i.LastCompletedOn = ""
 }
 
-func (i *Item) setPlacement(placement Placement) {
-	switch placement {
-	case PlacementInbox:
-		i.Triage = TriageInbox
-		i.Stage = ""
-		i.DeferredKind = ""
-	case PlacementNow:
-		i.Triage = TriageStock
-		i.Stage = StageNow
-		i.DeferredKind = ""
-	case PlacementNext:
-		i.Triage = TriageStock
-		i.Stage = StageNext
-		i.DeferredKind = ""
-	case PlacementLater:
-		i.Triage = TriageStock
-		i.Stage = StageLater
-		i.DeferredKind = ""
-	case PlacementScheduled:
-		i.Triage = TriageDeferred
-		i.Stage = ""
-		i.DeferredKind = DeferredKindScheduled
-	case PlacementRecurring:
-		i.Triage = TriageDeferred
-		i.Stage = ""
-		i.DeferredKind = DeferredKindRecurring
+func stageActionLabel(triage Triage, stage Stage, deferredKind DeferredKind) string {
+	switch triage {
+	case TriageInbox:
+		return "inbox"
+	case TriageStock:
+		return string(stage)
+	case TriageDeferred:
+		return string(deferredKind)
+	default:
+		return "inbox"
 	}
 }
 
-func (i Item) Placement() Placement {
+func actionStateSortRank(i Item) int {
 	switch i.Triage {
 	case TriageInbox:
-		return PlacementInbox
+		return 0
 	case TriageStock:
 		switch i.Stage {
 		case StageNow:
-			return PlacementNow
+			return 1
 		case StageNext:
-			return PlacementNext
+			return 2
 		case StageLater:
-			return PlacementLater
+			return 3
 		}
 	case TriageDeferred:
 		switch i.DeferredKind {
 		case DeferredKindScheduled:
-			return PlacementScheduled
+			return 4
 		case DeferredKindRecurring:
-			return PlacementRecurring
+			return 5
 		}
 	}
-	return PlacementInbox
+	return 0
 }
 
 func dateKey(now time.Time) string {

@@ -1,9 +1,7 @@
 package taskbench
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -20,7 +18,7 @@ func newTestStore(t *testing.T) Store {
 }
 
 func TestNowItemHiddenOnlyForSameDay(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC), "Ship release", PlacementNow)
+	item := NewItem(time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC), "Ship release", TriageStock, StageNow, "")
 	item.MarkDoneForDay(time.Date(2026, 4, 8, 17, 0, 0, 0, time.UTC), "continue tomorrow")
 
 	if item.IsVisibleToday(time.Date(2026, 4, 8, 18, 0, 0, 0, time.UTC)) {
@@ -32,7 +30,7 @@ func TestNowItemHiddenOnlyForSameDay(t *testing.T) {
 }
 
 func TestRecurringItemAppearsOnDueDay(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Check backups", PlacementRecurring)
+	item := NewItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Check backups", TriageDeferred, "", DeferredKindRecurring)
 	item.SetRecurring(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), 2, "2026-04-06")
 
 	if !item.IsVisibleToday(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)) {
@@ -44,7 +42,7 @@ func TestRecurringItemAppearsOnDueDay(t *testing.T) {
 }
 
 func TestRecurringWeeklyTaskStaysHiddenUntilNextWeekAfterComplete(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Plan sprint", PlacementRecurring)
+	item := NewItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Plan sprint", TriageDeferred, "", DeferredKindRecurring)
 	item.SetRecurringRule(
 		time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC),
 		[]string{"mon"},
@@ -72,7 +70,7 @@ func TestRecurringWeeklyTaskStaysHiddenUntilNextWeekAfterComplete(t *testing.T) 
 }
 
 func TestRecurringWeeksRequireWeekdays(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), "Invalid rule", PlacementRecurring)
+	item := NewItem(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), "Invalid rule", TriageDeferred, "", DeferredKindRecurring)
 	item.SetRecurringRule(
 		time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC),
 		nil,
@@ -87,7 +85,7 @@ func TestRecurringWeeksRequireWeekdays(t *testing.T) {
 
 func TestDeferredSectionDisablesDoneActions(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Pay rent", PlacementScheduled)
+	item := NewItem(now, "Pay rent", TriageDeferred, "", DeferredKindScheduled)
 	item.SetScheduledFor(now, "2026-04-08")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -125,7 +123,7 @@ func TestViewShortcutsUseInboxBeforeNext(t *testing.T) {
 
 func TestViewShortcutDoesNotMoveSelectedItems(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Draft email", PlacementInbox)
+	item := NewItem(now, "Draft email", TriageInbox, "", "")
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
 	app.selectedSection = sectionInbox
@@ -137,8 +135,8 @@ func TestViewShortcutDoesNotMoveSelectedItems(t *testing.T) {
 	if updated.selectedSection != sectionToday {
 		t.Fatalf("expected 1 to open Focus, got %s", sectionLabel(updated.selectedSection))
 	}
-	if updated.state.Items[0].Placement() != PlacementInbox {
-		t.Fatalf("expected selected item to stay in Inbox, got %s", updated.state.Items[0].Placement())
+	if updated.state.Items[0].Triage != TriageInbox {
+		t.Fatalf("expected selected item to stay in Inbox, got %s", stageActionLabel(updated.state.Items[0].Triage, updated.state.Items[0].Stage, updated.state.Items[0].DeferredKind))
 	}
 }
 
@@ -161,8 +159,8 @@ func TestVaultModeShiftTConvertsInboxItemToTask(t *testing.T) {
 	if updated.state.Items[0].EntityType != entityTask {
 		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityTask)
 	}
-	if updated.state.Items[0].Placement() != PlacementNext {
-		t.Fatalf("placement = %q, want %q", updated.state.Items[0].Placement(), PlacementNext)
+	if updated.state.Items[0].Triage != TriageStock || updated.state.Items[0].Stage != StageNext {
+		t.Fatalf("state = %q/%q/%q, want stock/next", updated.state.Items[0].Triage, updated.state.Items[0].Stage, updated.state.Items[0].DeferredKind)
 	}
 }
 
@@ -173,6 +171,10 @@ func TestVaultModeShiftIConvertsInboxItemToIssue(t *testing.T) {
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
+	app.themes = []ThemeDoc{{
+		ID:    "auth-stepup",
+		Title: "Auth Step-Up",
+	}}
 	app.saveState = func(state State) error {
 		app.state = state
 		return nil
@@ -181,16 +183,26 @@ func TestVaultModeShiftIConvertsInboxItemToIssue(t *testing.T) {
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
 	updated := model.(*App)
+	if updated.mode != modeConvertInboxIssue {
+		t.Fatalf("mode = %v, want modeConvertInboxIssue", updated.mode)
+	}
+
+	updated.inputs[0].SetValue("step")
+	updated.inputs[1].SetValue("later")
+	updated.submitModal()
 
 	if updated.state.Items[0].EntityType != entityIssue {
 		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityIssue)
 	}
-	if updated.state.Items[0].Placement() != PlacementNext {
-		t.Fatalf("placement = %q, want %q", updated.state.Items[0].Placement(), PlacementNext)
+	if updated.state.Items[0].Triage != TriageStock || updated.state.Items[0].Stage != StageLater {
+		t.Fatalf("state = %q/%q/%q, want stock/later", updated.state.Items[0].Triage, updated.state.Items[0].Stage, updated.state.Items[0].DeferredKind)
+	}
+	if updated.state.Items[0].Theme != "auth-stepup" {
+		t.Fatalf("theme = %q, want auth-stepup", updated.state.Items[0].Theme)
 	}
 }
 
-func TestDetailLinesShowRefs(t *testing.T) {
+func TestDetailLinesDoNotExpandRefs(t *testing.T) {
 	app := NewApp(newTestStore(t), State{
 		Items: []Item{{
 			ID:         "expense-submit",
@@ -207,8 +219,8 @@ func TestDetailLinesShowRefs(t *testing.T) {
 
 	lines := app.detailLines(80)
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "refs:") || !strings.Contains(joined, "knowledge/expense-submit.md") {
-		t.Fatalf("expected refs in details: %q", joined)
+	if strings.Contains(joined, "refs:") || strings.Contains(joined, "knowledge/expense-submit.md") {
+		t.Fatalf("did not expect refs in details: %q", joined)
 	}
 }
 
@@ -229,11 +241,8 @@ func TestDetailLinesShowUserFacingTypeInsteadOfEntityOrKind(t *testing.T) {
 	app.selectedSection = sectionNext
 
 	joined := strings.Join(app.detailLines(80), "\n")
-	if !strings.Contains(joined, "type: issue") {
-		t.Fatalf("expected user-facing type label: %q", joined)
-	}
-	if strings.Contains(joined, "entity:") || strings.Contains(joined, "kind:") {
-		t.Fatalf("did not expect internal labels in details: %q", joined)
+	if !strings.Contains(joined, "id: otp-tx-design") || !strings.Contains(joined, "theme: auth-stepup") {
+		t.Fatalf("expected non-duplicated detail metadata: %q", joined)
 	}
 }
 
@@ -259,9 +268,6 @@ func TestThemeDetailLinesShowRelatedIssues(t *testing.T) {
 	}
 
 	joined := strings.Join(app.detailLines(80), "\n")
-	if !strings.Contains(joined, "issues: 2") || !strings.Contains(joined, "OTP Tx design") {
-		t.Fatalf("expected theme details with related issues: %q", joined)
-	}
 	if !strings.Contains(joined, "source files: 2") || !strings.Contains(joined, "context files: 1") {
 		t.Fatalf("expected theme asset counts: %q", joined)
 	}
@@ -285,7 +291,7 @@ func TestModeSwitchTogglesExecutionAndWorkbench(t *testing.T) {
 	}
 }
 
-func TestWorkbenchSectionsShowIssueStateBuckets(t *testing.T) {
+func TestWorkbenchSectionsShowIssueStateFilters(t *testing.T) {
 	app := NewApp(newTestStore(t), State{
 		Items: []Item{
 			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open", Triage: TriageStock, Stage: StageNow},
@@ -330,7 +336,7 @@ func TestWorkbenchThemeSelectionFiltersIssues(t *testing.T) {
 	}
 }
 
-func TestWorkbenchSidebarShowsBucketDetails(t *testing.T) {
+func TestWorkbenchSidebarShowsFilterDetails(t *testing.T) {
 	app := NewApp(newTestStore(t), State{
 		Items: []Item{
 			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
@@ -343,8 +349,8 @@ func TestWorkbenchSidebarShowsBucketDetails(t *testing.T) {
 	app.workbenchNavCursor = 7
 
 	joined := strings.Join(app.detailLines(80), "\n")
-	if !strings.Contains(joined, "title: No Theme") || !strings.Contains(joined, "issues: 1") {
-		t.Fatalf("expected no-theme bucket details: %q", joined)
+	if !strings.Contains(joined, "still lack a theme") {
+		t.Fatalf("expected no-theme filter details: %q", joined)
 	}
 }
 
@@ -400,14 +406,14 @@ func TestWorkbenchStateShortcutsMoveSelectedIssue(t *testing.T) {
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
 	updated := model.(*App)
-	if updated.state.Items[0].Placement() != PlacementNow {
-		t.Fatalf("placement = %q, want %q", updated.state.Items[0].Placement(), PlacementNow)
+	if updated.state.Items[0].Triage != TriageStock || updated.state.Items[0].Stage != StageNow {
+		t.Fatalf("state = %q/%q/%q, want stock/now", updated.state.Items[0].Triage, updated.state.Items[0].Stage, updated.state.Items[0].DeferredKind)
 	}
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	updated = model.(*App)
-	if updated.state.Items[0].Placement() != PlacementLater {
-		t.Fatalf("placement = %q, want %q", updated.state.Items[0].Placement(), PlacementLater)
+	if updated.state.Items[0].Triage != TriageStock || updated.state.Items[0].Stage != StageLater {
+		t.Fatalf("state = %q/%q/%q, want stock/later", updated.state.Items[0].Triage, updated.state.Items[0].Stage, updated.state.Items[0].DeferredKind)
 	}
 }
 
@@ -468,7 +474,7 @@ func TestWorkbenchArrowKeysSwitchIssueFilterTabs(t *testing.T) {
 
 func TestOpenRefsModalAndOpenSelectedRef(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Submit expense", PlacementNow)
+	item := NewItem(now, "Submit expense", TriageStock, StageNow, "")
 	item.EntityType = entityTask
 	item.Refs = []string{"knowledge/expense-submit.md", "themes/admin/context/policy.md"}
 
@@ -508,7 +514,7 @@ func TestOpenRefsModalAndOpenSelectedRef(t *testing.T) {
 
 func TestOpenRefsModalOpensWithUppercaseO(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Submit expense", PlacementNow)
+	item := NewItem(now, "Submit expense", TriageStock, StageNow, "")
 	item.EntityType = entityTask
 	item.Refs = []string{"knowledge/expense-submit.md"}
 
@@ -524,7 +530,7 @@ func TestOpenRefsModalOpensWithUppercaseO(t *testing.T) {
 
 func TestEditRefsUpdatesSelectedItem(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Submit expense", PlacementNow)
+	item := NewItem(now, "Submit expense", TriageStock, StageNow, "")
 	item.EntityType = entityTask
 	item.Refs = []string{"knowledge/old.md"}
 
@@ -554,13 +560,17 @@ func TestEditRefsUpdatesSelectedItem(t *testing.T) {
 
 func TestEditThemeUpdatesIssue(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
-	item := NewIssueItem(now, "OTP Tx design", PlacementNext)
+	item := NewIssueItem(now, "OTP Tx design", TriageStock, StageNext, "")
 	item.EntityType = entityIssue
 	item.Theme = "auth-old"
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
 	app.selectedSection = sectionNext
+	app.themes = []ThemeDoc{{
+		ID:    "auth-stepup",
+		Title: "Auth Step-Up",
+	}}
 	app.saveState = func(state State) error {
 		app.state = state
 		return nil
@@ -572,7 +582,7 @@ func TestEditThemeUpdatesIssue(t *testing.T) {
 		t.Fatalf("mode = %v, want modeEditTheme", updated.mode)
 	}
 
-	updated.inputs[0].SetValue("auth-stepup")
+	updated.inputs[0].SetValue("step")
 	updated.submitModal()
 
 	if updated.state.Items[0].Theme != "auth-stepup" {
@@ -580,9 +590,116 @@ func TestEditThemeUpdatesIssue(t *testing.T) {
 	}
 }
 
+func TestConvertInboxIssueBlankThemeFallsBackToNoTheme(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewInboxItem(now, "Investigate OTP edge case")
+	item.EntityType = entityInbox
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+	app.saveState = func(state State) error {
+		app.state = state
+		return nil
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
+	updated := model.(*App)
+	updated.inputs[0].SetValue("")
+	updated.inputs[1].SetValue("")
+	updated.submitModal()
+
+	if updated.state.Items[0].Theme != "" {
+		t.Fatalf("theme = %q, want blank", updated.state.Items[0].Theme)
+	}
+	if updated.state.Items[0].EntityType != entityIssue {
+		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityIssue)
+	}
+}
+
+func TestConvertInboxIssueRejectsAmbiguousThemeSearch(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewInboxItem(now, "Investigate OTP edge case")
+	item.EntityType = entityInbox
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+	app.themes = []ThemeDoc{
+		{ID: "auth-stepup", Title: "Auth Step-Up"},
+		{ID: "auth-session", Title: "Auth Session"},
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
+	updated := model.(*App)
+	updated.inputs[0].SetValue("auth")
+	updated.inputs[1].SetValue("later")
+	updated.submitModal()
+
+	if updated.mode != modeConvertInboxIssue {
+		t.Fatalf("mode = %v, want modeConvertInboxIssue", updated.mode)
+	}
+	if updated.state.Items[0].EntityType != entityInbox {
+		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityInbox)
+	}
+	if updated.status != "Theme is ambiguous. Narrow the search." {
+		t.Fatalf("status = %q", updated.status)
+	}
+}
+
+func TestConvertInboxIssueAllowsSelectingNowStage(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewInboxItem(now, "Investigate OTP edge case")
+	item.EntityType = entityInbox
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+	app.themes = []ThemeDoc{{ID: "auth-stepup", Title: "Auth Step-Up"}}
+	app.saveState = func(state State) error {
+		app.state = state
+		return nil
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
+	updated := model.(*App)
+	updated.inputs[0].SetValue("auth-stepup")
+	updated.inputs[1].SetValue("now")
+	updated.submitModal()
+
+	if updated.state.Items[0].Triage != TriageStock || updated.state.Items[0].Stage != StageNow {
+		t.Fatalf("state = %q/%q/%q, want stock/now", updated.state.Items[0].Triage, updated.state.Items[0].Stage, updated.state.Items[0].DeferredKind)
+	}
+}
+
+func TestConvertInboxIssueRejectsInvalidStage(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewInboxItem(now, "Investigate OTP edge case")
+	item.EntityType = entityInbox
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
+	updated := model.(*App)
+	updated.inputs[1].SetValue("tomorrow")
+	updated.submitModal()
+
+	if updated.mode != modeConvertInboxIssue {
+		t.Fatalf("mode = %v, want modeConvertInboxIssue", updated.mode)
+	}
+	if updated.status != "Stage must be now, next, or later." {
+		t.Fatalf("status = %q", updated.status)
+	}
+	if updated.state.Items[0].EntityType != entityInbox {
+		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityInbox)
+	}
+}
+
 func TestEditThemeRejectsTask(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Submit expense", PlacementNow)
+	item := NewItem(now, "Submit expense", TriageStock, StageNow, "")
 	item.EntityType = entityTask
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -618,8 +735,8 @@ func TestShiftJKCyclesViews(t *testing.T) {
 
 func TestNextSectionExcludesLaterItems(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	nextItem := NewItem(now, "Prepare PR", PlacementNext)
-	laterItem := NewItem(now, "Someday cleanup", PlacementLater)
+	nextItem := NewItem(now, "Prepare PR", TriageStock, StageNext, "")
+	laterItem := NewItem(now, "Someday cleanup", TriageStock, StageLater, "")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{nextItem, laterItem}})
 	app.now = func() time.Time { return now }
@@ -736,6 +853,9 @@ func TestListHeaderAlignsWithRows(t *testing.T) {
 	if !strings.Contains(row, "Example") || !strings.Contains(row, "inbox") {
 		t.Fatalf("expected state/title row: row=%q", row)
 	}
+	if !strings.Contains(header, "PROGRESS") || !strings.Contains(row, "50%") {
+		t.Fatalf("expected progress column in header and row: header=%q row=%q", header, row)
+	}
 }
 
 func TestWorkbenchActionListShowsThemeInsteadOfState(t *testing.T) {
@@ -745,6 +865,10 @@ func TestWorkbenchActionListShowsThemeInsteadOfState(t *testing.T) {
 	row := app.renderWorkbenchListRow(entry, Item{
 		Title: "Example",
 		Theme: "auth-stepup",
+		NoteMarkdown: strings.TrimSpace(`
+- [x] one
+- [ ] two
+`),
 	}, 77)
 
 	if !strings.Contains(header, "THEME") || strings.Contains(header, "STATE") {
@@ -752,6 +876,9 @@ func TestWorkbenchActionListShowsThemeInsteadOfState(t *testing.T) {
 	}
 	if !strings.Contains(row, "auth-stepup") || !strings.Contains(row, "Example") {
 		t.Fatalf("expected action workbench row to show theme and title: %q", row)
+	}
+	if !strings.Contains(header, "PROGRESS") || !strings.Contains(row, "50%") {
+		t.Fatalf("expected progress column in workbench header and row: header=%q row=%q", header, row)
 	}
 }
 
@@ -839,7 +966,7 @@ func TestWorkbenchSpaceSelectionKeepsCursorOnLastFilteredItem(t *testing.T) {
 	if !updated.isSelected("issue-2") {
 		t.Fatal("expected last filtered item to be selected")
 	}
-	panel := updated.renderWorkbenchIssuePanel(40, 6)
+	panel := updated.renderWorkbenchIssuePanel(56, 6)
 	if !strings.Contains(panel, "Theme Last") {
 		t.Fatalf("expected last filtered item to remain visible after selection: %q", panel)
 	}
@@ -951,9 +1078,12 @@ func TestListRowShowsStateAndTitle(t *testing.T) {
 	if !strings.Contains(withoutNote, "inbox") || !strings.Contains(withoutNote, "Example") {
 		t.Fatalf("expected state/title row: %q", withoutNote)
 	}
+	if !strings.Contains(withNote, "-") || !strings.Contains(withoutNote, "-") {
+		t.Fatalf("expected progress column placeholder in rows: %q / %q", withNote, withoutNote)
+	}
 }
 
-func TestListRowDoesNotShowChecklistProgress(t *testing.T) {
+func TestListRowShowsChecklistProgress(t *testing.T) {
 	app := NewApp(newTestStore(t), State{})
 	row := app.renderListRow(Item{
 		ID:         "12345678",
@@ -966,8 +1096,8 @@ func TestListRowDoesNotShowChecklistProgress(t *testing.T) {
 `)},
 	}, 77)
 
-	if strings.Contains(row, "%") || strings.Contains(row, "█") {
-		t.Fatalf("did not expect checklist progress in row: %q", row)
+	if !strings.Contains(row, "66%") || !strings.Contains(row, "█") {
+		t.Fatalf("expected checklist progress in row: %q", row)
 	}
 }
 
@@ -989,7 +1119,7 @@ func TestListRowDoesNotShowIssueType(t *testing.T) {
 
 func TestDetailLinesDoNotShowChecklistProgressSection(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Ship release", PlacementInbox)
+	item := NewItem(now, "Ship release", TriageInbox, "", "")
 	item.Notes = []string{strings.TrimSpace(`
 - [x] Write changelog
 - [ ] Tag release
@@ -1007,7 +1137,7 @@ func TestDetailLinesDoNotShowChecklistProgressSection(t *testing.T) {
 
 func TestExecutionDetailLinesFocusOnImmediateContext(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Investigate parser", PlacementInbox)
+	item := NewItem(now, "Investigate parser", TriageInbox, "", "")
 	item.NoteMarkdown = strings.TrimSpace(`
 # Investigate parser
 
@@ -1028,26 +1158,62 @@ Keep this heading and body.
 
 	lines := app.detailLines(80)
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "Execute:") {
-		t.Fatalf("expected execution detail header, got:\n%s", joined)
-	}
-	if !strings.Contains(joined, "Next context:") {
-		t.Fatalf("expected next context section, got:\n%s", joined)
-	}
 	if !strings.Contains(joined, "Intro paragraph.") {
 		t.Fatalf("expected first paragraph summary, got:\n%s", joined)
 	}
-	if strings.Contains(joined, "# Investigate parser") {
-		t.Fatalf("did not expect duplicated top-level note heading, got:\n%s", joined)
+	if !strings.Contains(joined, "# Investigate parser") {
+		t.Fatalf("expected top-level heading in detail, got:\n%s", joined)
 	}
-	if strings.Contains(joined, "## Research Notes") {
-		t.Fatalf("did not expect deep note body in execution detail, got:\n%s", joined)
+	if !strings.Contains(joined, "## Research Notes") {
+		t.Fatalf("expected note body in execution detail, got:\n%s", joined)
+	}
+}
+
+func TestExecutionDetailLinesShowHeadingWhenNoteHasOnlyHeading(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	item := NewItem(now, "Investigate parser", TriageInbox, "", "")
+	item.NoteMarkdown = "# hoge"
+
+	app := NewApp(newTestStore(t), State{Items: []Item{item}})
+	app.now = func() time.Time { return now }
+	app.selectedSection = sectionInbox
+
+	joined := strings.Join(app.detailLines(80), "\n")
+	if !strings.Contains(joined, "# hoge") {
+		t.Fatalf("expected heading-only note to appear, got:\n%s", joined)
+	}
+}
+
+func TestThemeDetailLinesShowThemeBodySummary(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	app.view = viewWorkbench
+	app.focus = paneList
+	app.themes = []ThemeDoc{{
+		ID:      "auth-stepup",
+		Title:   "Auth step-up",
+		Created: "2026-04-12",
+		Updated: "2026-04-13",
+		Body: strings.TrimSpace(`
+Step-up design constraints.
+
+Keep deeper notes below.
+`),
+	}}
+	app.workbenchNavCursor = len(app.workbenchEntries()) - 1
+
+	lines := app.themeDetailLines(80)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Step-up design constraints.") {
+		t.Fatalf("expected theme body summary, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Keep deeper notes below.") {
+		t.Fatalf("expected full theme body in detail, got:\n%s", joined)
 	}
 }
 
 func TestCompletedSectionListsAndRestoresCompletedItems(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Ship release", PlacementNow)
+	item := NewItem(now, "Ship release", TriageStock, StageNow, "")
 	item.Complete(now, "")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -1068,7 +1234,7 @@ func TestCompletedSectionListsAndRestoresCompletedItems(t *testing.T) {
 
 func TestUndoRestoresCompletedItemWithinWindow(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Ship release", PlacementNow)
+	item := NewItem(now, "Ship release", TriageStock, StageNow, "")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -1092,7 +1258,7 @@ func TestUndoRestoresCompletedItemWithinWindow(t *testing.T) {
 
 func TestUndoRestoresDeletedItemWithinWindow(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Clean inbox", PlacementInbox)
+	item := NewItem(now, "Clean inbox", TriageInbox, "", "")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -1114,7 +1280,7 @@ func TestUndoRestoresDeletedItemWithinWindow(t *testing.T) {
 
 func TestDeleteRequiresConfirmation(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Clean inbox", PlacementInbox)
+	item := NewItem(now, "Clean inbox", TriageInbox, "", "")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -1133,7 +1299,7 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 
 func TestMoveSelectionUsesMoveModal(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Draft email", PlacementInbox)
+	item := NewItem(now, "Draft email", TriageInbox, "", "")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -1148,14 +1314,14 @@ func TestMoveSelectionUsesMoveModal(t *testing.T) {
 
 	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	app = model.(*App)
-	if app.state.Items[0].Placement() != PlacementNext {
-		t.Fatalf("expected selected item to move to Next, got %s", app.state.Items[0].Placement())
+	if app.state.Items[0].Triage != TriageStock || app.state.Items[0].Stage != StageNext {
+		t.Fatalf("expected selected item to move to Next, got %s", stageActionLabel(app.state.Items[0].Triage, app.state.Items[0].Stage, app.state.Items[0].DeferredKind))
 	}
 }
 
 func TestDeleteConfirmationEnterDeletesAndEscCancels(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Clean inbox", PlacementInbox)
+	item := NewItem(now, "Clean inbox", TriageInbox, "", "")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -1187,7 +1353,7 @@ func TestDeleteConfirmationEnterDeletesAndEscCancels(t *testing.T) {
 func TestUndoExpiresAfterWindow(t *testing.T) {
 	base := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	current := base
-	item := NewItem(base, "Ship release", PlacementNow)
+	item := NewItem(base, "Ship release", TriageStock, StageNow, "")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return current }
@@ -1209,7 +1375,7 @@ func TestUndoExpiresAfterWindow(t *testing.T) {
 
 func TestSubmitRecurringUpdatesRuleFromModalInputs(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Water plants", PlacementRecurring)
+	item := NewItem(now, "Water plants", TriageDeferred, "", DeferredKindRecurring)
 	item.SetRecurringDefault(now)
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -1237,41 +1403,10 @@ func TestSubmitRecurringUpdatesRuleFromModalInputs(t *testing.T) {
 	}
 }
 
-func TestStoreRoundTrip(t *testing.T) {
-	store := newTestStore(t)
-	state := State{
-		Items: []Item{
-			NewIssueItem(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), "Prepare PR", PlacementNext),
-		},
-	}
-
-	if err := store.Save(state); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	loaded, err := store.Load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(loaded.Items) != 1 {
-		t.Fatalf("expected one item, got %d", len(loaded.Items))
-	}
-	if loaded.Items[0].Title != "Prepare PR" {
-		t.Fatalf("unexpected title: %s", loaded.Items[0].Title)
-	}
-	raw, err := os.ReadFile(store.TasksPath())
-	if err != nil {
-		t.Fatalf("read tasks.ndjson: %v", err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	if len(lines) != 1 {
-		t.Fatalf("expected one ndjson line, got %d", len(lines))
-	}
-}
-
 func TestStoreRoundTripPreservesRecurringMetadata(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Water plants", PlacementRecurring)
+	item := NewItem(now, "Water plants", TriageDeferred, "", DeferredKindRecurring)
 	item.SetRecurringRule(now, []string{"mon", "wed"}, []string{"first"}, []int{3, 9}, DonePolicyPerMonth)
 	item.LastCompletedOn = "2026-03-03"
 
@@ -1305,121 +1440,7 @@ func TestStoreRoundTripPreservesRecurringMetadata(t *testing.T) {
 	}
 }
 
-func TestStoreLoadsNDJSONWithNoteFile(t *testing.T) {
-	store := newTestStore(t)
-	record := storedItem{
-		ID:                  "edited-task",
-		Title:               "Prepare release notes",
-		Triage:              TriageStock,
-		Stage:               StageNext,
-		Status:              "open",
-		RecurringWeekdays:   []string{"tue"},
-		RecurringWeeks:      []string{"second"},
-		RecurringMonths:     []int{3},
-		RecurringDonePolicy: DonePolicyPerMonth,
-		LastCompletedOn:     "2026-02-10",
-		CreatedAt:           "2026-04-08T09:00:00Z",
-		UpdatedAt:           "2026-04-08T09:00:00Z",
-	}
-	line, err := json.Marshal(record)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if err := os.WriteFile(store.TasksPath(), append(line, '\n'), 0o644); err != nil {
-		t.Fatalf("write ndjson: %v", err)
-	}
-	if err := os.MkdirAll(store.NotesDir(), 0o755); err != nil {
-		t.Fatalf("mkdir notes: %v", err)
-	}
-
-	note := strings.TrimSpace(`
-# Prepare release notes
-
-Draft the summary for the release.
-
-Include breaking changes and upgrade steps.
-`) + "\n"
-	if err := os.WriteFile(store.NotePath(record.ID), []byte(note), 0o644); err != nil {
-		t.Fatalf("write note: %v", err)
-	}
-	activity := strings.TrimSpace(`
-{"item_id":"edited-task","date":"2026-04-08","action":"note","note":"seeded by hand"}
-`) + "\n"
-	if err := os.WriteFile(store.ActivityPath(), []byte(activity), 0o644); err != nil {
-		t.Fatalf("write activity: %v", err)
-	}
-
-	loaded, err := store.Load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(loaded.Items) != 1 {
-		t.Fatalf("expected one item, got %d", len(loaded.Items))
-	}
-	item := loaded.Items[0]
-	if item.Title != "Prepare release notes" {
-		t.Fatalf("unexpected title: %s", item.Title)
-	}
-	if item.Placement() != PlacementNext {
-		t.Fatalf("unexpected placement: %s", item.Placement())
-	}
-	if len(item.Notes) != 2 {
-		t.Fatalf("expected two notes, got %d", len(item.Notes))
-	}
-	if item.Notes[0] != "Draft the summary for the release." {
-		t.Fatalf("unexpected first note: %q", item.Notes[0])
-	}
-	if len(item.Log) != 1 || item.Log[0].Action != "note" {
-		t.Fatalf("unexpected log: %+v", item.Log)
-	}
-	if item.RecurringDonePolicy != DonePolicyPerMonth {
-		t.Fatalf("unexpected recurring policy: %s", item.RecurringDonePolicy)
-	}
-}
-
-func TestStorePersistsActivityOutsideNoteMarkdown(t *testing.T) {
-	store := newTestStore(t)
-	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewInboxItem(now, "Prepare release notes")
-	item.AddNote(now, "Initial note.")
-	item.MoveTo(now.Add(time.Hour), PlacementNext)
-
-	if err := store.Save(State{Items: []Item{item}}); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	noteRaw, err := os.ReadFile(store.NotePath(item.ID))
-	if err != nil {
-		t.Fatalf("read note: %v", err)
-	}
-	if strings.Contains(string(noteRaw), "## Activity") {
-		t.Fatalf("did not expect note markdown to include activity section:\n%s", string(noteRaw))
-	}
-
-	activityRaw, err := os.ReadFile(store.ActivityPath())
-	if err != nil {
-		t.Fatalf("read activity: %v", err)
-	}
-	if !strings.Contains(string(activityRaw), "\"item_id\":\""+item.ID+"\"") {
-		t.Fatalf("expected activity record for item, got:\n%s", string(activityRaw))
-	}
-
-	loaded, err := store.Load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(loaded.Items) != 1 {
-		t.Fatalf("expected one item, got %d", len(loaded.Items))
-	}
-	if len(loaded.Items[0].Log) != 2 {
-		t.Fatalf("expected two log entries, got %+v", loaded.Items[0].Log)
-	}
-	if loaded.Items[0].Log[1].Action != "move:next" {
-		t.Fatalf("unexpected loaded log: %+v", loaded.Items[0].Log)
-	}
-}
-
-func TestDemoStateContainsCoreBuckets(t *testing.T) {
+func TestDemoStateContainsCoreActionStates(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	state := demoState(now)
 
@@ -1428,24 +1449,24 @@ func TestDemoStateContainsCoreBuckets(t *testing.T) {
 		if item.IsVisibleToday(now) {
 			todayCount++
 		}
-		switch item.Placement() {
-		case PlacementInbox:
+		switch {
+		case item.Triage == TriageInbox:
 			if item.Status == "open" {
 				inboxCount++
 			}
-		case PlacementNext:
+		case item.Triage == TriageStock && item.Stage == StageNext:
 			if item.Status == "open" {
 				nextCount++
 			}
-		case PlacementLater:
+		case item.Triage == TriageStock && item.Stage == StageLater:
 			if item.Status == "open" {
 				laterCount++
 			}
-		case PlacementScheduled:
+		case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled:
 			if item.Status == "open" {
 				scheduledCount++
 			}
-		case PlacementRecurring:
+		case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring:
 			if item.Status == "open" {
 				recurringCount++
 			}
@@ -1457,7 +1478,7 @@ func TestDemoStateContainsCoreBuckets(t *testing.T) {
 
 	if todayCount == 0 || inboxCount == 0 || nextCount == 0 || laterCount == 0 || scheduledCount == 0 || recurringCount == 0 || doneTodayCount == 0 {
 		t.Fatalf(
-			"demo state should populate all workflow buckets: today=%d inbox=%d next=%d later=%d scheduled=%d recurring=%d doneToday=%d",
+			"demo state should populate all action states: today=%d inbox=%d next=%d later=%d scheduled=%d recurring=%d doneToday=%d",
 			todayCount, inboxCount, nextCount, laterCount, scheduledCount, recurringCount, doneTodayCount,
 		)
 	}
@@ -1491,7 +1512,7 @@ func TestViewRespectsViewportMargins(t *testing.T) {
 
 func TestViewHandlesLongDetailContentWithinViewport(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, strings.Repeat("VeryLongTitle", 8), PlacementInbox)
+	item := NewItem(now, strings.Repeat("VeryLongTitle", 8), TriageInbox, "", "")
 	item.Notes = []string{strings.Repeat("x", 160)}
 	item.Log = []WorkLogEntry{{
 		Date:   "2026-04-08",
@@ -1549,142 +1570,5 @@ func TestEditorProcessUsesEditorEnv(t *testing.T) {
 	}
 	if cmd.Args[1] != "-w" || cmd.Args[2] != "/tmp/task.md" {
 		t.Fatalf("unexpected args: %v", cmd.Args)
-	}
-}
-
-func TestReloadFromStoreReadsEditedMarkdown(t *testing.T) {
-	store := newTestStore(t)
-	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	state := State{
-		Items: []Item{
-			NewItem(now, "Old title", PlacementInbox),
-		},
-	}
-	if err := store.Save(state); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	itemID := state.Items[0].ID
-	edited := strings.TrimSpace(`
-# Edited title
-
-Edited in markdown.
-`) + "\n"
-	if err := os.MkdirAll(store.NotesDir(), 0o755); err != nil {
-		t.Fatalf("mkdir notes: %v", err)
-	}
-	if err := os.WriteFile(store.NotePath(itemID), []byte(edited), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	app := NewApp(store, state)
-	app.reloadFromStore(nil)
-
-	if app.state.Items[0].Title != "Edited title" {
-		t.Fatalf("unexpected title: %s", app.state.Items[0].Title)
-	}
-	if app.state.Items[0].Placement() != PlacementInbox {
-		t.Fatalf("unexpected placement: %s", app.state.Items[0].Placement())
-	}
-}
-
-func TestStorePreservesUnknownMarkdownSectionsOnRoundTrip(t *testing.T) {
-	store := newTestStore(t)
-	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	state := State{
-		Items: []Item{
-			NewItem(now, "Investigate parser", PlacementInbox),
-		},
-	}
-	if err := store.Save(state); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	itemID := state.Items[0].ID
-	note := strings.TrimSpace(`
-# Investigate parser
-
-Known intro.
-
-## Research Notes
-Keep this heading and body.
-`) + "\n"
-	if err := os.MkdirAll(store.NotesDir(), 0o755); err != nil {
-		t.Fatalf("mkdir notes: %v", err)
-	}
-	if err := os.WriteFile(store.NotePath(itemID), []byte(note), 0o644); err != nil {
-		t.Fatalf("write note: %v", err)
-	}
-
-	loaded, err := store.Load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(loaded.Items) != 1 {
-		t.Fatalf("expected one item, got %d", len(loaded.Items))
-	}
-	if strings.TrimSpace(loaded.Items[0].NoteMarkdown) == "" {
-		t.Fatalf("expected note markdown to be preserved")
-	}
-
-	loaded.Items[0].MoveTo(now.Add(time.Hour), PlacementNext)
-
-	if err := store.Save(loaded); err != nil {
-		t.Fatalf("save round-trip: %v", err)
-	}
-
-	raw, err := os.ReadFile(store.NotePath(itemID))
-	if err != nil {
-		t.Fatalf("read round-tripped note: %v", err)
-	}
-	got := string(raw)
-	if !strings.Contains(got, "## Research Notes\nKeep this heading and body.") {
-		t.Fatalf("expected unknown section to remain, got:\n%s", got)
-	}
-}
-
-func TestStoreDoesNotRewriteEditedNoteMarkdownOnSave(t *testing.T) {
-	store := newTestStore(t)
-	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	state := State{
-		Items: []Item{
-			NewItem(now, "Investigate parser", PlacementInbox),
-		},
-	}
-	if err := store.Save(state); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	itemID := state.Items[0].ID
-	note := strings.TrimSpace(`
-# Investigate parser
-
-Intro paragraph.
-
-## Research Notes
-Keep this heading and spacing.
-
-- bullet stays here
-`) + "\n"
-	if err := os.WriteFile(store.NotePath(itemID), []byte(note), 0o644); err != nil {
-		t.Fatalf("write note: %v", err)
-	}
-
-	loaded, err := store.Load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	loaded.Items[0].MoveTo(now.Add(time.Hour), PlacementNext)
-
-	if err := store.Save(loaded); err != nil {
-		t.Fatalf("save after move: %v", err)
-	}
-
-	raw, err := os.ReadFile(store.NotePath(itemID))
-	if err != nil {
-		t.Fatalf("read saved note: %v", err)
-	}
-	if string(raw) != note {
-		t.Fatalf("expected note markdown to stay byte-for-byte stable\nwant:\n%s\ngot:\n%s", note, string(raw))
 	}
 }

@@ -14,9 +14,8 @@ The product should help the user decide what to work on now, while also preservi
 
 ## Positioning
 
-This design replaces the current storage assumption in [storage-model.md](./storage-model.md) for the next major model revision.
-The current `tasks.ndjson + notes/ + activity.ndjson` model is optimized for lightweight task management.
-The new model optimizes for issue-driven knowledge work and agent collaboration.
+This design extends the current vault storage described in [storage-model.md](./storage-model.md).
+It optimizes the model for issue-driven knowledge work and agent collaboration.
 
 ## Design Decisions
 
@@ -60,7 +59,7 @@ It should stay lightweight and should not require persistent context accumulatio
 
 Task assets:
 
-- `task.yaml`
+- `task.md`
 - optional `memos/`
 
 ### Issue
@@ -70,7 +69,7 @@ It is the main unit for investigation, design, review response, specification wo
 
 Issue assets:
 
-- `issue.yaml`
+- `issue.md`
 - `context/`
 - `logs/`
 - `memos/`
@@ -82,7 +81,7 @@ It is used only when a durable common topic exists.
 
 Theme assets:
 
-- `theme.yaml`
+- `theme.md`
 - `sources/`
 - `context/`
 
@@ -134,17 +133,17 @@ vault/
   inbox/
   tasks/
     <task-id>/
-      task.yaml
+      task.md
       memos/
   issues/
     <issue-id>/
-      issue.yaml
+      issue.md
       context/
       logs/
       memos/
   themes/
     <theme-id>/
-      theme.yaml
+      theme.md
       sources/
       context/
   knowledge/
@@ -162,7 +161,7 @@ vault/
 
 ### Shared metadata fields
 
-`task.yaml` and `issue.yaml` should share a core schema:
+`task.md` and `issue.md` frontmatter should share a core schema:
 
 - `id`
 - `title`
@@ -171,11 +170,11 @@ vault/
 - `updated`
 - `tags`
 
-`issue.yaml` additionally allows:
+`issue.md` frontmatter additionally allows:
 
 - `theme`
 
-### `task.yaml`
+### `task.md`
 
 ```yaml
 id: expense-submit
@@ -187,7 +186,7 @@ tags:
   - admin
 ```
 
-### `issue.yaml`
+### `issue.md`
 
 ```yaml
 id: otp-tx-design
@@ -201,7 +200,7 @@ tags:
   - tx
 ```
 
-### `theme.yaml`
+### `theme.md`
 
 ```yaml
 id: auth-stepup
@@ -377,21 +376,11 @@ This preserves the design rule that Markdown and YAML files remain the source of
 - Filenames may evolve independently of task, issue, or theme IDs.
 - Renaming a file should not require changing unrelated metadata unless the file is explicitly referenced.
 
-## Migration from the Current Model
+## Evolution Direction
 
-### Current model
+### Current vault layout
 
-The current app stores active state in:
-
-- `tasks.ndjson`
-- `activity.ndjson`
-- `notes/<id>.md`
-
-This model assumes one primary item type and does not distinguish issue work from task work.
-
-### Target migration direction
-
-The next major revision should move to:
+The app stores active state in:
 
 - `vault/inbox/`
 - `vault/tasks/`
@@ -399,17 +388,17 @@ The next major revision should move to:
 - `vault/themes/`
 - `vault/knowledge/`
 
-### Migration policy
+### Next refinement
 
-- Do not attempt hybrid long-term support for both storage models inside the main product path.
-- Prefer a one-time importer from the current store into the vault model.
-- Imported legacy tasks should become `vault/tasks/<id>/task.yaml`.
-- Existing note files should become task memos or issue memos depending on the conversion target.
+- Keep the vault as the only product storage model.
+- Move item metadata from YAML files into Markdown frontmatter.
+- Keep supporting content in `memos/`, `context/`, `logs/`, and `sources/`.
+- Add rebuildable indexes only as cache layers, never as source of truth.
 
 ### Rationale
 
-Supporting both models permanently would add complexity to every list, mutation, and save path.
-The new model is not a small extension of the old one; it is a different domain model.
+Keeping one vault model avoids duplicated save paths and drift between representations.
+Frontmatter can refine the vault format without changing the core directory layout.
 
 ## Suggested Go Architecture
 

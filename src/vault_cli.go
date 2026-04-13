@@ -174,7 +174,10 @@ func runVaultAddTask(args []string) int {
 	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
 	id := fs.String("id", "", "task id")
 	title := fs.String("title", "", "task title")
-	state := fs.String("state", string(WorkStateNext), "task state")
+	status := fs.String("status", "open", "task status")
+	triage := fs.String("triage", string(TriageStock), "task triage")
+	stage := fs.String("stage", string(StageNext), "task stage")
+	deferredKind := fs.String("deferred-kind", "", "task deferred kind")
 	tags := fs.String("tags", "", "comma-separated tags")
 	refs := fs.String("refs", "", "comma-separated refs")
 	if err := fs.Parse(args[4:]); err != nil {
@@ -183,13 +186,16 @@ func runVaultAddTask(args []string) int {
 	}
 	task := TaskDoc{
 		Metadata: Metadata{
-			ID:      chooseID(*title, strings.TrimSpace(*id)),
-			Title:   strings.TrimSpace(*title),
-			State:   WorkState(strings.TrimSpace(*state)),
-			Created: dateKey(todayLocal()),
-			Updated: dateKey(todayLocal()),
-			Tags:    splitCSV(*tags),
-			Refs:    splitCSV(*refs),
+			ID:           chooseID(*title, strings.TrimSpace(*id)),
+			Title:        strings.TrimSpace(*title),
+			Status:       strings.TrimSpace(*status),
+			Triage:       Triage(strings.TrimSpace(*triage)),
+			Stage:        Stage(strings.TrimSpace(*stage)),
+			DeferredKind: DeferredKind(strings.TrimSpace(*deferredKind)),
+			Created:      dateKey(todayLocal()),
+			Updated:      dateKey(todayLocal()),
+			Tags:         splitCSV(*tags),
+			Refs:         splitCSV(*refs),
 		},
 	}
 	vault := NewVault(*dataDir)
@@ -212,7 +218,10 @@ func runVaultAddIssue(args []string) int {
 	id := fs.String("id", "", "issue id")
 	title := fs.String("title", "", "issue title")
 	theme := fs.String("theme", "", "theme id")
-	state := fs.String("state", string(WorkStateNext), "issue state")
+	status := fs.String("status", "open", "issue status")
+	triage := fs.String("triage", string(TriageStock), "issue triage")
+	stage := fs.String("stage", string(StageNext), "issue stage")
+	deferredKind := fs.String("deferred-kind", "", "issue deferred kind")
 	tags := fs.String("tags", "", "comma-separated tags")
 	refs := fs.String("refs", "", "comma-separated refs")
 	if err := fs.Parse(args[4:]); err != nil {
@@ -221,13 +230,16 @@ func runVaultAddIssue(args []string) int {
 	}
 	issue := IssueDoc{
 		Metadata: Metadata{
-			ID:      chooseID(*title, strings.TrimSpace(*id)),
-			Title:   strings.TrimSpace(*title),
-			State:   WorkState(strings.TrimSpace(*state)),
-			Created: dateKey(todayLocal()),
-			Updated: dateKey(todayLocal()),
-			Tags:    splitCSV(*tags),
-			Refs:    splitCSV(*refs),
+			ID:           chooseID(*title, strings.TrimSpace(*id)),
+			Title:        strings.TrimSpace(*title),
+			Status:       strings.TrimSpace(*status),
+			Triage:       Triage(strings.TrimSpace(*triage)),
+			Stage:        Stage(strings.TrimSpace(*stage)),
+			DeferredKind: DeferredKind(strings.TrimSpace(*deferredKind)),
+			Created:      dateKey(todayLocal()),
+			Updated:      dateKey(todayLocal()),
+			Tags:         splitCSV(*tags),
+			Refs:         splitCSV(*refs),
 		},
 		Theme: strings.TrimSpace(*theme),
 	}

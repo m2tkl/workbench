@@ -36,6 +36,7 @@ const (
 	modeOpenRef
 	modeEditRefs
 	modeEditTheme
+	modeConvertInboxIssue
 )
 
 type section int
@@ -59,6 +60,16 @@ type appView int
 const (
 	viewExecution appView = iota
 	viewWorkbench
+)
+
+type moveOption string
+
+const (
+	moveToNow       moveOption = "now"
+	moveToNext      moveOption = "next"
+	moveToLater     moveOption = "later"
+	moveToScheduled moveOption = "scheduled"
+	moveToRecurring moveOption = "recurring"
 )
 
 type itemRef struct {
@@ -123,8 +134,8 @@ type App struct {
 	workbenchNavOffset   int
 	workbenchIssueCursor int
 	workbenchIssueOffset int
-	moveChoice           Placement
-	pendingTarget        Placement
+	moveChoice           moveOption
+	pendingTarget        moveOption
 	selectedIDs          map[string]struct{}
 
 	filter string
@@ -132,6 +143,7 @@ type App struct {
 
 	inputs      []textinput.Model
 	inputCursor int
+	keepModalOpen bool
 
 	recurringField  int
 	recurringOption int
@@ -141,12 +153,12 @@ type App struct {
 	undo *undoState
 }
 
-var movePlacements = []Placement{
-	PlacementNow,
-	PlacementNext,
-	PlacementLater,
-	PlacementScheduled,
-	PlacementRecurring,
+var moveOptions = []moveOption{
+	moveToNow,
+	moveToNext,
+	moveToLater,
+	moveToScheduled,
+	moveToRecurring,
 }
 
 func NewApp(store Store, state State) *App {
@@ -163,7 +175,7 @@ func NewApp(store Store, state State) *App {
 		view:            viewExecution,
 		selectedSection: sectionToday,
 		actionSection:   sectionToday,
-		moveChoice:      PlacementNext,
+		moveChoice:      moveToNext,
 		selectedIDs:     map[string]struct{}{},
 		status:          "Focus = Now + active Deferred",
 	}
@@ -270,19 +282,19 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.status = "Returned to Focus."
 		}
 	case "1", "t":
-		if a.handleWorkbenchStateShortcut(PlacementNow) {
+		if a.handleWorkbenchStateShortcut(StageNow) {
 			return a, nil
 		}
 		a.jumpSection(a.primarySections()[0])
 	case "2", "n":
-		if a.handleWorkbenchStateShortcut(PlacementNext) {
+		if a.handleWorkbenchStateShortcut(StageNext) {
 			return a, nil
 		}
 		if len(a.primarySections()) > 1 {
 			a.jumpSection(a.primarySections()[1])
 		}
 	case "3", "i":
-		if a.handleWorkbenchStateShortcut(PlacementLater) {
+		if a.handleWorkbenchStateShortcut(StageLater) {
 			return a, nil
 		}
 		if len(a.primarySections()) > 2 {
@@ -328,7 +340,7 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "Y", "shift+y":
 		a.startEditTheme()
 	case "I", "shift+i":
-		a.convertInboxSelectionToIssue()
+		a.startConvertInboxSelectionToIssue()
 	case "T", "shift+t":
 		a.convertInboxSelectionToTask()
 	case "m":
@@ -346,7 +358,7 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.mode = modeMove
-		a.moveChoice = normalizedMoveChoice(item.Placement())
+		a.moveChoice = normalizedMoveChoice(currentMoveOption(*item))
 	case "c":
 		if a.ensureMutable("Vault mode is read-only for now.") {
 			return a, nil
@@ -483,15 +495,17 @@ func (a *App) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		break
 	case modeEditTheme:
 		break
+	case modeConvertInboxIssue:
+		break
 	case modeMove:
 		switch msg.String() {
 		case "esc":
 			a.mode = modeNormal
 			a.status = "Move canceled."
 		case "left", "k", "up":
-			a.moveChoice = prevPlacement(a.moveChoice)
+			a.moveChoice = prevMoveOption(a.moveChoice)
 		case "right", "j", "down":
-			a.moveChoice = nextPlacement(a.moveChoice)
+			a.moveChoice = nextMoveOption(a.moveChoice)
 		case "enter":
 			a.applyMoveChoice()
 		}
@@ -645,11 +659,7 @@ func (a *App) renderHeader(width int) string {
 		left += " " + filterStyle.Render("filter:"+a.filter)
 	}
 
-	modeLabel := "Action"
-	if a.view == viewWorkbench {
-		modeLabel = "Plan"
-	}
-	right := metaStyle.Render(fmt.Sprintf("mode:%s  items:%d", modeLabel, a.sectionCount(a.selectedSection)))
+	right := metaStyle.Render(fmt.Sprintf("Inbox:%d  Now:%d  Next:%d", a.sectionCount(sectionInbox), a.sectionCount(sectionToday), a.sectionCount(sectionNext)))
 	leftWidth := max(10, contentWidth-lipgloss.Width(right))
 
 	line := lipgloss.JoinHorizontal(
@@ -875,7 +885,7 @@ func (a *App) renderWorkbenchIssuePanel(width, height int) string {
 	for row := a.workbenchIssueOffset; row < len(items) && len(lines) < bodyHeight; row++ {
 		item := items[row].item
 		cursorSelected := row == a.workbenchIssueCursor
-		line := a.renderSelectableLine(a.renderWorkbenchListRow(entry, item, max(1, innerWidth-4)), innerWidth, cursorSelected, a.isSelected(item.ID))
+		line := a.renderSelectableLine(a.renderWorkbenchListRow(entry, item, max(1, innerWidth-3)), innerWidth, cursorSelected, a.isSelected(item.ID))
 		lines = append(lines, line)
 	}
 	for len(lines) < bodyHeight {
@@ -893,13 +903,7 @@ func (a *App) renderListHeader(width int) string {
 }
 
 func (a *App) renderSimpleListHeader(width int) string {
-	return truncateRunes(
-		"   "+strings.Join([]string{
-			padCell("STATE", 8),
-			padCell("TITLE", max(1, width-(8+1+3))),
-		}, " "),
-		width,
-	)
+	return truncateRunes("   "+renderStateTitleProgressCells("STATE", "TITLE", "PROGRESS", max(1, width-3)), width)
 }
 
 func (a *App) renderTitleOnlyHeader(width int) string {
@@ -907,11 +911,7 @@ func (a *App) renderTitleOnlyHeader(width int) string {
 }
 
 func (a *App) renderListRow(item Item, width int) string {
-	titleWidth := max(1, width-(8+1))
-	return strings.Join([]string{
-		padCell(listStateLabel(item), 8),
-		padCell(item.Title, titleWidth),
-	}, " ")
+	return renderStateTitleProgressCells(listStateLabel(item), item.Title, itemChecklistProgress(item), width)
 }
 
 func (a *App) renderWorkbenchListHeader(entry *workbenchEntry, width int) string {
@@ -919,13 +919,7 @@ func (a *App) renderWorkbenchListHeader(entry *workbenchEntry, width int) string
 		return a.renderTitleOnlyHeader(width)
 	}
 	if entry != nil && isActionWorkbenchKind(entry.kind) {
-		return truncateRunes(
-			"   "+strings.Join([]string{
-				padCell("THEME", 12),
-				padCell("TITLE", max(1, width-(12+1+3))),
-			}, " "),
-			width,
-		)
+		return truncateRunes("   "+renderThemeTitleProgressCells("THEME", "TITLE", "PROGRESS", max(1, width-3)), width)
 	}
 	return truncateRunes(
 		"   "+strings.Join([]string{
@@ -941,11 +935,7 @@ func (a *App) renderWorkbenchListRow(entry *workbenchEntry, item Item, width int
 		return padCell(item.Title, max(1, width))
 	}
 	if entry != nil && isActionWorkbenchKind(entry.kind) {
-		titleWidth := max(1, width-(12+1))
-		return strings.Join([]string{
-			padCell(listThemeLabel(item), 12),
-			padCell(item.Title, titleWidth),
-		}, " ")
+		return renderThemeTitleProgressCells(listThemeLabel(item), item.Title, itemChecklistProgress(item), width)
 	}
 	return a.renderListRow(item, width)
 }
@@ -1060,6 +1050,8 @@ func (a *App) renderModal(width, height int) string {
 			"O    open refs",
 			"G    edit refs",
 			"Y    edit theme on issue",
+			"I    convert inbox item to issue with theme search",
+			"T    convert inbox item to task",
 			"space  select item",
 			"m    move item or selection",
 			"c    edit deferred rule",
@@ -1091,7 +1083,12 @@ func (a *App) renderModal(width, height int) string {
 		body = append(body, "comma-separated paths such as knowledge/foo.md")
 	case modeEditTheme:
 		title = "Edit Theme"
-		body = append(body, "set theme id for the selected issue, or leave blank to clear it")
+		body = append(body, a.themeSearchHelpLines(true)...)
+	case modeConvertInboxIssue:
+		title = "Convert Inbox Item To Issue"
+		body = append(body, "choose a theme and initial stage for the issue")
+		body = append(body, "stage accepts now, next, or later")
+		body = append(body, a.themeSearchHelpLines(true)...)
 	case modeSchedule:
 		title = "Set Scheduled Date"
 		body = append(body, "use YYYY-MM-DD")
@@ -1106,12 +1103,12 @@ func (a *App) renderModal(width, height int) string {
 		} else {
 			body = append(body, "Choose destination.")
 		}
-		for _, placement := range movePlacements {
+		for _, option := range moveOptions {
 			cursor := " "
-			if placement == a.moveChoice {
+			if option == a.moveChoice {
 				cursor = ">"
 			}
-			body = append(body, fmt.Sprintf("%s %s", cursor, strings.ToUpper(string(placement))))
+			body = append(body, fmt.Sprintf("%s %s", cursor, strings.ToUpper(string(option))))
 		}
 		body = append(body, "", "arrow keys or j/k choose, Enter apply, Esc cancel")
 		return lipgloss.NewStyle().
@@ -1358,7 +1355,33 @@ func (a *App) startEditTheme() {
 		a.status = "Selected item is not an issue."
 		return
 	}
-	a.startSingleInput(modeEditTheme, "theme-id", item.Theme)
+	a.startSingleInput(modeEditTheme, "theme id or title", item.Theme)
+}
+
+func (a *App) startConvertInboxSelectionToIssue() {
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
+		return
+	}
+	if item.EntityType != entityInbox || item.Triage != TriageInbox {
+		a.status = "Select an inbox item to convert."
+		return
+	}
+	fields := []struct {
+		placeholder string
+		value       string
+	}{
+		{"theme id or title", item.Theme},
+		{"later|next|now", "later"},
+	}
+	a.inputs = make([]textinput.Model, 0, len(fields))
+	for _, field := range fields {
+		a.inputs = append(a.inputs, newInput(field.placeholder, field.value))
+	}
+	a.inputCursor = 0
+	a.mode = modeConvertInboxIssue
+	a.focusInputs()
 }
 
 func (a *App) startDeleteConfirm() {
@@ -1401,11 +1424,11 @@ func (a *App) startEditDeferredCondition() {
 		a.status = "No item selected."
 		return
 	}
-	switch item.Placement() {
-	case PlacementScheduled:
-		a.pendingTarget = PlacementScheduled
+	switch {
+	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled:
+		a.pendingTarget = moveToScheduled
 		a.startSingleInput(modeSchedule, "YYYY-MM-DD", item.ScheduledFor)
-	case PlacementRecurring:
+	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring:
 		a.startRecurringEditor(item)
 	default:
 		a.status = "Selected item is not deferred."
@@ -1451,6 +1474,8 @@ func (a *App) focusInputs() {
 }
 
 func (a *App) submitModal() {
+	currentMode := a.mode
+	a.keepModalOpen = false
 	switch a.mode {
 	case modeSearch:
 		a.filter = strings.TrimSpace(a.inputs[0].Value())
@@ -1461,10 +1486,18 @@ func (a *App) submitModal() {
 		a.submitEditRefs()
 	case modeEditTheme:
 		a.submitEditTheme()
+	case modeConvertInboxIssue:
+		a.submitConvertInboxIssue()
 	case modeSchedule:
 		a.submitSchedule()
 	case modeRecurring:
 		a.submitRecurring()
+	}
+	if a.keepModalOpen {
+		a.mode = currentMode
+		a.focusInputs()
+		a.syncSelection()
+		return
 	}
 	a.mode = modeNormal
 	a.inputs = nil
@@ -1477,6 +1510,7 @@ func (a *App) submitAdd() {
 	title := strings.TrimSpace(a.inputs[0].Value())
 	if title == "" {
 		a.status = "Title is required."
+		a.keepModalOpen = true
 		return
 	}
 
@@ -1511,8 +1545,13 @@ func (a *App) submitEditTheme() {
 		a.status = "Selected item is not an issue."
 		return
 	}
+	themeID, ok := a.resolveThemeInput(strings.TrimSpace(a.inputs[0].Value()), true)
+	if !ok {
+		a.keepModalOpen = true
+		return
+	}
 	a.captureUndo("edit theme " + item.ID)
-	item.Theme = strings.TrimSpace(a.inputs[0].Value())
+	item.Theme = themeID
 	a.save()
 	if item.Theme == "" {
 		a.status = a.undoStatus("Cleared theme for " + item.ID)
@@ -1521,13 +1560,60 @@ func (a *App) submitEditTheme() {
 	a.status = a.undoStatus("Updated theme for " + item.ID)
 }
 
+func (a *App) submitConvertInboxIssue() {
+	item := a.selectedItem()
+	if item == nil {
+		a.status = "No item selected."
+		return
+	}
+	if item.EntityType != entityInbox || item.Triage != TriageInbox {
+		a.status = "Select an inbox item to convert."
+		return
+	}
+	themeID, ok := a.resolveThemeInput(strings.TrimSpace(a.inputs[0].Value()), true)
+	if !ok {
+		a.keepModalOpen = true
+		return
+	}
+	stage, ok := parseIssueStageInput(strings.TrimSpace(a.inputs[1].Value()))
+	if !ok {
+		a.status = "Stage must be now, next, or later."
+		a.keepModalOpen = true
+		return
+	}
+	a.captureUndo("convert " + item.ID + " to issue")
+	item.EntityType = entityIssue
+	item.Theme = themeID
+	item.MoveTo(a.now(), TriageStock, stage, "")
+	a.save()
+	if item.Theme == "" {
+		a.status = a.undoStatus(fmt.Sprintf("Converted %s to Issue in %s with No Theme.", item.ID, strings.Title(string(stage))))
+		return
+	}
+	a.status = a.undoStatus(fmt.Sprintf("Converted %s to Issue in %s.", item.ID, strings.Title(string(stage))))
+}
+
+func parseIssueStageInput(raw string) (Stage, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "now":
+		return StageNow, true
+	case "next":
+		return StageNext, true
+	case "", "later":
+		return StageLater, true
+	default:
+		return "", false
+	}
+}
+
 func (a *App) submitSchedule() {
 	day, err := parseDate(a.inputs[0].Value())
 	if err != nil {
 		a.status = err.Error()
+		a.keepModalOpen = true
 		return
 	}
-	if len(a.selectedIDs) > 0 && a.pendingTarget == PlacementScheduled {
+	if len(a.selectedIDs) > 0 && a.pendingTarget == moveToScheduled {
 		a.captureUndo("bulk schedule")
 		scheduled := 0
 		for idx := range a.state.Items {
@@ -1571,10 +1657,12 @@ func (a *App) submitRecurring() {
 	policy := a.recurringDraft.donePolicy
 	if len(weeks) > 0 && len(weekdays) == 0 {
 		a.status = "weeks require weekdays"
+		a.keepModalOpen = true
 		return
 	}
 	if len(weekdays) == 0 && len(weeks) == 0 && len(months) == 0 {
 		a.status = "recurring rule cannot be empty"
+		a.keepModalOpen = true
 		return
 	}
 
@@ -1593,19 +1681,19 @@ func (a *App) applyMoveChoice() {
 	}
 
 	switch a.moveChoice {
-	case PlacementScheduled:
+	case moveToScheduled:
 		if len(a.selectedIDs) > 0 {
-			a.pendingTarget = PlacementScheduled
+			a.pendingTarget = moveToScheduled
 			a.startSingleInput(modeSchedule, "YYYY-MM-DD", dateKey(a.now()))
 			return
 		}
-		a.pendingTarget = PlacementScheduled
+		a.pendingTarget = moveToScheduled
 		value := item.ScheduledFor
 		if value == "" {
 			value = dateKey(a.now())
 		}
 		a.startSingleInput(modeSchedule, "YYYY-MM-DD", value)
-	case PlacementRecurring:
+	case moveToRecurring:
 		if len(a.selectedIDs) > 0 {
 			a.applySelectionMove(a.moveChoice)
 			return
@@ -1619,10 +1707,10 @@ func (a *App) applyMoveChoice() {
 			return
 		}
 		a.captureUndo("move " + item.ID)
-		item.MoveTo(a.now(), a.moveChoice)
+		applyMoveOption(item, a.now(), a.moveChoice)
 		a.mode = modeNormal
 		a.save()
-		a.status = a.undoStatus(fmt.Sprintf("Moved %s to %s.", item.ID, item.Placement()))
+		a.status = a.undoStatus(fmt.Sprintf("Moved %s to %s.", item.ID, string(a.moveChoice)))
 	}
 }
 
@@ -1663,7 +1751,7 @@ func (a *App) completeItem() {
 	a.captureUndo("complete " + item.ID)
 	item.Complete(a.now(), "")
 	a.save()
-	if item.Placement() == PlacementRecurring && item.Status != "done" {
+	if item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring && item.Status != "done" {
 		a.status = a.undoStatus("Closed current recurring window for " + item.ID)
 		return
 	}
@@ -1735,7 +1823,7 @@ func (a *App) isSelected(id string) bool {
 	return ok
 }
 
-func (a *App) moveSelectionTo(target Placement) bool {
+func (a *App) moveSelectionTo(target moveOption) bool {
 	if len(a.selectedIDs) == 0 {
 		return false
 	}
@@ -1745,7 +1833,7 @@ func (a *App) moveSelectionTo(target Placement) bool {
 		if !a.isSelected(a.state.Items[idx].ID) {
 			continue
 		}
-		a.state.Items[idx].MoveTo(a.now(), target)
+		applyMoveOption(&a.state.Items[idx], a.now(), target)
 		moved++
 	}
 	if moved == 0 {
@@ -1759,8 +1847,8 @@ func (a *App) moveSelectionTo(target Placement) bool {
 	return true
 }
 
-func (a *App) applySelectionMove(target Placement) {
-	if target == PlacementRecurring {
+func (a *App) applySelectionMove(target moveOption) {
+	if target == moveToRecurring {
 		a.captureUndo("bulk move")
 		moved := 0
 		for idx := range a.state.Items {
@@ -1783,7 +1871,7 @@ func (a *App) applySelectionMove(target Placement) {
 		a.syncSelection()
 		return
 	}
-	if target == PlacementScheduled {
+	if target == moveToScheduled {
 		a.mode = modeSchedule
 		return
 	}
@@ -1791,13 +1879,13 @@ func (a *App) applySelectionMove(target Placement) {
 	a.moveSelectionTo(target)
 }
 
-func normalizedMoveChoice(choice Placement) Placement {
-	for _, placement := range movePlacements {
-		if placement == choice {
+func normalizedMoveChoice(choice moveOption) moveOption {
+	for _, option := range moveOptions {
+		if option == choice {
 			return choice
 		}
 	}
-	return PlacementNext
+	return moveToNext
 }
 
 func (a *App) captureUndo(label string) {
@@ -2018,7 +2106,7 @@ func (a *App) primarySections() []section {
 	}
 }
 
-func (a *App) handleWorkbenchStateShortcut(target Placement) bool {
+func (a *App) handleWorkbenchStateShortcut(target Stage) bool {
 	if a.view != viewWorkbench {
 		return false
 	}
@@ -2037,12 +2125,12 @@ func (a *App) handleWorkbenchStateShortcut(target Placement) bool {
 		a.status = "Selected issue is not open."
 		return true
 	}
-	if item.Placement() == target {
+	if item.Triage == TriageStock && item.Stage == target {
 		a.status = fmt.Sprintf("%s is already %s.", item.ID, target)
 		return true
 	}
 	a.captureUndo("move " + item.ID)
-	item.MoveTo(a.now(), target)
+	item.MoveTo(a.now(), TriageStock, target, "")
 	a.save()
 	a.status = a.undoStatus(fmt.Sprintf("Moved %s to %s.", item.ID, target))
 	return true
@@ -2065,8 +2153,6 @@ func (a *App) nextWorkbenchPane() {
 	switch a.focus {
 	case paneSidebar:
 		a.focus = paneList
-	case paneList:
-		a.focus = paneDetails
 	default:
 		a.focus = paneSidebar
 	}
@@ -2074,12 +2160,10 @@ func (a *App) nextWorkbenchPane() {
 
 func (a *App) prevWorkbenchPane() {
 	switch a.focus {
-	case paneDetails:
-		a.focus = paneList
 	case paneList:
 		a.focus = paneSidebar
 	default:
-		a.focus = paneDetails
+		a.focus = paneList
 	}
 }
 
@@ -2098,12 +2182,6 @@ func (a *App) moveWorkbenchDown() {
 			a.workbenchIssueCursor++
 			a.detailOffset = 0
 		}
-	case paneDetails:
-		lines := a.detailLines(max(20, a.width/2))
-		maxOffset := max(0, len(lines)-max(1, a.height-6))
-		if a.detailOffset < maxOffset {
-			a.detailOffset++
-		}
 	}
 }
 
@@ -2120,10 +2198,6 @@ func (a *App) moveWorkbenchUp() {
 		if a.workbenchIssueCursor > 0 {
 			a.workbenchIssueCursor--
 			a.detailOffset = 0
-		}
-	case paneDetails:
-		if a.detailOffset > 0 {
-			a.detailOffset--
 		}
 	}
 }
@@ -2221,6 +2295,9 @@ func (a *App) pageUp() {
 }
 
 func (a *App) syncSelection() {
+	if a.focus == paneDetails {
+		a.focus = paneList
+	}
 	if a.view == viewWorkbench {
 		planTotal := len(a.workbenchItems())
 		if planTotal == 0 {
@@ -2309,15 +2386,15 @@ func (a *App) itemsForSection(s section) []itemRef {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionInbox:
-			if item.Status == "open" && item.Placement() == PlacementInbox {
+			if item.Status == "open" && item.Triage == TriageInbox {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionNext:
-			if item.Status == "open" && item.Placement() == PlacementNext {
+			if item.Status == "open" && item.Triage == TriageStock && item.Stage == StageNext {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionReview:
-			if item.Status == "open" && item.Placement() == PlacementLater {
+			if item.Status == "open" && item.Triage == TriageStock && item.Stage == StageLater {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionDeferred:
@@ -2337,15 +2414,15 @@ func (a *App) itemsForSection(s section) []itemRef {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionIssueNow:
-			if item.EntityType == entityIssue && item.Status == "open" && item.Placement() == PlacementNow {
+			if item.EntityType == entityIssue && item.Status == "open" && item.Triage == TriageStock && item.Stage == StageNow {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionIssueNext:
-			if item.EntityType == entityIssue && item.Status == "open" && item.Placement() == PlacementNext {
+			if item.EntityType == entityIssue && item.Status == "open" && item.Triage == TriageStock && item.Stage == StageNext {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionIssueLater:
-			if item.EntityType == entityIssue && item.Status == "open" && (item.Placement() == PlacementLater || item.Placement() == PlacementScheduled || item.Placement() == PlacementRecurring) {
+			if item.EntityType == entityIssue && item.Status == "open" && (item.Triage == TriageStock && item.Stage == StageLater || item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled || item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring) {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		}
@@ -2432,7 +2509,7 @@ func (a *App) detailTitle() string {
 		case entry.kind == "theme":
 			return "Theme"
 		default:
-			return "Bucket"
+			return entry.title
 		}
 	}
 	return "Action"
@@ -2464,52 +2541,28 @@ func (a *App) executionDetailLines(width int) []string {
 }
 
 func (a *App) executionDetailLinesForItem(width int, item *Item) []string {
-	lines := []string{"Execute:"}
-	frontmatter := []string{
-		"title: " + item.Title,
-		"id: " + item.ID,
-		"type: " + itemTypeLabel(*item),
-		"theme: " + emptyDash(item.Theme),
-		"state: " + executionStateLabel(*item),
-		"status: " + item.Status,
+	lines := []string{}
+	if item.ID != "" {
+		lines = append(lines, wrapText("id: "+item.ID, width)...)
 	}
-	if item.UpdatedAt != "" {
-		frontmatter = append(frontmatter, "updated: "+item.UpdatedAt)
+	if strings.TrimSpace(item.Theme) != "" {
+		lines = append(lines, wrapText("theme: "+item.Theme, width)...)
 	}
 	if item.DoneForDayOn != "" {
-		frontmatter = append(frontmatter, "done_for_day_on: "+item.DoneForDayOn)
+		lines = append(lines, wrapText("done_for_day_on: "+item.DoneForDayOn, width)...)
 	}
 	if item.ScheduledFor != "" {
-		frontmatter = append(frontmatter, "scheduled_for: "+item.ScheduledFor)
+		lines = append(lines, wrapText("scheduled_for: "+item.ScheduledFor, width)...)
 	}
-	if item.RecurringEveryDays > 0 || item.Placement() == PlacementRecurring {
-		frontmatter = append(frontmatter, fmt.Sprintf("recurring: %s", item.RecurringSummary()))
-	}
-	if len(item.Refs) > 0 {
-		frontmatter = append(frontmatter, fmt.Sprintf("refs: %d", len(item.Refs)))
-	}
-	for _, line := range frontmatter {
-		lines = append(lines, wrapText("  "+line, width)...)
+	if item.RecurringEveryDays > 0 || (item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring) {
+		lines = append(lines, wrapText(fmt.Sprintf("recurring: %s", item.RecurringSummary()), width)...)
 	}
 
-	lines = append(lines, "", "Refs:")
-	if len(item.Refs) == 0 {
-		lines = append(lines, "  -")
-	} else {
-		for _, ref := range item.Refs {
-			lines = append(lines, wrapText("  - "+ref, width)...)
-		}
+	if len(lines) > 0 {
+		lines = append(lines, "")
 	}
-
-	lines = append(lines, "", "Next context:")
 	if raw := strings.TrimSpace(detailNoteMarkdown(item)); raw != "" {
-		for _, part := range strings.Split(firstParagraph(raw), "\n") {
-			if strings.TrimSpace(part) == "" {
-				lines = append(lines, "")
-				continue
-			}
-			lines = append(lines, wrapText(part, width)...)
-		}
+		lines = appendMarkdownLines(lines, raw, width)
 	} else {
 		lines = append(lines, "  -")
 	}
@@ -2526,139 +2579,78 @@ func (a *App) workbenchDetailLines(width int) []string {
 			return a.workbenchIssueDetailLines(width, item)
 		}
 	}
-	return a.workbenchBucketDetailLines(width)
+	return a.workbenchFilterDetailLines(width)
 }
 
 func (a *App) workbenchIssueDetailLines(width int, item *Item) []string {
 	summary := a.issueAssetSummary(item.ID)
-	lines := []string{"Issue:"}
-	for _, line := range []string{
-		"title: " + item.Title,
-		"id: " + item.ID,
-		"theme: " + emptyDash(item.Theme),
-		"state: " + executionStateLabel(*item),
-		fmt.Sprintf("refs: %d", len(item.Refs)),
-	} {
-		lines = append(lines, wrapText("  "+line, width)...)
+	lines := []string{}
+	if item.ID != "" {
+		lines = append(lines, wrapText("id: "+item.ID, width)...)
 	}
 
-	lines = append(lines, "", "Working set:")
+	lines = append(lines, "")
 	for _, line := range []string{
-		fmt.Sprintf("  context files: %d", summary.ContextFiles),
-		fmt.Sprintf("  memo files: %d", summary.MemoFiles),
-		fmt.Sprintf("  log files: %d", summary.LogFiles),
+		fmt.Sprintf("context files: %d", summary.ContextFiles),
+		fmt.Sprintf("memo files: %d", summary.MemoFiles),
+		fmt.Sprintf("log files: %d", summary.LogFiles),
 	} {
 		lines = append(lines, wrapText(line, width)...)
 	}
 
-	lines = append(lines, "", "Refs:")
-	if len(item.Refs) == 0 {
-		lines = append(lines, "  -")
-	} else {
-		for _, ref := range item.Refs {
-			lines = append(lines, wrapText("  - "+ref, width)...)
-		}
-	}
-
-	lines = append(lines, "", "Issue note:")
+	lines = append(lines, "")
 	if raw := strings.TrimSpace(detailNoteMarkdown(item)); raw != "" {
-		for _, part := range strings.Split(firstParagraph(raw), "\n") {
-			if strings.TrimSpace(part) == "" {
-				lines = append(lines, "")
-				continue
-			}
-			lines = append(lines, wrapText(part, width)...)
-		}
+		lines = appendMarkdownLines(lines, raw, width)
 	} else {
 		lines = append(lines, "  -")
 	}
 	return lines
 }
 
-func (a *App) workbenchBucketDetailLines(width int) []string {
+func (a *App) workbenchFilterDetailLines(width int) []string {
 	entry := a.selectedWorkbenchEntry()
 	if entry == nil {
 		return []string{
-			"No theme bucket selected.",
+			"No view selected.",
 		}
 	}
 	switch entry.kind {
 	case "inbox":
 		return []string{
-			"Bucket:",
-			"",
-			"  title: Inbox",
-			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
-			"",
 			"Use this view to classify captured items into tasks or issues.",
 		}
 	case "now":
 		return []string{
-			"Bucket:",
-			"",
-			"  title: Now",
-			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
-			"",
 			"Use this view to inspect work that should be done now.",
 		}
 	case "next":
 		return []string{
-			"Bucket:",
-			"",
-			"  title: Next",
-			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
-			"",
 			"Use this view to choose what to pull into now next.",
 		}
 	case "later":
 		return []string{
-			"Bucket:",
-			"",
-			"  title: Later",
-			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
-			"",
 			"Use this view to review work kept for later.",
 		}
 	case "deferred":
 		return []string{
-			"Bucket:",
-			"",
-			"  title: Deferred",
-			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
-			"",
 			"Use this view to inspect scheduled and recurring work.",
 		}
 	case "done_today":
 		return []string{
-			"Bucket:",
-			"",
-			"  title: Done for Day",
-			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
-			"",
 			"Use this view to revisit work closed for the day.",
 		}
 	case "complete":
 		return []string{
-			"Bucket:",
-			"",
-			"  title: Complete",
-			fmt.Sprintf("  items: %d", len(a.workbenchItems())),
-			"",
 			"Use this view to inspect completed work.",
 		}
 	case "theme":
 		return a.themeDetailLines(width)
 	case "unthemed":
 		return []string{
-			"Bucket:",
-			"",
-			"  title: No Theme",
-			fmt.Sprintf("  issues: %d", len(a.workbenchItems())),
-			"",
 			"Use this view to classify issues that still lack a theme.",
 		}
 	}
-	return []string{"No workbench bucket selected."}
+	return []string{"No view selected."}
 }
 
 func (a *App) themeDetailLines(width int) []string {
@@ -2672,60 +2664,54 @@ func (a *App) themeDetailLines(width int) []string {
 	}
 
 	summary := a.themeAssetSummary(theme.ID)
-	lines := []string{"Theme:"}
-	for _, line := range []string{
-		"id: " + theme.ID,
-		"title: " + theme.Title,
-		"created: " + theme.Created,
-		"updated: " + theme.Updated,
-		fmt.Sprintf("issues: %d", a.issueCountForTheme(theme.ID)),
-	} {
-		lines = append(lines, wrapText("  "+line, width)...)
-	}
-	if len(theme.Tags) > 0 {
-		lines = append(lines, wrapText("  tags: "+strings.Join(theme.Tags, ", "), width)...)
+	lines := []string{}
+	if theme.ID != "" {
+		lines = append(lines, wrapText("id: "+theme.ID, width)...)
 	}
 
-	lines = append(lines, "", "Theme assets:")
+	lines = append(lines, "")
 	for _, line := range []string{
-		fmt.Sprintf("  source files: %d", summary.SourceFiles),
-		fmt.Sprintf("  context files: %d", summary.ContextFiles),
+		fmt.Sprintf("source files: %d", summary.SourceFiles),
+		fmt.Sprintf("context files: %d", summary.ContextFiles),
 	} {
 		lines = append(lines, wrapText(line, width)...)
 	}
 
-	lines = append(lines, "", "Issues:")
-	related := a.issueTitlesForTheme(theme.ID)
-	if len(related) == 0 {
-		lines = append(lines, "  -")
+	lines = append(lines, "")
+	if raw := strings.TrimSpace(theme.Body); raw != "" {
+		lines = appendMarkdownLines(lines, raw, width)
 	} else {
-		for _, title := range related {
-			lines = append(lines, wrapText("  - "+title, width)...)
-		}
+		lines = append(lines, "  -")
 	}
 	return lines
 }
 
-func firstParagraph(raw string) string {
+func appendMarkdownLines(lines []string, raw string, width int) []string {
 	raw = strings.TrimSpace(strings.ReplaceAll(raw, "\r\n", "\n"))
 	if raw == "" {
-		return ""
+		return lines
 	}
-	parts := strings.Split(raw, "\n\n")
-	return strings.TrimSpace(parts[0])
+	for _, part := range strings.Split(raw, "\n") {
+		if strings.TrimSpace(part) == "" {
+			lines = append(lines, "")
+			continue
+		}
+		lines = append(lines, wrapText(part, width)...)
+	}
+	return lines
 }
 
 func executionStateLabel(item Item) string {
-	switch item.Placement() {
-	case PlacementInbox:
+	switch {
+	case item.Triage == "", item.Triage == TriageInbox:
 		return "inbox"
-	case PlacementNow:
+	case item.Triage == TriageStock && item.Stage == StageNow:
 		return "now"
-	case PlacementNext:
+	case item.Triage == TriageStock && item.Stage == StageNext:
 		return "next"
-	case PlacementLater:
+	case item.Triage == TriageStock && item.Stage == StageLater:
 		return "later"
-	case PlacementScheduled, PlacementRecurring:
+	case item.Triage == TriageDeferred:
 		return "later"
 	default:
 		return "-"
@@ -2747,18 +2733,18 @@ func listStateLabel(item Item) string {
 	if item.DoneForDayOn != "" {
 		return "day"
 	}
-	switch item.Placement() {
-	case PlacementInbox:
+	switch {
+	case item.Triage == "", item.Triage == TriageInbox:
 		return "inbox"
-	case PlacementNow:
+	case item.Triage == TriageStock && item.Stage == StageNow:
 		return "now"
-	case PlacementNext:
+	case item.Triage == TriageStock && item.Stage == StageNext:
 		return "next"
-	case PlacementLater:
+	case item.Triage == TriageStock && item.Stage == StageLater:
 		return "later"
-	case PlacementScheduled:
+	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled:
 		return "sched"
-	case PlacementRecurring:
+	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring:
 		return "recur"
 	default:
 		return "-"
@@ -2799,21 +2785,94 @@ func itemTypeLabel(item Item) string {
 	}
 }
 
-func (a *App) convertInboxSelectionToIssue() {
-	item := a.selectedItem()
-	if item == nil {
-		a.status = "No item selected."
-		return
+func (a *App) themeSearchHelpLines(allowBlank bool) []string {
+	lines := []string{"search by theme id or title"}
+	if allowBlank {
+		lines = append(lines, "leave blank for No Theme")
 	}
-	if item.EntityType != entityInbox || item.Placement() != PlacementInbox {
-		a.status = "Select an inbox item to convert."
-		return
+	query := ""
+	if len(a.inputs) > 0 {
+		query = strings.TrimSpace(a.inputs[0].Value())
 	}
-	a.captureUndo("convert " + item.ID + " to issue")
-	item.EntityType = entityIssue
-	item.MoveTo(a.now(), PlacementNext)
-	a.save()
-	a.status = a.undoStatus("Converted " + item.ID + " to Issue in Next.")
+	matches := a.matchingThemes(query)
+	if query == "" {
+		if len(matches) == 0 {
+			lines = append(lines, "no themes available")
+			return lines
+		}
+		lines = append(lines, "", "available themes:")
+	} else {
+		if len(matches) == 0 {
+			lines = append(lines, "", "no matching themes")
+			return lines
+		}
+		lines = append(lines, "", "matching themes:")
+	}
+	limit := min(5, len(matches))
+	for i := 0; i < limit; i++ {
+		label := matches[i].ID
+		if matches[i].Title != "" {
+			label += "  " + matches[i].Title
+		}
+		lines = append(lines, "- "+label)
+	}
+	return lines
+}
+
+func (a *App) resolveThemeInput(query string, allowBlank bool) (string, bool) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		if allowBlank {
+			return "", true
+		}
+		a.status = "Theme is required."
+		return "", false
+	}
+	if theme, ok := a.findExactTheme(query); ok {
+		return theme.ID, true
+	}
+	matches := a.matchingThemes(query)
+	if len(matches) == 0 {
+		a.status = "No theme matched. Leave blank for No Theme."
+		return "", false
+	}
+	if len(matches) > 1 {
+		a.status = "Theme is ambiguous. Narrow the search."
+		return "", false
+	}
+	return matches[0].ID, true
+}
+
+func (a *App) findExactTheme(query string) (ThemeDoc, bool) {
+	query = strings.TrimSpace(query)
+	for _, theme := range a.themes {
+		if strings.EqualFold(theme.ID, query) || strings.EqualFold(theme.Title, query) {
+			return theme, true
+		}
+	}
+	return ThemeDoc{}, false
+}
+
+func (a *App) matchingThemes(query string) []ThemeDoc {
+	query = strings.ToLower(strings.TrimSpace(query))
+	exact := []ThemeDoc{}
+	prefix := []ThemeDoc{}
+	contains := []ThemeDoc{}
+	for _, theme := range a.themes {
+		id := strings.ToLower(theme.ID)
+		title := strings.ToLower(theme.Title)
+		switch {
+		case query == "":
+			contains = append(contains, theme)
+		case id == query || title == query:
+			exact = append(exact, theme)
+		case strings.HasPrefix(id, query) || strings.HasPrefix(title, query):
+			prefix = append(prefix, theme)
+		case strings.Contains(id, query) || strings.Contains(title, query):
+			contains = append(contains, theme)
+		}
+	}
+	return append(append(exact, prefix...), contains...)
 }
 
 func (a *App) convertInboxSelectionToTask() {
@@ -2822,13 +2881,13 @@ func (a *App) convertInboxSelectionToTask() {
 		a.status = "No item selected."
 		return
 	}
-	if item.EntityType != entityInbox || item.Placement() != PlacementInbox {
+	if item.EntityType != entityInbox || item.Triage != TriageInbox {
 		a.status = "Select an inbox item to convert."
 		return
 	}
 	a.captureUndo("convert " + item.ID + " to task")
 	item.EntityType = entityTask
-	item.MoveTo(a.now(), PlacementNext)
+	item.MoveTo(a.now(), TriageStock, StageNext, "")
 	a.save()
 	a.status = a.undoStatus("Converted " + item.ID + " to Task in Next.")
 }
@@ -2838,18 +2897,7 @@ func detailNoteMarkdown(item *Item) string {
 	if raw == "" && len(item.Notes) > 0 {
 		raw = strings.TrimSpace(strings.Join(item.Notes, "\n\n"))
 	}
-	if raw == "" {
-		return ""
-	}
-
-	lines := strings.Split(raw, "\n")
-	if len(lines) > 0 && strings.HasPrefix(lines[0], "# ") {
-		lines = lines[1:]
-		if len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
-			lines = lines[1:]
-		}
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	return raw
 }
 
 func listTitleWidth(width int) int {
@@ -2870,6 +2918,33 @@ func listChecklistProgress(notes []string) string {
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
 	percent := (done * 100) / total
 	return fmt.Sprintf("%s %3d%%", bar, percent)
+}
+
+func itemChecklistProgress(item Item) string {
+	sources := []string{}
+	if raw := strings.TrimSpace(strings.ReplaceAll(item.NoteMarkdown, "\r\n", "\n")); raw != "" {
+		sources = append(sources, raw)
+	}
+	sources = append(sources, item.Notes...)
+	return listChecklistProgress(sources)
+}
+
+func renderStateTitleProgressCells(state, title, progress string, width int) string {
+	titleWidth := max(1, width-(8+1+listProgressWidth+1))
+	return strings.Join([]string{
+		padCell(state, 8),
+		padCell(title, titleWidth),
+		padCell(progress, listProgressWidth),
+	}, " ")
+}
+
+func renderThemeTitleProgressCells(theme, title, progress string, width int) string {
+	titleWidth := max(1, width-(12+1+listProgressWidth+1))
+	return strings.Join([]string{
+		padCell(theme, 12),
+		padCell(title, titleWidth),
+		padCell(progress, listProgressWidth),
+	}, " ")
 }
 
 const listTypeWidth = 5
@@ -3165,41 +3240,71 @@ func sortedIntKeys(set map[int]struct{}) []int {
 	return out
 }
 
-func sectionForPlacement(p Placement) section {
+func currentMoveOption(item Item) moveOption {
+	switch {
+	case item.Triage == TriageInbox:
+		return moveToNext
+	case item.Triage == TriageStock && item.Stage == StageNow:
+		return moveToNow
+	case item.Triage == TriageStock && item.Stage == StageNext:
+		return moveToNext
+	case item.Triage == TriageStock && item.Stage == StageLater:
+		return moveToLater
+	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled:
+		return moveToScheduled
+	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring:
+		return moveToRecurring
+	default:
+		return moveToNext
+	}
+}
+
+func applyMoveOption(item *Item, now time.Time, target moveOption) {
+	switch target {
+	case moveToNow:
+		item.MoveTo(now, TriageStock, StageNow, "")
+	case moveToNext:
+		item.MoveTo(now, TriageStock, StageNext, "")
+	case moveToLater:
+		item.MoveTo(now, TriageStock, StageLater, "")
+	case moveToScheduled:
+		item.MoveTo(now, TriageDeferred, "", DeferredKindScheduled)
+	case moveToRecurring:
+		item.MoveTo(now, TriageDeferred, "", DeferredKindRecurring)
+	}
+}
+
+func sectionForMoveOption(p moveOption) section {
 	switch p {
-	case PlacementInbox:
-		return sectionInbox
-	case PlacementNow:
+	case moveToNow:
 		return sectionToday
-	case PlacementNext:
+	case moveToNext:
 		return sectionNext
-	case PlacementLater:
+	case moveToLater:
 		return sectionNext
-	case PlacementScheduled:
-		return sectionDeferred
-	case PlacementRecurring:
+	case moveToScheduled, moveToRecurring:
 		return sectionDeferred
 	default:
-		return sectionToday
+		return sectionInbox
 	}
 }
 
-func nextPlacement(p Placement) Placement {
-	index := slicesIndexPlacement(p)
-	return allPlacements[(index+1)%len(allPlacements)]
+func nextMoveOption(p moveOption) moveOption {
+	index := slicesIndexMoveOption(p)
+	return moveOptions[(index+1)%len(moveOptions)]
 }
 
-func prevPlacement(p Placement) Placement {
-	index := slicesIndexPlacement(p)
+func prevMoveOption(p moveOption) moveOption {
+	index := slicesIndexMoveOption(p)
 	if index == 0 {
-		return allPlacements[len(allPlacements)-1]
+		return moveOptions[len(moveOptions)-1]
 	}
-	return allPlacements[index-1]
+	return moveOptions[index-1]
 }
 
-func slicesIndexPlacement(p Placement) int {
-	for i, placement := range allPlacements {
-		if placement == p {
+func slicesIndexMoveOption(p moveOption) int {
+	for i, option := range moveOptions {
+		if option == p {
 			return i
 		}
 	}

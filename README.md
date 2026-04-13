@@ -40,10 +40,12 @@ If you want to start with your own empty data, skip `--seed-demo`.
 Taskbench reads configuration from your OS config directory, for example `~/.config/taskbench/config.json` on Linux. Runtime data is stored in the current working directory by default, or in the directory you set in config:
 
 ```text
-./tasks.ndjson
-./notes/
-./activity.ndjson
-./archive/
+./vault/
+  inbox/
+  tasks/
+  issues/
+  themes/
+  knowledge/
 ```
 
 ## Run
@@ -75,18 +77,18 @@ taskbench config path
 Active task state is stored in the configured data directory. A one-off override is still available with `--data-dir` or `TASKBENCH_DATA_DIR`:
 
 ```text
-./tasks.ndjson
-./notes/<id>.md
+./vault/inbox/<id>.md
+./vault/tasks/<id>/task.md
+./vault/issues/<id>/issue.md
+./vault/themes/<id>/theme.md
 ```
-
-`tasks.ndjson` holds the current state for active tasks. Long-form notes live in `notes/<id>.md` only when needed.
 
 The intended model is:
 
-- task state stays compact and machine-readable
-- note files are created only for tasks that need long-form text
+- task and issue metadata lives with each item in the vault
+- long-form notes stay in per-item directories
 - recurring rules are edited in the app with `c`
-- archival is expected once active data grows large
+- Git remains sufficient for inspection, history, and review
 
 See [docs/storage-model.md](docs/storage-model.md) for the storage and archive design.
 

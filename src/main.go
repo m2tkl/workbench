@@ -20,9 +20,6 @@ func Run(args []string) int {
 	if isVaultCommand(args) {
 		return runVaultCommand(args)
 	}
-	if isMigrateCommand(args) {
-		return runMigrateVault(args)
-	}
 
 	options, err := parseRunOptions(args)
 	if err != nil {
@@ -32,76 +29,57 @@ func Run(args []string) int {
 
 	store := NewStore(options.storePath)
 	if options.seedDemo {
-		if options.useVault {
-			fmt.Fprintln(os.Stderr, "--seed-demo does not support --vault")
-			return 1
-		}
 		if err := store.Save(demoState(time.Now())); err != nil {
 			fmt.Fprintf(os.Stderr, "seed demo data: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(os.Stdout, "demo data written to %s\n", store.TasksPath())
+		fmt.Fprintf(os.Stdout, "demo data written to %s\n", store.vault.RootDir())
 		return 0
 	}
 
-	var (
-		state State
-		app   *App
-	)
-	if options.useVault {
-		vault := NewVault(options.storePath)
-		state, err = LoadVaultState(vault)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load vault: %v\n", err)
-			return 1
-		}
-		app = NewApp(store, state)
-		themes, err := vault.LoadThemes()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load themes: %v\n", err)
-			return 1
-		}
-		app.themes = themes
-		app.loadState = func() (State, error) { return LoadVaultState(vault) }
-		app.saveState = func(state State) error { return SaveVaultState(vault, state) }
-		app.canEditMD = false
-		app.view = viewWorkbench
-		app.selectedSection = sectionIssueNoStatus
-		app.actionSection = sectionToday
-		app.focus = paneSidebar
-		app.resolveRef = func(ref string) (string, error) {
-			ref = strings.TrimSpace(ref)
-			if ref == "" {
-				return "", fmt.Errorf("empty ref")
-			}
-			if filepath.IsAbs(ref) {
-				return ref, nil
-			}
-			return filepath.Join(vault.RootDir(), ref), nil
-		}
-		app.issueAssetSummary = func(id string) IssueAssetSummary {
-			summary, err := vault.SummarizeIssue(id)
-			if err != nil {
-				return IssueAssetSummary{}
-			}
-			return summary
-		}
-		app.themeAssetSummary = func(id string) ThemeAssetSummary {
-			summary, err := vault.SummarizeTheme(id)
-			if err != nil {
-				return ThemeAssetSummary{}
-			}
-			return summary
-		}
-		app.status = "Vault mode: inbox, tasks, and issues are backed by vault/."
-	} else {
-		state, err = store.Load()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load state: %v\n", err)
-			return 1
-		}
-		app = NewApp(store, state)
+	state, err := store.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load vault: %v\n", err)
+		return 1
 	}
+	app := NewApp(store, state)
+	themes, err := store.vault.LoadThemes()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load themes: %v\n", err)
+		return 1
+	}
+	app.themes = themes
+	app.loadState = store.Load
+	app.saveState = store.Save
+	app.view = viewWorkbench
+	app.selectedSection = sectionIssueNoStatus
+	app.actionSection = sectionToday
+	app.focus = paneSidebar
+	app.resolveRef = func(ref string) (string, error) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return "", fmt.Errorf("empty ref")
+		}
+		if filepath.IsAbs(ref) {
+			return ref, nil
+		}
+		return filepath.Join(store.vault.RootDir(), ref), nil
+	}
+	app.issueAssetSummary = func(id string) IssueAssetSummary {
+		summary, err := store.vault.SummarizeIssue(id)
+		if err != nil {
+			return IssueAssetSummary{}
+		}
+		return summary
+	}
+	app.themeAssetSummary = func(id string) ThemeAssetSummary {
+		summary, err := store.vault.SummarizeTheme(id)
+		if err != nil {
+			return ThemeAssetSummary{}
+		}
+		return summary
+	}
+	app.status = "Inbox, tasks, issues, and themes are backed by vault/."
 
 	program := tea.NewProgram(app, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
@@ -114,7 +92,6 @@ func Run(args []string) int {
 type runOptions struct {
 	storePath string
 	seedDemo  bool
-	useVault  bool
 }
 
 func parseRunOptions(args []string) (runOptions, error) {
@@ -128,7 +105,6 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&options.storePath, "data-dir", defaultPath, "directory used to store taskbench data")
 	fs.BoolVar(&options.seedDemo, "seed-demo", false, "write demo data to the active store")
-	fs.BoolVar(&options.useVault, "vault", false, "read the vault model in the TUI")
 
 	if err := fs.Parse(args[1:]); err != nil {
 		return runOptions{}, fmt.Errorf("parse args: %w", err)

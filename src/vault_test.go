@@ -21,12 +21,15 @@ func TestVaultRoundTrip(t *testing.T) {
 		Metadata: Metadata{
 			ID:      "expense-submit",
 			Title:   "Submit travel reimbursement",
-			State:   WorkStateNow,
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNow,
 			Created: "2026-04-12",
 			Updated: "2026-04-12",
 			Tags:    []string{"admin"},
 			Refs:    []string{"knowledge/expense-submit.md"},
 		},
+		Body: "Use the April receipt batch.\n",
 	}
 	if err := vault.SaveTask(task); err != nil {
 		t.Fatalf("SaveTask returned error: %v", err)
@@ -36,13 +39,16 @@ func TestVaultRoundTrip(t *testing.T) {
 		Metadata: Metadata{
 			ID:      "otp-tx-design",
 			Title:   "OTP transaction design",
-			State:   WorkStateNext,
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNext,
 			Created: "2026-04-12",
 			Updated: "2026-04-12",
 			Tags:    []string{"otp", "tx"},
 			Refs:    []string{"themes/auth-stepup/context/constraints.md"},
 		},
 		Theme: "auth-stepup",
+		Body:  "Clarify timeout and retry rules.\n",
 	}
 	if err := vault.SaveIssue(issue); err != nil {
 		t.Fatalf("SaveIssue returned error: %v", err)
@@ -54,6 +60,7 @@ func TestVaultRoundTrip(t *testing.T) {
 		Created: "2026-04-12",
 		Updated: "2026-04-12",
 		Tags:    []string{"auth", "stepup"},
+		Body:    "Shared context for step-up work.\n",
 	}
 	if err := vault.SaveTheme(theme); err != nil {
 		t.Fatalf("SaveTheme returned error: %v", err)
@@ -78,8 +85,11 @@ func TestVaultRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadTasks returned error: %v", err)
 	}
-	if len(gotTasks) != 1 || gotTasks[0].ID != task.ID || gotTasks[0].State != WorkStateNow {
+	if len(gotTasks) != 1 || gotTasks[0].ID != task.ID || gotTasks[0].Stage != StageNow {
 		t.Fatalf("LoadTasks = %#v", gotTasks)
+	}
+	if gotTasks[0].Body != "Use the April receipt batch." {
+		t.Fatalf("task body = %q", gotTasks[0].Body)
 	}
 	if len(gotTasks[0].Refs) != 1 || gotTasks[0].Refs[0] != "knowledge/expense-submit.md" {
 		t.Fatalf("task refs = %#v", gotTasks[0].Refs)
@@ -92,6 +102,9 @@ func TestVaultRoundTrip(t *testing.T) {
 	if len(gotIssues) != 1 || gotIssues[0].Theme != "auth-stepup" {
 		t.Fatalf("LoadIssues = %#v", gotIssues)
 	}
+	if gotIssues[0].Body != "Clarify timeout and retry rules." {
+		t.Fatalf("issue body = %q", gotIssues[0].Body)
+	}
 	if len(gotIssues[0].Refs) != 1 || gotIssues[0].Refs[0] != "themes/auth-stepup/context/constraints.md" {
 		t.Fatalf("issue refs = %#v", gotIssues[0].Refs)
 	}
@@ -102,6 +115,9 @@ func TestVaultRoundTrip(t *testing.T) {
 	}
 	if len(gotThemes) != 1 || gotThemes[0].ID != theme.ID {
 		t.Fatalf("LoadThemes = %#v", gotThemes)
+	}
+	if gotThemes[0].Body != "Shared context for step-up work." {
+		t.Fatalf("theme body = %q", gotThemes[0].Body)
 	}
 
 	gotKnowledge, err := vault.LoadKnowledgeIndex()
@@ -124,33 +140,35 @@ func TestTaskAndIssueFromInbox(t *testing.T) {
 		Body:    "raw notes",
 	}
 
-	task := TaskFromInbox(inbox, now, WorkStateNext)
-	if task.ID != inbox.ID || task.Title != inbox.Title || task.State != WorkStateNext {
+	task := TaskFromInbox(inbox, now, TriageStock, StageNext, "")
+	if task.ID != inbox.ID || task.Title != inbox.Title || task.Stage != StageNext {
 		t.Fatalf("TaskFromInbox = %#v", task)
 	}
 	if task.Created != "2026-04-10" || task.Updated != "2026-04-12" {
 		t.Fatalf("unexpected task timestamps: %#v", task.Metadata)
 	}
 
-	issue := IssueFromInbox(inbox, now, WorkStateNow, "auth-stepup")
-	if issue.ID != inbox.ID || issue.Theme != "auth-stepup" || issue.State != WorkStateNow {
+	issue := IssueFromInbox(inbox, now, TriageStock, StageNow, "", "auth-stepup")
+	if issue.ID != inbox.ID || issue.Theme != "auth-stepup" || issue.Stage != StageNow {
 		t.Fatalf("IssueFromInbox = %#v", issue)
 	}
 }
 
-func TestVaultSaveTaskRejectsInvalidState(t *testing.T) {
+func TestVaultSaveTaskRejectsInvalidMetadata(t *testing.T) {
 	vault := NewVault(t.TempDir())
 	err := vault.SaveTask(TaskDoc{
 		Metadata: Metadata{
 			ID:      "bad",
 			Title:   "Bad",
-			State:   WorkState("scheduled"),
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   "",
 			Created: "2026-04-12",
 			Updated: "2026-04-12",
 		},
 	})
 	if err == nil {
-		t.Fatal("expected invalid state error")
+		t.Fatal("expected invalid metadata error")
 	}
 }
 
@@ -190,7 +208,9 @@ func TestLoadVaultStateMapsInboxTasksAndIssuesIntoSections(t *testing.T) {
 		Metadata: Metadata{
 			ID:      "expense-submit",
 			Title:   "Submit expense",
-			State:   WorkStateNow,
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNow,
 			Created: "2026-04-12",
 			Updated: "2026-04-12",
 			Refs:    []string{"knowledge/expense-submit.md"},
@@ -205,7 +225,9 @@ func TestLoadVaultStateMapsInboxTasksAndIssuesIntoSections(t *testing.T) {
 		Metadata: Metadata{
 			ID:      "otp-tx-design",
 			Title:   "OTP Tx design",
-			State:   WorkStateNext,
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNext,
 			Created: "2026-04-12",
 			Updated: "2026-04-12",
 		},
@@ -269,7 +291,7 @@ func TestSaveVaultStatePersistsMutationAndConversion(t *testing.T) {
 
 	state.Items[0].EntityType = entityIssue
 	state.Items[0].Theme = "auth-stepup"
-	state.Items[0].MoveTo(time.Date(2026, 4, 12, 12, 0, 0, 0, time.UTC), PlacementNext)
+	state.Items[0].MoveTo(time.Date(2026, 4, 12, 12, 0, 0, 0, time.UTC), TriageStock, StageNext, "")
 
 	if err := SaveVaultState(vault, state); err != nil {
 		t.Fatalf("SaveVaultState returned error: %v", err)
@@ -284,12 +306,8 @@ func TestSaveVaultStatePersistsMutationAndConversion(t *testing.T) {
 	if len(issues) != 1 || issues[0].ID != "capture-1" || issues[0].Theme != "auth-stepup" {
 		t.Fatalf("LoadIssues = %#v", issues)
 	}
-	memos, err := loadMarkdownSnippets(vault.IssueMemosDir("capture-1"))
-	if err != nil {
-		t.Fatalf("loadMarkdownSnippets returned error: %v", err)
-	}
-	if len(memos) != 1 || memos[0] != "raw thought" {
-		t.Fatalf("issue memos = %#v", memos)
+	if issues[0].Body != "raw thought" {
+		t.Fatalf("issue body = %q", issues[0].Body)
 	}
 }
 
@@ -300,7 +318,9 @@ func TestSaveVaultStatePersistsUpdatedIssueTheme(t *testing.T) {
 		Metadata: Metadata{
 			ID:      "otp-tx-design",
 			Title:   "OTP Tx design",
-			State:   WorkStateNext,
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNext,
 			Created: "2026-04-12",
 			Updated: "2026-04-12",
 		},

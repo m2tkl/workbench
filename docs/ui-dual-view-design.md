@@ -126,7 +126,7 @@ Themes / No Theme
 Important details:
 
 - theme is not a physical parent in storage
-- `No Theme` remains a first-class planning bucket
+- `No Theme` remains a first-class planning filter
 - issue state tabs are filters inside the selected theme
 
 ### Action lane
