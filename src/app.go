@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ const (
 	modeEditRefs
 	modeEditTheme
 	modeConvertInboxIssue
+	modeSourceWorkbench
 )
 
 type section int
@@ -102,18 +104,20 @@ type undoState struct {
 }
 
 type App struct {
-	store      Store
-	state      State
-	now        func() time.Time
-	openEditor func(path string) tea.Cmd
-	saveState  func(State) error
-	readOnly   bool
-	loadState  func() (State, error)
-	canEditMD  bool
-	resolveRef func(string) (string, error)
-	themes     []ThemeDoc
-	issueAssetSummary func(string) IssueAssetSummary
-	themeAssetSummary func(string) ThemeAssetSummary
+	store                Store
+	state                State
+	now                  func() time.Time
+	openEditor           func(path string) tea.Cmd
+	saveState            func(State) error
+	readOnly             bool
+	loadState            func() (State, error)
+	canEditMD            bool
+	resolveRef           func(string) (string, error)
+	themes               []ThemeDoc
+	startSourceWorkbench func() (string, error)
+	stopSourceWorkbench  func() error
+	issueAssetSummary    func(string) IssueAssetSummary
+	themeAssetSummary    func(string) ThemeAssetSummary
 
 	today string
 
@@ -141,14 +145,15 @@ type App struct {
 	filter string
 	status string
 
-	inputs      []textinput.Model
-	inputCursor int
+	inputs        []textinput.Model
+	inputCursor   int
 	keepModalOpen bool
 
-	recurringField  int
-	recurringOption int
-	recurringDraft  recurringDraft
-	refIndex        int
+	recurringField           int
+	recurringOption          int
+	recurringDraft           recurringDraft
+	refIndex                 int
+	sourceWorkbenchDialogURL string
 
 	undo *undoState
 }
@@ -184,6 +189,12 @@ func NewApp(store Store, state State) *App {
 	app.canEditMD = true
 	app.resolveRef = func(ref string) (string, error) {
 		return "", fmt.Errorf("refs are not configured in this mode")
+	}
+	app.startSourceWorkbench = func() (string, error) {
+		return "http://" + defaultSourceWorkbenchAddr, nil
+	}
+	app.stopSourceWorkbench = func() error {
+		return nil
 	}
 	app.issueAssetSummary = func(string) IssueAssetSummary { return IssueAssetSummary{} }
 	app.themeAssetSummary = func(string) ThemeAssetSummary { return ThemeAssetSummary{} }
@@ -374,6 +385,8 @@ func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.completeItem()
+	case "D":
+		a.openSourceInboxDialog()
 	case "r":
 		if a.ensureMutable("Vault mode is read-only for now.") {
 			return a, nil
@@ -437,6 +450,12 @@ func (a *App) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q", "?":
 			a.mode = modeNormal
 			a.status = "Closed help."
+		}
+		return a, nil
+	case modeSourceWorkbench:
+		switch msg.String() {
+		case "esc", "enter", "q", "?":
+			a.closeSourceWorkbenchDialog()
 		}
 		return a, nil
 	case modeRecurring:
@@ -1052,6 +1071,7 @@ func (a *App) renderModal(width, height int) string {
 			"Y    edit theme on issue",
 			"I    convert inbox item to issue with theme search",
 			"T    convert inbox item to task",
+			"D    open source inbox dialog",
 			"space  select item",
 			"m    move item or selection",
 			"c    edit deferred rule",
@@ -1065,6 +1085,22 @@ func (a *App) renderModal(width, height int) string {
 			"Done for Day keeps the task open. Complete finishes it.",
 			"",
 			"Esc, q, ?  close help",
+		)
+		return lipgloss.NewStyle().
+			Padding(1, 2).
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(lipgloss.Color("86")).
+			Width(width).
+			Height(height).
+			Render(strings.Join(append([]string{title, ""}, body...), "\n"))
+	case modeSourceWorkbench:
+		title = "Source Inbox"
+		body = append(body,
+			"Open this URL while this dialog is visible:",
+			"",
+			a.sourceWorkbenchDialogURL,
+			"",
+			"Enter or Esc closes this dialog and stops the server.",
 		)
 		return lipgloss.NewStyle().
 			Padding(1, 2).
@@ -2671,19 +2707,78 @@ func (a *App) themeDetailLines(width int) []string {
 
 	lines = append(lines, "")
 	for _, line := range []string{
-		fmt.Sprintf("source files: %d", summary.SourceFiles),
 		fmt.Sprintf("context files: %d", summary.ContextFiles),
+		"sources are classified separately from themes",
 	} {
 		lines = append(lines, wrapText(line, width)...)
 	}
-
+	if len(theme.SourceRefs) > 0 {
+		lines = append(lines, "", "source refs:")
+		for _, ref := range theme.SourceRefs {
+			lines = append(lines, wrapText("  "+ref, width)...)
+		}
+	}
+	if docs := a.themeContextDocNames(theme.ID); len(docs) > 0 {
+		lines = append(lines, "", "context docs:")
+		for _, name := range docs {
+			lines = append(lines, wrapText("  "+name, width)...)
+		}
+	}
 	lines = append(lines, "")
 	if raw := strings.TrimSpace(theme.Body); raw != "" {
 		lines = appendMarkdownLines(lines, raw, width)
 	} else {
 		lines = append(lines, "  -")
 	}
+	lines = append(lines, "", "Press D to open the source inbox dialog.")
 	return lines
+}
+
+func (a *App) themeContextDocNames(themeID string) []string {
+	docs, err := a.store.vault.LoadThemeContextDocs(themeID)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		if strings.TrimSpace(doc.Path) == "" {
+			continue
+		}
+		names = append(names, filepath.Base(doc.Path))
+	}
+	slices.Sort(names)
+	return names
+}
+
+func (a *App) openSourceInboxDialog() {
+	theme := a.selectedTheme()
+	if theme == nil {
+		a.status = "Select a theme to open the source inbox dialog."
+		return
+	}
+	if a.startSourceWorkbench == nil {
+		a.status = "Source inbox is not configured."
+		return
+	}
+	baseURL, err := a.startSourceWorkbench()
+	if err != nil {
+		a.status = "Source inbox failed to start: " + err.Error()
+		return
+	}
+	a.sourceWorkbenchDialogURL = buildSourceWorkbenchURL(baseURL)
+	a.mode = modeSourceWorkbench
+}
+
+func (a *App) closeSourceWorkbenchDialog() {
+	a.mode = modeNormal
+	a.sourceWorkbenchDialogURL = ""
+	if a.stopSourceWorkbench != nil {
+		if err := a.stopSourceWorkbench(); err != nil {
+			a.status = "Source inbox failed to stop: " + err.Error()
+			return
+		}
+	}
+	a.status = "Closed source inbox."
 }
 
 func appendMarkdownLines(lines []string, raw string, width int) []string {

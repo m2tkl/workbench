@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode"
 )
 
 func isVaultCommand(args []string) bool {
@@ -108,7 +107,7 @@ func runVaultList(args []string) int {
 
 func runVaultAdd(args []string) int {
 	if len(args) < 4 {
-		fmt.Fprintf(os.Stderr, "usage: %s vault add <inbox|task|issue|theme> [flags]\n", flagSetName(args))
+		fmt.Fprintf(os.Stderr, "usage: %s vault add <inbox|task|issue|theme|theme-context|source> [flags]\n", flagSetName(args))
 		return 1
 	}
 	switch args[3] {
@@ -120,6 +119,10 @@ func runVaultAdd(args []string) int {
 		return runVaultAddIssue(args)
 	case "theme":
 		return runVaultAddTheme(args)
+	case "theme-context":
+		return runVaultAddThemeContext(args)
+	case "source":
+		return runVaultAddSource(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown vault add target: %s\n", args[3])
 		return 1
@@ -135,7 +138,6 @@ func runVaultAddInbox(args []string) int {
 	fs := flag.NewFlagSet("vault add inbox", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
-	id := fs.String("id", "", "inbox item id")
 	title := fs.String("title", "", "inbox item title")
 	body := fs.String("body", "", "inbox item body")
 	tags := fs.String("tags", "", "comma-separated tags")
@@ -150,11 +152,7 @@ func runVaultAddInbox(args []string) int {
 	}
 	now := todayLocal()
 	item := NewInboxCapture(now, *title, *body, splitCSV(*tags))
-	if strings.TrimSpace(*id) != "" {
-		item.ID = strings.TrimSpace(*id)
-	} else {
-		item.ID = chooseID(item.Title, item.ID)
-	}
+	item.ID = newID()
 	vault := NewVault(root)
 	if err := vault.SaveInboxItem(item); err != nil {
 		fmt.Fprintf(os.Stderr, "save inbox item: %v\n", err)
@@ -172,7 +170,6 @@ func runVaultAddTask(args []string) int {
 	fs := flag.NewFlagSet("vault add task", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
-	id := fs.String("id", "", "task id")
 	title := fs.String("title", "", "task title")
 	status := fs.String("status", "open", "task status")
 	triage := fs.String("triage", string(TriageStock), "task triage")
@@ -186,7 +183,7 @@ func runVaultAddTask(args []string) int {
 	}
 	task := TaskDoc{
 		Metadata: Metadata{
-			ID:           chooseID(*title, strings.TrimSpace(*id)),
+			ID:           newID(),
 			Title:        strings.TrimSpace(*title),
 			Status:       strings.TrimSpace(*status),
 			Triage:       Triage(strings.TrimSpace(*triage)),
@@ -215,7 +212,6 @@ func runVaultAddIssue(args []string) int {
 	fs := flag.NewFlagSet("vault add issue", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
-	id := fs.String("id", "", "issue id")
 	title := fs.String("title", "", "issue title")
 	theme := fs.String("theme", "", "theme id")
 	status := fs.String("status", "open", "issue status")
@@ -230,7 +226,7 @@ func runVaultAddIssue(args []string) int {
 	}
 	issue := IssueDoc{
 		Metadata: Metadata{
-			ID:           chooseID(*title, strings.TrimSpace(*id)),
+			ID:           newID(),
 			Title:        strings.TrimSpace(*title),
 			Status:       strings.TrimSpace(*status),
 			Triage:       Triage(strings.TrimSpace(*triage)),
@@ -260,19 +256,20 @@ func runVaultAddTheme(args []string) int {
 	fs := flag.NewFlagSet("vault add theme", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
-	id := fs.String("id", "", "theme id")
 	title := fs.String("title", "", "theme title")
 	tags := fs.String("tags", "", "comma-separated tags")
+	sourceRefs := fs.String("source-refs", "", "comma-separated source refs")
 	if err := fs.Parse(args[4:]); err != nil {
 		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
 		return 1
 	}
 	theme := ThemeDoc{
-		ID:      chooseID(*title, strings.TrimSpace(*id)),
-		Title:   strings.TrimSpace(*title),
-		Created: dateKey(todayLocal()),
-		Updated: dateKey(todayLocal()),
-		Tags:    splitCSV(*tags),
+		ID:         newID(),
+		Title:      strings.TrimSpace(*title),
+		Created:    dateKey(todayLocal()),
+		Updated:    dateKey(todayLocal()),
+		Tags:       splitCSV(*tags),
+		SourceRefs: splitCSV(*sourceRefs),
 	}
 	vault := NewVault(*dataDir)
 	if err := vault.SaveTheme(theme); err != nil {
@@ -280,6 +277,83 @@ func runVaultAddTheme(args []string) int {
 		return 1
 	}
 	return printJSON(theme)
+}
+
+func runVaultAddThemeContext(args []string) int {
+	defaultPath, err := defaultStorePath()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
+		return 1
+	}
+	fs := flag.NewFlagSet("vault add theme-context", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	themeID := fs.String("theme", "", "theme id")
+	name := fs.String("name", "", "context filename")
+	title := fs.String("title", "", "context title")
+	body := fs.String("body", "", "context body")
+	sourceRefs := fs.String("source-refs", "", "comma-separated source refs")
+	if err := fs.Parse(args[4:]); err != nil {
+		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
+		return 1
+	}
+	vault := NewVault(*dataDir)
+	doc := ThemeContextDoc{
+		Title:      strings.TrimSpace(*title),
+		SourceRefs: splitCSV(*sourceRefs),
+		Body:       strings.TrimSpace(*body),
+	}
+	if err := vault.SaveThemeContextDoc(strings.TrimSpace(*themeID), strings.TrimSpace(*name), doc); err != nil {
+		fmt.Fprintf(os.Stderr, "save theme context: %v\n", err)
+		return 1
+	}
+	loaded, err := readThemeContextDoc(vault.ThemeContextPath(strings.TrimSpace(*themeID), strings.TrimSpace(*name)))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load theme context: %v\n", err)
+		return 1
+	}
+	loaded.Path = vault.ThemeContextPath(strings.TrimSpace(*themeID), strings.TrimSpace(*name))
+	return printJSON(loaded)
+}
+
+func runVaultAddSource(args []string) int {
+	defaultPath, err := defaultStorePath()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
+		return 1
+	}
+	fs := flag.NewFlagSet("vault add source", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	filePath := fs.String("file", "", "path to the source file")
+	title := fs.String("title", "", "source title")
+	tags := fs.String("tags", "", "comma-separated tags")
+	links := fs.String("links", "", "comma-separated metadata links")
+	if err := fs.Parse(args[4:]); err != nil {
+		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*filePath) == "" {
+		fmt.Fprintln(os.Stderr, "file is required")
+		return 1
+	}
+	root, err := filepath.Abs(*dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve data dir: %v\n", err)
+		return 1
+	}
+	vault := NewVault(root)
+	doc, err := vault.ImportSourceDocument(strings.TrimSpace(*filePath), SourceImportOptions{
+		Title: strings.TrimSpace(*title),
+		Tags:  splitCSV(*tags),
+		Links: splitCSV(*links),
+		Now:   todayLocal(),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "import source document: %v\n", err)
+		return 1
+	}
+	return printJSON(doc)
 }
 
 func parseDataDirFlag(name string, args []string) (string, error) {
@@ -327,38 +401,6 @@ func splitCSV(raw string) []string {
 		values = append(values, part)
 	}
 	return normalizeStrings(values)
-}
-
-func chooseID(title, fallback string) string {
-	if strings.TrimSpace(fallback) != "" {
-		return fallback
-	}
-	if slug := slugify(title); slug != "" {
-		return slug
-	}
-	return fallback
-}
-
-func slugify(raw string) string {
-	raw = strings.ToLower(strings.TrimSpace(raw))
-	if raw == "" {
-		return ""
-	}
-	var b strings.Builder
-	lastDash := false
-	for _, r := range raw {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsNumber(r):
-			b.WriteRune(r)
-			lastDash = false
-		case r == '-' || r == '_' || unicode.IsSpace(r):
-			if !lastDash && b.Len() > 0 {
-				b.WriteByte('-')
-				lastDash = true
-			}
-		}
-	}
-	return strings.Trim(b.String(), "-")
 }
 
 func todayLocal() time.Time {

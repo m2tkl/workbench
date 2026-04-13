@@ -23,8 +23,12 @@ vault/
   themes/
     <theme-id>/
       theme.md
-      sources/
       context/
+  sources/
+    documents/
+    files/
+      staged/
+      imported/
   knowledge/
 ```
 
@@ -72,6 +76,7 @@ Theme metadata stores:
 - `created`
 - `updated`
 - `tags`
+- `source_refs`
 
 ## Responsibility Split
 
@@ -95,6 +100,13 @@ Supporting Markdown files answer:
 - Moving `Inbox -> Task` or `Inbox -> Issue` removes the inbox file and creates the destination directory.
 - Captured note content is written into `memos/captured.md` for tasks and issues.
 - Theme membership is stored on the issue itself via `theme`.
+- `sources/` is the global source collection root.
+- Extracted source documents live under `sources/documents/` and keep the original filename.
+- Raw uploaded files live under `sources/files/` and should stay out of Git.
+- Source entry content is Markdown with frontmatter such as `attachment`, `filename`, `links`, `tags`, and `imported_at`.
+- `theme.md` stores `source_refs` to define which external sources a theme is working from.
+- Theme-local `context/` documents can also store `source_refs`, and those refs should be a subset of the theme-level source set.
+- A browser-facing upload flow stages files in `sources/files/staged/`. A later agent or CLI step can extract and classify them.
 
 ## Future Direction
 

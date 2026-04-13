@@ -20,6 +20,9 @@ func Run(args []string) int {
 	if isVaultCommand(args) {
 		return runVaultCommand(args)
 	}
+	if isWebCommand(args) {
+		return runWebCommand(args)
+	}
 
 	options, err := parseRunOptions(args)
 	if err != nil {
@@ -65,6 +68,9 @@ func Run(args []string) int {
 		}
 		return filepath.Join(store.vault.RootDir(), ref), nil
 	}
+	workbenchRuntime := newSourceWorkbenchRuntime(store.vault, defaultSourceWorkbenchAddr)
+	app.startSourceWorkbench = workbenchRuntime.EnsureStarted
+	app.stopSourceWorkbench = workbenchRuntime.Stop
 	app.issueAssetSummary = func(id string) IssueAssetSummary {
 		summary, err := store.vault.SummarizeIssue(id)
 		if err != nil {

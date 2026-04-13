@@ -55,12 +55,13 @@ func TestVaultRoundTrip(t *testing.T) {
 	}
 
 	theme := ThemeDoc{
-		ID:      "auth-stepup",
-		Title:   "Step-up authentication design",
-		Created: "2026-04-12",
-		Updated: "2026-04-12",
-		Tags:    []string{"auth", "stepup"},
-		Body:    "Shared context for step-up work.\n",
+		ID:         "auth-stepup",
+		Title:      "Step-up authentication design",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-12",
+		Tags:       []string{"auth", "stepup"},
+		SourceRefs: []string{"sources/documents/research-brief.pptx", "knowledge/auth-basics.md"},
+		Body:       "Shared context for step-up work.\n",
 	}
 	if err := vault.SaveTheme(theme); err != nil {
 		t.Fatalf("SaveTheme returned error: %v", err)
@@ -119,6 +120,9 @@ func TestVaultRoundTrip(t *testing.T) {
 	if gotThemes[0].Body != "Shared context for step-up work." {
 		t.Fatalf("theme body = %q", gotThemes[0].Body)
 	}
+	if len(gotThemes[0].SourceRefs) != 2 || gotThemes[0].SourceRefs[0] != "knowledge/auth-basics.md" || gotThemes[0].SourceRefs[1] != "sources/documents/research-brief.pptx" {
+		t.Fatalf("theme source refs = %#v", gotThemes[0].SourceRefs)
+	}
 
 	gotKnowledge, err := vault.LoadKnowledgeIndex()
 	if err != nil {
@@ -126,6 +130,84 @@ func TestVaultRoundTrip(t *testing.T) {
 	}
 	if len(gotKnowledge) != 1 || gotKnowledge[0].Title != "OTP Notes" {
 		t.Fatalf("LoadKnowledgeIndex = %#v", gotKnowledge)
+	}
+}
+
+func TestThemeContextDocRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.SaveTheme(ThemeDoc{
+		ID:         "auth-stepup",
+		Title:      "Step-up authentication design",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-12",
+		SourceRefs: []string{"knowledge/auth-basics.md", "sources/documents/research-brief.pptx"},
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+
+	doc := ThemeContextDoc{
+		Title:      "Constraints",
+		SourceRefs: []string{"sources/documents/research-brief.pptx"},
+		Body:       "Step-up flow constraints.\n",
+	}
+	if err := vault.SaveThemeContextDoc("auth-stepup", "constraints", doc); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+
+	docs, err := vault.LoadThemeContextDocs("auth-stepup")
+	if err != nil {
+		t.Fatalf("LoadThemeContextDocs returned error: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("LoadThemeContextDocs len = %d, want 1", len(docs))
+	}
+	if docs[0].Title != "Constraints" || docs[0].Body != "Step-up flow constraints." {
+		t.Fatalf("unexpected context doc: %#v", docs[0])
+	}
+	if len(docs[0].SourceRefs) != 1 || docs[0].SourceRefs[0] != "sources/documents/research-brief.pptx" {
+		t.Fatalf("context source refs = %#v", docs[0].SourceRefs)
+	}
+}
+
+func TestThemeContextDocRejectsRefsOutsideTheme(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.SaveTheme(ThemeDoc{
+		ID:         "auth-stepup",
+		Title:      "Step-up authentication design",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-12",
+		SourceRefs: []string{"sources/documents/research-brief.pptx"},
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+
+	err := vault.SaveThemeContextDoc("auth-stepup", "constraints", ThemeContextDoc{
+		Title:      "Constraints",
+		SourceRefs: []string{"sources/documents/other-deck.pptx"},
+		Body:       "Step-up flow constraints.",
+	})
+	if err == nil {
+		t.Fatal("expected SaveThemeContextDoc to reject undeclared source ref")
+	}
+}
+
+func TestLoadMarkdownSnippetsStripsFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "context.md"), []byte("---\ntitle: Constraints\nsource_refs:\n  - sources/documents/research-brief.pptx\n---\n\n# Constraints\n\nBody text\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	snippets, err := loadMarkdownSnippets(dir)
+	if err != nil {
+		t.Fatalf("loadMarkdownSnippets returned error: %v", err)
+	}
+	if len(snippets) != 1 {
+		t.Fatalf("loadMarkdownSnippets len = %d, want 1", len(snippets))
+	}
+	if snippets[0] != "# Constraints\n\nBody text" {
+		t.Fatalf("unexpected snippet: %q", snippets[0])
 	}
 }
 

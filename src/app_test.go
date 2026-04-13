@@ -247,29 +247,60 @@ func TestDetailLinesShowUserFacingTypeInsteadOfEntityOrKind(t *testing.T) {
 }
 
 func TestThemeDetailLinesShowRelatedIssues(t *testing.T) {
-	app := NewApp(newTestStore(t), State{
+	store := newTestStore(t)
+	if err := store.vault.SaveThemeContextDoc("auth-stepup", "constraints", ThemeContextDoc{
+		Title: "Constraints",
+		Body:  "Context body",
+	}); err == nil {
+		t.Fatal("expected SaveThemeContextDoc to require an existing theme")
+	}
+	if err := store.vault.SaveTheme(ThemeDoc{
+		ID:         "auth-stepup",
+		Title:      "Auth step-up",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-12",
+		SourceRefs: []string{"knowledge/auth-basics.md", "sources/documents/auth-deck.pptx"},
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if err := store.vault.SaveThemeContextDoc("auth-stepup", "constraints", ThemeContextDoc{
+		Title:      "Constraints",
+		Body:       "Context body",
+		SourceRefs: []string{"sources/documents/auth-deck.pptx"},
+	}); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+
+	app := NewApp(store, State{
 		Items: []Item{
 			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup"},
 			{ID: "issue-2", Title: "Review challenge flow", EntityType: entityIssue, Theme: "auth-stepup"},
 		},
 	})
 	app.themes = []ThemeDoc{{
-		ID:      "auth-stepup",
-		Title:   "Auth step-up",
-		Created: "2026-04-12",
-		Updated: "2026-04-12",
+		ID:         "auth-stepup",
+		Title:      "Auth step-up",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-12",
+		SourceRefs: []string{"knowledge/auth-basics.md", "sources/documents/auth-deck.pptx"},
 	}}
 	app.view = viewWorkbench
 	app.selectedSection = sectionIssueNoStatus
 	app.focus = paneSidebar
 	app.workbenchNavCursor = 8
 	app.themeAssetSummary = func(string) ThemeAssetSummary {
-		return ThemeAssetSummary{SourceFiles: 2, ContextFiles: 1}
+		return ThemeAssetSummary{ContextFiles: 1}
 	}
 
 	joined := strings.Join(app.detailLines(80), "\n")
-	if !strings.Contains(joined, "source files: 2") || !strings.Contains(joined, "context files: 1") {
+	if !strings.Contains(joined, "context files: 1") || !strings.Contains(joined, "sources are classified separately from themes") {
 		t.Fatalf("expected theme asset counts: %q", joined)
+	}
+	if !strings.Contains(joined, "source refs:") || !strings.Contains(joined, "knowledge/auth-basics.md") {
+		t.Fatalf("expected theme source refs: %q", joined)
+	}
+	if !strings.Contains(joined, "context docs:") || !strings.Contains(joined, "constraints.md") {
+		t.Fatalf("expected theme context docs: %q", joined)
 	}
 }
 
@@ -1185,14 +1216,38 @@ func TestExecutionDetailLinesShowHeadingWhenNoteHasOnlyHeading(t *testing.T) {
 }
 
 func TestThemeDetailLinesShowThemeBodySummary(t *testing.T) {
-	app := NewApp(newTestStore(t), State{})
+	store := newTestStore(t)
+	if err := store.vault.SaveTheme(ThemeDoc{
+		ID:         "auth-stepup",
+		Title:      "Auth step-up",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-13",
+		SourceRefs: []string{"sources/documents/auth-deck.pptx"},
+		Body: strings.TrimSpace(`
+Step-up design constraints.
+
+Keep deeper notes below.
+`),
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if err := store.vault.SaveThemeContextDoc("auth-stepup", "constraints", ThemeContextDoc{
+		Title:      "Constraints",
+		SourceRefs: []string{"sources/documents/auth-deck.pptx"},
+		Body:       "Context body",
+	}); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+
+	app := NewApp(store, State{})
 	app.view = viewWorkbench
 	app.focus = paneList
 	app.themes = []ThemeDoc{{
-		ID:      "auth-stepup",
-		Title:   "Auth step-up",
-		Created: "2026-04-12",
-		Updated: "2026-04-13",
+		ID:         "auth-stepup",
+		Title:      "Auth step-up",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-13",
+		SourceRefs: []string{"sources/documents/auth-deck.pptx"},
 		Body: strings.TrimSpace(`
 Step-up design constraints.
 
@@ -1208,6 +1263,68 @@ Keep deeper notes below.
 	}
 	if !strings.Contains(joined, "Keep deeper notes below.") {
 		t.Fatalf("expected full theme body in detail, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "sources/documents/auth-deck.pptx") || !strings.Contains(joined, "constraints.md") {
+		t.Fatalf("expected theme refs and context docs, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Press D to open the source inbox dialog.") {
+		t.Fatalf("expected source workbench hint, got:\n%s", joined)
+	}
+}
+
+func TestShiftDShowsSourceInboxDialog(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	app.view = viewWorkbench
+	app.themes = []ThemeDoc{{ID: "auth-stepup", Title: "Auth step-up"}}
+	app.workbenchNavCursor = len(app.workbenchEntries()) - 1
+	started := false
+	stopped := false
+	app.startSourceWorkbench = func() (string, error) {
+		started = true
+		return "http://127.0.0.1:18080", nil
+	}
+	app.stopSourceWorkbench = func() error {
+		stopped = true
+		return nil
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	updated := model.(*App)
+
+	if !started {
+		t.Fatal("expected source workbench to be started")
+	}
+	if updated.mode != modeSourceWorkbench {
+		t.Fatalf("mode = %v, want modeSourceWorkbench", updated.mode)
+	}
+	if updated.sourceWorkbenchDialogURL != "http://127.0.0.1:18080/" {
+		t.Fatalf("dialog url = %q", updated.sourceWorkbenchDialogURL)
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(*App)
+
+	if !stopped {
+		t.Fatal("expected source workbench to be stopped")
+	}
+	if updated.mode != modeNormal {
+		t.Fatalf("mode = %v, want modeNormal", updated.mode)
+	}
+	if updated.status != "Closed source inbox." {
+		t.Fatalf("status = %q", updated.status)
+	}
+}
+
+func TestShiftDRequiresThemeSelection(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	app.view = viewWorkbench
+	app.workbenchNavCursor = 0
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	updated := model.(*App)
+
+	if updated.status != "Select a theme to open the source inbox dialog." {
+		t.Fatalf("status = %q", updated.status)
 	}
 }
 

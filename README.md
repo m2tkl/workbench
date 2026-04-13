@@ -83,6 +83,46 @@ Active task state is stored in the configured data directory. A one-off override
 ./vault/themes/<id>/theme.md
 ```
 
+Sources can also keep converted Markdown and raw attachments side by side:
+
+```text
+./vault/sources/documents/<original-filename>
+./vault/sources/files/staged/
+./vault/sources/files/imported/
+```
+
+Use top-level `sources/` as the collection root:
+
+- `sources/documents/`: extracted source documents, kept under the original filename
+- `sources/files/staged/`: uploaded files waiting for extract
+- `sources/files/imported/`: raw files linked from extracted entries
+
+Sources are independent from themes and can be classified later. Files under `sources/files/` stay out of Git. Documents in `sources/documents/` store Markdown content with frontmatter such as `attachment`, `filename`, `links`, `tags`, and `imported_at`.
+
+Themes refer to the sources they need from `theme.md` via `source_refs`, and theme-local `context/` documents can cite the relevant subset of those sources.
+
+You can also create a theme-local context document that cites a subset of the theme's `source_refs`:
+
+```bash
+taskbench vault add theme-context --theme auth-stepup --name constraints --title "Constraints" --source-refs sources/documents/auth-deck.pptx --body "Step-up flow constraints"
+```
+
+You can import a local file into the global source collection with:
+
+```bash
+taskbench vault add source --file ./brief.xlsx --links https://example.com/spec
+```
+
+Or start a small browser workbench for upload:
+
+```bash
+taskbench web serve --addr 127.0.0.1:8080
+```
+
+Open the shown URL and drop or pick a file to stage it into `sources/files/staged/`. Classify and extract it later with an agent or CLI flow.
+
+In the TUI workbench, select a theme and press `D` to open a dialog with the source inbox URL. The web server stays up only while that dialog is open.
+
 The intended model is:
 
 - task and issue metadata lives with each item in the vault

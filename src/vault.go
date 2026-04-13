@@ -56,12 +56,32 @@ type IssueDoc struct {
 }
 
 type ThemeDoc struct {
-	ID      string
-	Title   string
-	Created string
-	Updated string
-	Tags    []string
-	Body    string
+	ID         string
+	Title      string
+	Created    string
+	Updated    string
+	Tags       []string
+	SourceRefs []string
+	Body       string
+}
+
+type SourceDocument struct {
+	Path       string   `json:"path,omitempty"`
+	Title      string   `json:"title"`
+	Attachment string   `json:"attachment,omitempty"`
+	Filename   string   `json:"filename,omitempty"`
+	ImportedAt string   `json:"imported_at,omitempty"`
+	Converter  string   `json:"converter,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	Links      []string `json:"links,omitempty"`
+	Body       string   `json:"body,omitempty"`
+}
+
+type ThemeContextDoc struct {
+	Path       string   `json:"path,omitempty"`
+	Title      string   `json:"title"`
+	SourceRefs []string `json:"source_refs,omitempty"`
+	Body       string   `json:"body,omitempty"`
 }
 
 type KnowledgeDoc struct {
@@ -118,6 +138,26 @@ func (v VaultFS) KnowledgeDir() string {
 	return filepath.Join(v.RootDir(), "knowledge")
 }
 
+func (v VaultFS) SourcesDir() string {
+	return filepath.Join(v.RootDir(), "sources")
+}
+
+func (v VaultFS) SourceDocumentsDir() string {
+	return filepath.Join(v.SourcesDir(), "documents")
+}
+
+func (v VaultFS) SourceFilesDir() string {
+	return filepath.Join(v.SourcesDir(), "files")
+}
+
+func (v VaultFS) SourceStagedDir() string {
+	return filepath.Join(v.SourceFilesDir(), "staged")
+}
+
+func (v VaultFS) SourceImportedDir() string {
+	return filepath.Join(v.SourceFilesDir(), "imported")
+}
+
 func (v VaultFS) InboxPath(id string) string {
 	return filepath.Join(v.InboxDir(), id+".md")
 }
@@ -162,12 +202,12 @@ func (v VaultFS) ThemeMetaPath(id string) string {
 	return filepath.Join(v.ThemeDir(id), "theme.md")
 }
 
-func (v VaultFS) ThemeSourcesDir(id string) string {
-	return filepath.Join(v.ThemeDir(id), "sources")
-}
-
 func (v VaultFS) ThemeContextDir(id string) string {
 	return filepath.Join(v.ThemeDir(id), "context")
+}
+
+func (v VaultFS) ThemeContextPath(themeID, name string) string {
+	return filepath.Join(v.ThemeContextDir(themeID), ensureMarkdownName(name))
 }
 
 func (v VaultFS) EnsureLayout() error {
@@ -177,10 +217,16 @@ func (v VaultFS) EnsureLayout() error {
 		v.IssuesDir(),
 		v.ThemesDir(),
 		v.KnowledgeDir(),
+		v.SourceDocumentsDir(),
+		v.SourceStagedDir(),
+		v.SourceImportedDir(),
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
+	}
+	if err := os.WriteFile(filepath.Join(v.SourceFilesDir(), ".gitignore"), []byte("staged/**\nimported/**\n"), 0o644); err != nil {
+		return err
 	}
 	return nil
 }
@@ -272,16 +318,12 @@ func (v VaultFS) SummarizeIssue(id string) (IssueAssetSummary, error) {
 }
 
 func (v VaultFS) SummarizeTheme(id string) (ThemeAssetSummary, error) {
-	sourceFiles, err := countFiles(v.ThemeSourcesDir(id))
-	if err != nil {
-		return ThemeAssetSummary{}, err
-	}
 	contextFiles, err := countFiles(v.ThemeContextDir(id))
 	if err != nil {
 		return ThemeAssetSummary{}, err
 	}
 	return ThemeAssetSummary{
-		SourceFiles:  sourceFiles,
+		SourceFiles:  0,
 		ContextFiles: contextFiles,
 	}, nil
 }
@@ -332,7 +374,6 @@ func (v VaultFS) SaveTheme(theme ThemeDoc) error {
 		return err
 	}
 	for _, dir := range []string{
-		v.ThemeSourcesDir(theme.ID),
 		v.ThemeContextDir(theme.ID),
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -340,6 +381,66 @@ func (v VaultFS) SaveTheme(theme ThemeDoc) error {
 		}
 	}
 	return os.WriteFile(v.ThemeMetaPath(theme.ID), []byte(renderThemeDoc(theme)), 0o644)
+}
+
+func (v VaultFS) SaveThemeContextDoc(themeID, name string, doc ThemeContextDoc) error {
+	themeID = strings.TrimSpace(themeID)
+	name = strings.TrimSpace(name)
+	if themeID == "" {
+		return errors.New("theme id is required")
+	}
+	if name == "" {
+		return errors.New("context name is required")
+	}
+	doc = normalizeThemeContextDoc(doc)
+	if err := validateThemeContextDoc(doc); err != nil {
+		return err
+	}
+	theme, err := readThemeDoc(v.ThemeMetaPath(themeID))
+	if err != nil {
+		return err
+	}
+	if len(theme.SourceRefs) > 0 {
+		allowed := map[string]struct{}{}
+		for _, ref := range theme.SourceRefs {
+			allowed[ref] = struct{}{}
+		}
+		for _, ref := range doc.SourceRefs {
+			if _, ok := allowed[ref]; !ok {
+				return fmt.Errorf("context source ref is not declared on theme: %s", ref)
+			}
+		}
+	}
+	if err := os.MkdirAll(v.ThemeContextDir(themeID), 0o755); err != nil {
+		return err
+	}
+	path := v.ThemeContextPath(themeID, name)
+	doc.Path = path
+	return os.WriteFile(path, []byte(renderThemeContextDoc(doc)), 0o644)
+}
+
+func (v VaultFS) LoadThemeContextDocs(themeID string) ([]ThemeContextDoc, error) {
+	entries, err := readDirSorted(v.ThemeContextDir(themeID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	docs := []ThemeContextDoc{}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+		path := filepath.Join(v.ThemeContextDir(themeID), entry.Name())
+		doc, err := readThemeContextDoc(path)
+		if err != nil {
+			return nil, err
+		}
+		doc.Path = path
+		docs = append(docs, doc)
+	}
+	return docs, nil
 }
 
 func (v VaultFS) WriteTaskMemo(id, name, content string) error {
@@ -446,8 +547,17 @@ func normalizeThemeDoc(theme ThemeDoc) ThemeDoc {
 	theme.Created = strings.TrimSpace(theme.Created)
 	theme.Updated = strings.TrimSpace(theme.Updated)
 	theme.Tags = normalizeStrings(theme.Tags)
+	theme.SourceRefs = normalizeStrings(theme.SourceRefs)
 	theme.Body = normalizeMarkdown(theme.Body)
 	return theme
+}
+
+func normalizeThemeContextDoc(doc ThemeContextDoc) ThemeContextDoc {
+	doc.Path = strings.TrimSpace(doc.Path)
+	doc.Title = strings.TrimSpace(doc.Title)
+	doc.SourceRefs = normalizeStrings(doc.SourceRefs)
+	doc.Body = normalizeMarkdown(doc.Body)
+	return doc
 }
 
 func normalizeInboxItem(item InboxItem) InboxItem {
@@ -533,6 +643,13 @@ func validateThemeDoc(theme ThemeDoc) error {
 	return nil
 }
 
+func validateThemeContextDoc(doc ThemeContextDoc) error {
+	if doc.Title == "" {
+		return errors.New("title is required")
+	}
+	return nil
+}
+
 func validateInboxItem(item InboxItem) error {
 	if item.ID == "" {
 		return errors.New("id is required")
@@ -613,8 +730,30 @@ func renderThemeDoc(theme ThemeDoc) string {
 		{Key: "created", Value: theme.Created},
 		{Key: "updated", Value: theme.Updated},
 		{Key: "tags", List: theme.Tags},
+		{Key: "source_refs", List: theme.SourceRefs},
 	})
 	return renderFrontmatterDoc(meta, theme.Body)
+}
+
+func renderSourceDocument(doc SourceDocument) string {
+	meta := renderYAMLMap([]yamlField{
+		{Key: "title", Value: doc.Title},
+		{Key: "attachment", Value: doc.Attachment},
+		{Key: "filename", Value: doc.Filename},
+		{Key: "imported_at", Value: doc.ImportedAt},
+		{Key: "converter", Value: doc.Converter},
+		{Key: "tags", List: doc.Tags},
+		{Key: "links", List: doc.Links},
+	})
+	return renderFrontmatterDoc(meta, doc.Body)
+}
+
+func renderThemeContextDoc(doc ThemeContextDoc) string {
+	meta := renderYAMLMap([]yamlField{
+		{Key: "title", Value: doc.Title},
+		{Key: "source_refs", List: doc.SourceRefs},
+	})
+	return renderFrontmatterDoc(meta, doc.Body)
 }
 
 func renderInboxItem(item InboxItem) string {
@@ -629,9 +768,9 @@ func renderInboxItem(item InboxItem) string {
 }
 
 type yamlField struct {
-	Key   string
-	Value string
-	List  []string
+	Key     string
+	Value   string
+	List    []string
 	IntList []int
 }
 
@@ -762,14 +901,29 @@ func readThemeDoc(path string) (ThemeDoc, error) {
 		return ThemeDoc{}, err
 	}
 	theme := normalizeThemeDoc(ThemeDoc{
-		ID:      fields["id"],
-		Title:   fields["title"],
-		Created: fields["created"],
-		Updated: fields["updated"],
-		Tags:    parseYAMLList(fields["_tags"]),
-		Body:    body,
+		ID:         fields["id"],
+		Title:      fields["title"],
+		Created:    fields["created"],
+		Updated:    fields["updated"],
+		Tags:       parseYAMLList(fields["_tags"]),
+		SourceRefs: parseYAMLList(fields["_source_refs"]),
+		Body:       body,
 	})
 	return theme, validateThemeDoc(theme)
+}
+
+func readThemeContextDoc(path string) (ThemeContextDoc, error) {
+	fields, body, err := parseMetadataDoc(path)
+	if err != nil {
+		return ThemeContextDoc{}, err
+	}
+	doc := normalizeThemeContextDoc(ThemeContextDoc{
+		Path:       path,
+		Title:      fields["title"],
+		SourceRefs: parseYAMLList(fields["_source_refs"]),
+		Body:       body,
+	})
+	return doc, validateThemeContextDoc(doc)
 }
 
 func readInboxItem(path string) (InboxItem, error) {
@@ -1150,13 +1304,21 @@ func loadMarkdownSnippets(dir string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		text := strings.TrimSpace(string(raw))
+		text := strings.TrimSpace(markdownBodyWithoutFrontmatter(string(raw)))
 		if text == "" {
 			continue
 		}
 		snippets = append(snippets, text)
 	}
 	return snippets, nil
+}
+
+func markdownBodyWithoutFrontmatter(raw string) string {
+	meta, body, err := splitFrontMatter(raw)
+	if err == nil && strings.TrimSpace(meta) != "" {
+		return body
+	}
+	return raw
 }
 
 func applyMarkdownSnippets(item *Item, snippets []string) {
