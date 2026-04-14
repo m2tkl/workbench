@@ -126,6 +126,7 @@ type App struct {
 	saveState            func(State) error
 	readOnly             bool
 	loadState            func() (State, error)
+	loadThemes           func() ([]ThemeDoc, error)
 	canEditMD            bool
 	resolveRef           func(string) (string, error)
 	themes               []ThemeDoc
@@ -203,6 +204,7 @@ func NewApp(store Store, state State) *App {
 	}
 	app.loadState = store.Load
 	app.saveState = store.Save
+	app.loadThemes = store.vault.LoadThemes
 	app.canEditMD = true
 	app.resolveRef = func(ref string) (string, error) {
 		return "", fmt.Errorf("refs are not configured in this mode")
@@ -248,14 +250,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a *App) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
-		if a.readOnly {
-			return a, tea.Quit
-		}
-		if err := a.store.Save(a.state); err != nil {
-			a.status = "save failed: " + err.Error()
-			return a, nil
-		}
 		return a, tea.Quit
+	case "ctrl+r":
+		a.reloadFromStore(nil)
+		return a, nil
 	case "?":
 		a.mode = modeHelp
 		return a, nil
@@ -1100,6 +1098,7 @@ func (a *App) renderModal(width, height int) string {
 			"c    edit deferred rule",
 			"w    close selected Focus item for today only",
 			"r    restore selected Done for Day or Complete item",
+			"ctrl+r    reload from storage",
 			"u    undo recent change",
 			"d    mark selected item done",
 			"x    delete",
@@ -2655,7 +2654,17 @@ func (a *App) reloadFromStore(editErr error) {
 		a.status = "reload failed: " + err.Error()
 		return
 	}
+	loadThemes := a.loadThemes
+	if loadThemes == nil {
+		loadThemes = a.store.vault.LoadThemes
+	}
+	themes, err := loadThemes()
+	if err != nil {
+		a.status = "reload failed: " + err.Error()
+		return
+	}
 	a.state = state
+	a.themes = themes
 	a.syncSelection()
 	if a.readOnly {
 		a.status = "Reloaded work from vault."

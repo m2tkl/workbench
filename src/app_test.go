@@ -119,6 +119,53 @@ func TestViewShortcutsUseInboxBeforeNext(t *testing.T) {
 	}
 }
 
+func TestQuitDoesNotSaveState(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	saved := false
+	app.saveState = func(state State) error {
+		saved = true
+		return nil
+	}
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	updated := model.(*App)
+	if updated != app {
+		t.Fatal("expected quit to keep the current app instance")
+	}
+	if saved {
+		t.Fatal("expected quit not to save state")
+	}
+	if cmd == nil {
+		t.Fatal("expected quit command")
+	}
+}
+
+func TestCtrlRReloadsStateAndThemes(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	initial := NewStockItem(now, "Before reload", StageNow)
+	reloaded := NewStockItem(now, "After reload", StageNext)
+
+	app := NewApp(newTestStore(t), State{Items: []Item{initial}})
+	app.loadState = func() (State, error) {
+		return State{Items: []Item{reloaded}}, nil
+	}
+	app.loadThemes = func() ([]ThemeDoc, error) {
+		return []ThemeDoc{{ID: "auth-stepup", Title: "Auth Step-Up"}}, nil
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	updated := model.(*App)
+	if len(updated.state.Items) != 1 || updated.state.Items[0].Title != "After reload" {
+		t.Fatalf("unexpected reloaded state: %#v", updated.state.Items)
+	}
+	if len(updated.themes) != 1 || updated.themes[0].ID != "auth-stepup" {
+		t.Fatalf("unexpected reloaded themes: %#v", updated.themes)
+	}
+	if updated.status != "Reloaded tasks from storage." {
+		t.Fatalf("status = %q", updated.status)
+	}
+}
+
 func TestViewShortcutDoesNotMoveSelectedItems(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	item := NewItem(now, "Draft email", TriageInbox, "", "")

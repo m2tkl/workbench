@@ -168,6 +168,7 @@ See [docs/storage-model.md](docs/storage-model.md) for the storage and archive d
 - `c`: edit deferred conditions for `Scheduled` / `Recurring`
 - `w`: close selected `Focus` item for today only without completing it
 - `r`: restore selected item from `Done for Day` or `Complete`
+- `ctrl+r`: reload from storage
 - `d`: mark selected item complete
 - `x`: delete selected item
 - `s`: save
