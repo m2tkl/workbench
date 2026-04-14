@@ -1,4 +1,4 @@
-package taskbench
+package workbench
 
 import (
 	"fmt"
@@ -695,7 +695,7 @@ func (a *App) renderHeader(width int) string {
 	filterStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	contentWidth := max(1, width-2)
 
-	left := titleStyle.Render("taskbench") + " " + metaStyle.Render(a.today)
+	left := titleStyle.Render("workbench") + " " + metaStyle.Render(a.today)
 	if a.filter != "" {
 		left += " " + filterStyle.Render("filter:"+a.filter)
 	}
@@ -2559,6 +2559,7 @@ func cloneState(state State) State {
 func cloneItem(item Item) Item {
 	cloned := item
 	cloned.Notes = append([]string(nil), item.Notes...)
+	cloned.ContextNotes = append([]string(nil), item.ContextNotes...)
 	cloned.RecurringWeekdays = append([]string(nil), item.RecurringWeekdays...)
 	cloned.RecurringWeeks = append([]string(nil), item.RecurringWeeks...)
 	cloned.RecurringMonths = append([]int(nil), item.RecurringMonths...)
@@ -3059,6 +3060,11 @@ func (a *App) matchesFilter(item Item) bool {
 			return true
 		}
 	}
+	for _, note := range item.ContextNotes {
+		if strings.Contains(strings.ToLower(note), q) {
+			return true
+		}
+	}
 	if strings.Contains(strings.ToLower(item.NoteMarkdown), q) {
 		return true
 	}
@@ -3177,9 +3183,16 @@ func (a *App) executionDetailLinesForItem(width int, item *Item) []string {
 	if len(lines) > 0 {
 		lines = append(lines, "")
 	}
-	if raw := strings.TrimSpace(detailNoteMarkdown(item)); raw != "" {
-		lines = appendMarkdownLines(lines, raw, width)
-	} else {
+	primary := strings.TrimSpace(detailNoteMarkdown(item))
+	supplement := strings.TrimSpace(detailSupplementMarkdown(item))
+	switch {
+	case primary != "" && supplement != "":
+		lines = appendMarkdownLines(lines, primary+"\n\n"+supplement, width)
+	case primary != "":
+		lines = appendMarkdownLines(lines, primary, width)
+	case supplement != "":
+		lines = appendMarkdownLines(lines, supplement, width)
+	default:
 		lines = append(lines, "  -")
 	}
 	return lines
@@ -3209,15 +3222,21 @@ func (a *App) workbenchIssueDetailLines(width int, item *Item) []string {
 	for _, line := range []string{
 		fmt.Sprintf("context files: %d", summary.ContextFiles),
 		fmt.Sprintf("memo files: %d", summary.MemoFiles),
-		fmt.Sprintf("log files: %d", summary.LogFiles),
 	} {
 		lines = append(lines, wrapText(line, width)...)
 	}
 
 	lines = append(lines, "")
-	if raw := strings.TrimSpace(detailNoteMarkdown(item)); raw != "" {
-		lines = appendMarkdownLines(lines, raw, width)
-	} else {
+	primary := strings.TrimSpace(detailNoteMarkdown(item))
+	supplement := strings.TrimSpace(detailSupplementMarkdown(item))
+	switch {
+	case primary != "" && supplement != "":
+		lines = appendMarkdownLines(lines, primary+"\n\n"+supplement, width)
+	case primary != "":
+		lines = appendMarkdownLines(lines, primary, width)
+	case supplement != "":
+		lines = appendMarkdownLines(lines, supplement, width)
+	default:
 		lines = append(lines, "  -")
 	}
 	return lines
@@ -3568,11 +3587,33 @@ func (a *App) convertInboxSelectionToTask() {
 }
 
 func detailNoteMarkdown(item *Item) string {
-	raw := strings.TrimSpace(strings.ReplaceAll(item.NoteMarkdown, "\r\n", "\n"))
-	if raw == "" && len(item.Notes) > 0 {
-		raw = strings.TrimSpace(strings.Join(item.Notes, "\n\n"))
+	return strings.TrimSpace(strings.ReplaceAll(item.NoteMarkdown, "\r\n", "\n"))
+}
+
+func detailAssetSectionMarkdown(label string, snippets []string) string {
+	clean := []string{}
+	for _, snippet := range snippets {
+		snippet = strings.TrimSpace(strings.ReplaceAll(snippet, "\r\n", "\n"))
+		if snippet == "" {
+			continue
+		}
+		clean = append(clean, snippet)
 	}
-	return raw
+	if len(clean) == 0 {
+		return ""
+	}
+	return strings.TrimSpace("## " + label + "\n\n" + strings.Join(clean, "\n\n---\n\n"))
+}
+
+func detailSupplementMarkdown(item *Item) string {
+	parts := []string{}
+	if section := detailAssetSectionMarkdown("Memos", item.Notes); section != "" {
+		parts = append(parts, section)
+	}
+	if section := detailAssetSectionMarkdown("Context", item.ContextNotes); section != "" {
+		parts = append(parts, section)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func listTitleWidth(width int) int {

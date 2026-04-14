@@ -1,4 +1,4 @@
-package taskbench
+package workbench
 
 import (
 	"archive/zip"
@@ -16,7 +16,7 @@ import (
 func TestRunVaultInitCreatesLayout(t *testing.T) {
 	root := t.TempDir()
 
-	if code := runVaultCommand([]string{"taskbench", "vault", "init", "--data-dir", root}); code != 0 {
+	if code := runVaultCommand([]string{"workbench", "vault", "init", "--data-dir", root}); code != 0 {
 		t.Fatalf("runVaultCommand exit code = %d, want 0", code)
 	}
 
@@ -41,7 +41,7 @@ func TestRunVaultInitCreatesLayout(t *testing.T) {
 
 func TestRunVaultCommandHelpListsAgentOperations(t *testing.T) {
 	output := captureStdout(t, func() {
-		if code := runVaultCommand([]string{"taskbench", "vault", "--help"}); code != 0 {
+		if code := runVaultCommand([]string{"workbench", "vault", "--help"}); code != 0 {
 			t.Fatalf("runVaultCommand exit code = %d, want 0", code)
 		}
 	})
@@ -53,7 +53,7 @@ func TestRunVaultCommandHelpListsAgentOperations(t *testing.T) {
 		"move",
 		"done-for-day",
 		"Examples:",
-		"taskbench vault convert inbox",
+		"workbench vault convert inbox",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing %q:\n%s", want, output)
@@ -66,7 +66,7 @@ func TestRunVaultCommandHelpListsAgentOperations(t *testing.T) {
 
 func TestRunVaultAddSourceHelpIncludesExamples(t *testing.T) {
 	output := captureStdout(t, func() {
-		if code := runVaultCommand([]string{"taskbench", "vault", "add", "source", "--help"}); code != 0 {
+		if code := runVaultCommand([]string{"workbench", "vault", "add", "source", "--help"}); code != 0 {
 			t.Fatalf("runVaultCommand exit code = %d, want 0", code)
 		}
 	})
@@ -75,7 +75,7 @@ func TestRunVaultAddSourceHelpIncludesExamples(t *testing.T) {
 		"Usage:",
 		"Import a source file into the vault",
 		"Examples:",
-		"taskbench vault add source --file ./brief.txt",
+		"workbench vault add source --file ./brief.txt",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing %q:\n%s", want, output)
@@ -88,7 +88,7 @@ func TestRunVaultAddSourceHelpIncludesExamples(t *testing.T) {
 
 func TestRunVaultMoveHelpIncludesScheduledAndRecurringExamples(t *testing.T) {
 	output := captureStdout(t, func() {
-		if code := runVaultCommand([]string{"taskbench", "vault", "move", "--help"}); code != 0 {
+		if code := runVaultCommand([]string{"workbench", "vault", "move", "--help"}); code != 0 {
 			t.Fatalf("runVaultCommand exit code = %d, want 0", code)
 		}
 	})
@@ -111,10 +111,10 @@ func TestRunVaultAddCommandsCreateFiles(t *testing.T) {
 	root := t.TempDir()
 
 	tests := [][]string{
-		{"taskbench", "vault", "add", "inbox", "--data-dir", root, "--title", "Capture", "--body", "raw note", "--tags", "a,b"},
-		{"taskbench", "vault", "add", "task", "--data-dir", root, "--title", "Submit expense", "--stage", "now", "--tags", "admin", "--refs", "knowledge/expense-submit.md"},
-		{"taskbench", "vault", "add", "issue", "--data-dir", root, "--title", "OTP Tx design", "--theme", "auth-stepup", "--stage", "next", "--tags", "otp,tx", "--refs", "themes/auth-stepup/context/constraints.md"},
-		{"taskbench", "vault", "add", "theme", "--data-dir", root, "--title", "Auth step-up", "--tags", "auth,stepup", "--source-refs", "sources/documents/auth-deck.pptx,knowledge/auth-basics.md"},
+		{"workbench", "vault", "add", "inbox", "--data-dir", root, "--title", "Capture", "--body", "raw note", "--tags", "a,b"},
+		{"workbench", "vault", "add", "task", "--data-dir", root, "--title", "Submit expense", "--stage", "now", "--tags", "admin", "--refs", "knowledge/expense-submit.md"},
+		{"workbench", "vault", "add", "issue", "--data-dir", root, "--title", "OTP Tx design", "--theme", "auth-stepup", "--stage", "next", "--tags", "otp,tx", "--refs", "themes/auth-stepup/context/constraints.md"},
+		{"workbench", "vault", "add", "theme", "--data-dir", root, "--title", "Auth step-up", "--tags", "auth,stepup", "--source-refs", "sources/documents/auth-deck.pptx,knowledge/auth-basics.md"},
 	}
 
 	for _, args := range tests {
@@ -216,7 +216,7 @@ func TestRunVaultAddThemeContextCreatesFile(t *testing.T) {
 	}
 
 	code := runVaultCommand([]string{
-		"taskbench", "vault", "add", "theme-context",
+		"workbench", "vault", "add", "theme-context",
 		"--data-dir", root,
 		"--theme", "auth-stepup",
 		"--name", "constraints",
@@ -251,7 +251,7 @@ func TestRunVaultAddThemeContextRejectsUnknownSourceRef(t *testing.T) {
 	}
 
 	code := runVaultCommand([]string{
-		"taskbench", "vault", "add", "theme-context",
+		"workbench", "vault", "add", "theme-context",
 		"--data-dir", root,
 		"--theme", "auth-stepup",
 		"--name", "constraints",
@@ -281,7 +281,7 @@ func TestRunVaultListLoadsAddedItems(t *testing.T) {
 		t.Fatalf("SaveTask returned error: %v", err)
 	}
 
-	if code := runVaultCommand([]string{"taskbench", "vault", "list", "tasks", "--data-dir", root}); code != 0 {
+	if code := runVaultCommand([]string{"workbench", "vault", "list", "tasks", "--data-dir", root}); code != 0 {
 		t.Fatalf("runVaultCommand exit code = %d, want 0", code)
 	}
 }
@@ -290,7 +290,7 @@ func TestRunVaultAddTaskGeneratesRandomIDWhenNotSpecified(t *testing.T) {
 	root := t.TempDir()
 
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "add", "task",
+		"workbench", "vault", "add", "task",
 		"--data-dir", root,
 		"--title", "Submit expense",
 		"--stage", "now",
@@ -318,7 +318,7 @@ func TestRunVaultAddRejectsIDFlag(t *testing.T) {
 	root := t.TempDir()
 
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "add", "task",
+		"workbench", "vault", "add", "task",
 		"--data-dir", root,
 		"--id", "expense-submit",
 		"--title", "Submit expense",
@@ -341,7 +341,7 @@ func TestRunVaultConvertInboxToIssue(t *testing.T) {
 	}
 
 	code := runVaultCommand([]string{
-		"taskbench", "vault", "convert", "inbox",
+		"workbench", "vault", "convert", "inbox",
 		"--data-dir", root,
 		"--id", "capture-1",
 		"--to", "issue",
@@ -376,7 +376,7 @@ func TestRunVaultMoveUpdateAndLifecycleCommands(t *testing.T) {
 	}
 
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "update", "item",
+		"workbench", "vault", "update", "item",
 		"--data-dir", root,
 		"--id", "otp-tx-design",
 		"--theme", "auth-stepup",
@@ -386,7 +386,7 @@ func TestRunVaultMoveUpdateAndLifecycleCommands(t *testing.T) {
 	}
 
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "move",
+		"workbench", "vault", "move",
 		"--data-dir", root,
 		"--id", "otp-tx-design",
 		"--to", "scheduled",
@@ -396,7 +396,7 @@ func TestRunVaultMoveUpdateAndLifecycleCommands(t *testing.T) {
 	}
 
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "done-for-day",
+		"workbench", "vault", "done-for-day",
 		"--data-dir", root,
 		"--id", "otp-tx-design",
 		"--note", "pause for now",
@@ -405,7 +405,7 @@ func TestRunVaultMoveUpdateAndLifecycleCommands(t *testing.T) {
 	}
 
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "reopen",
+		"workbench", "vault", "reopen",
 		"--data-dir", root,
 		"--id", "otp-tx-design",
 		"--scope", "today",
@@ -414,7 +414,7 @@ func TestRunVaultMoveUpdateAndLifecycleCommands(t *testing.T) {
 	}
 
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "complete",
+		"workbench", "vault", "complete",
 		"--data-dir", root,
 		"--id", "otp-tx-design",
 		"--note", "done",
@@ -423,7 +423,7 @@ func TestRunVaultMoveUpdateAndLifecycleCommands(t *testing.T) {
 	}
 
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "reopen",
+		"workbench", "vault", "reopen",
 		"--data-dir", root,
 		"--id", "otp-tx-design",
 		"--scope", "complete",
@@ -474,7 +474,7 @@ func TestRunVaultAddSourceImportsTextFile(t *testing.T) {
 	}
 
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "add", "source",
+		"workbench", "vault", "add", "source",
 		"--data-dir", root,
 		"--file", sourcePath,
 		"--title", "OTP brief",
@@ -537,7 +537,7 @@ func TestRunVaultAddSourceUsesExtractedTitleWhenNotSpecified(t *testing.T) {
 	}
 
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "add", "source",
+		"workbench", "vault", "add", "source",
 		"--data-dir", root,
 		"--file", sourcePath,
 	}); code != 0 {
@@ -582,7 +582,7 @@ func TestRunVaultAddSourceImportsPPTXAndXLSX(t *testing.T) {
 		t.Fatalf("writeTestZip returned error: %v", err)
 	}
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "add", "source",
+		"workbench", "vault", "add", "source",
 		"--data-dir", root,
 		"--file", pptxPath,
 	}); code != 0 {
@@ -599,7 +599,7 @@ func TestRunVaultAddSourceImportsPPTXAndXLSX(t *testing.T) {
 		t.Fatalf("writeTestZip returned error: %v", err)
 	}
 	if code := runVaultCommand([]string{
-		"taskbench", "vault", "add", "source",
+		"workbench", "vault", "add", "source",
 		"--data-dir", root,
 		"--file", xlsxPath,
 	}); code != 0 {

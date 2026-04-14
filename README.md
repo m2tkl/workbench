@@ -1,4 +1,4 @@
-# Taskbench
+# Workbench
 
 Terminal-first task management with a focused dashboard UI.
 
@@ -25,19 +25,19 @@ See [docs/task-management-philosophy.md](docs/task-management-philosophy.md) for
 1. Enter the dev environment with `nix develop`.
 2. Install the binary with `nix profile install .` or run it directly with `nix run .`.
 3. Set `$EDITOR` if you want `e` to open notes in a specific editor.
-4. Optionally configure a default data directory with `taskbench config set --data-dir /path/to/taskbench-data`.
-5. Optionally seed demo data with `taskbench --seed-demo`.
-6. Start the app with `taskbench`.
+4. Optionally configure a default data directory with `workbench config set --data-dir /path/to/workbench-data`.
+5. Optionally seed demo data with `workbench --seed-demo`.
+6. Start the app with `workbench`.
 
 If you prefer Go installation instead of Nix installation:
 
 ```bash
-go install ./cmd/taskbench
+go install ./cmd/workbench
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
 If you want to start with your own empty data, skip `--seed-demo`.
-Taskbench reads configuration from your OS config directory, for example `~/.config/taskbench/config.json` on Linux. Runtime data is stored in the current working directory by default, or in the directory you set in config:
+Workbench reads configuration from your OS config directory, for example `~/.config/workbench/config.json` on Linux. Runtime data is stored in the current working directory by default, or in the directory you set in config:
 
 ```text
 ./vault/
@@ -53,7 +53,7 @@ Taskbench reads configuration from your OS config directory, for example `~/.con
 ```bash
 nix develop
 go test ./...
-nix run . -- config set --data-dir "$HOME/src/my-taskbench-data"
+nix run . -- config set --data-dir "$HOME/src/my-workbench-data"
 nix run . -- --seed-demo
 nix run .
 ```
@@ -62,16 +62,29 @@ Or install it once:
 
 ```bash
 nix profile install .
-taskbench config set --data-dir ~/src/my-taskbench-data
-taskbench --seed-demo
-taskbench
+workbench config set --data-dir ~/src/my-workbench-data
+workbench --seed-demo
+workbench
 ```
 
 You can inspect the current config with:
 
 ```bash
-taskbench config show
-taskbench config path
+workbench config show
+workbench config path
+```
+
+For agent-style workflows, the vault CLI now supports intent-level state changes:
+
+```bash
+workbench vault get item --id otp-tx-design
+workbench vault update item --id otp-tx-design --theme auth-stepup --refs knowledge/otp.md
+workbench vault move --id otp-tx-design --to next
+workbench vault move --id otp-tx-design --to scheduled --day 2026-04-20
+workbench vault complete --id otp-tx-design --note "done"
+workbench vault reopen --id otp-tx-design --scope complete
+workbench vault done-for-day --id otp-tx-design --note "resume tomorrow"
+workbench vault convert inbox --id capture-1 --to issue --theme auth-stepup --stage next
 ```
 
 Active task state is stored in the configured data directory. A one-off override is still available with `--data-dir` or `TASKBENCH_DATA_DIR`:
@@ -104,19 +117,19 @@ Themes refer to the sources they need from `theme.md` via `source_refs`, and the
 You can also create a theme-local context document that cites a subset of the theme's `source_refs`:
 
 ```bash
-taskbench vault add theme-context --theme auth-stepup --name constraints --title "Constraints" --source-refs sources/documents/auth-deck.pptx --body "Step-up flow constraints"
+workbench vault add theme-context --theme auth-stepup --name constraints --title "Constraints" --source-refs sources/documents/auth-deck.pptx --body "Step-up flow constraints"
 ```
 
 You can import a local file into the global source collection with:
 
 ```bash
-taskbench vault add source --file ./brief.xlsx --links https://example.com/spec
+workbench vault add source --file ./brief.xlsx --links https://example.com/spec
 ```
 
 Or start a small browser workbench for upload:
 
 ```bash
-taskbench web serve --addr 127.0.0.1:8080
+workbench web serve --addr 127.0.0.1:8080
 ```
 
 Open the shown URL and drop or pick a file to stage it into `sources/files/staged/`. Classify and extract it later with an agent or CLI flow.
@@ -132,7 +145,7 @@ The intended model is:
 
 See [docs/storage-model.md](docs/storage-model.md) for the storage and archive design.
 
-`taskbench --seed-demo` writes demo data into the active store so you can inspect the UI immediately.
+`workbench --seed-demo` writes demo data into the active store so you can inspect the UI immediately.
 
 ## Layout
 
@@ -162,8 +175,8 @@ See [docs/storage-model.md](docs/storage-model.md) for the storage and archive d
 
 ## Manual check
 
-1. Start the app with `taskbench`
-2. If needed, seed demo data first with `taskbench --seed-demo`
+1. Start the app with `workbench`
+2. If needed, seed demo data first with `workbench --seed-demo`
 3. Press `a` and add an Inbox task
 4. Press `m` and move it to `Next`
 5. Press `m` again and move it to `Now`

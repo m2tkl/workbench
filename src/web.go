@@ -1,4 +1,4 @@
-package taskbench
+package workbench
 
 import (
 	"context"
@@ -43,7 +43,7 @@ func runWebServe(args []string) int {
 	}
 	fs := flag.NewFlagSet("web serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
 	addr := fs.String("addr", defaultSourceWorkbenchAddr, "HTTP listen address")
 	if err := fs.Parse(args[3:]); err != nil {
 		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
@@ -241,7 +241,7 @@ const sourceWorkbenchHTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Taskbench Sources</title>
+  <title>Workbench Sources</title>
   <style>
     :root {
       --bg: #ffffff;

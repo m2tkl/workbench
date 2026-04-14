@@ -2,7 +2,7 @@
 
 ## Goal
 
-Extend Taskbench from a task-focused TUI into a workbench that can manage:
+Extend Workbench from a task-focused TUI into a workbench that can manage:
 
 - short-lived tasks
 - long-lived issues
@@ -28,14 +28,14 @@ It optimizes the model for issue-driven knowledge work and agent collaboration.
 ### Separation of concerns
 
 - The TUI owns workflow control for `Inbox`, `Task`, `Issue`, and `Theme`.
-- Markdown files own durable context, memos, logs, sources, and knowledge.
+- Markdown files own primary notes, memos, context, sources, and knowledge.
 - Agents assist with reading, drafting, extracting, and proposing updates.
 - Agents do not become the primary owner of any durable state.
 
 ### Modeling rule
 
 - `Task` and `Issue` share the same lifecycle states: `now`, `next`, `later`, `done`.
-- `Issue` differs from `Task` by carrying richer working assets such as `context/`, `logs/`, and `memos/`.
+- `Issue` differs from `Task` by carrying richer working assets such as `context/` and `memos/`.
 - `Theme` is a shared context boundary, not a physical parent of issues.
 
 ## Domain Model
@@ -71,7 +71,6 @@ Issue assets:
 
 - `issue.md`
 - `context/`
-- `logs/`
 - `memos/`
 
 ### Theme
@@ -101,6 +100,7 @@ Examples:
 ### Context
 
 Context is a set of curated working documents needed for judgment.
+It is where working material becomes a usable artifact for the current issue or theme.
 Context is a directory, not a single file.
 
 Examples:
@@ -111,20 +111,29 @@ Examples:
 - architecture note
 - glossary
 
-### Logs
-
-Logs are agent interaction records.
-They are evidence and working material, not first-class knowledge.
-
 ### Memos
 
-Memos are raw human notes.
-They may contain fragments, guesses, observations, or temporary thoughts.
+Memos are raw working material.
+They may contain fragments, guesses, excerpts, observations, temporary thoughts, and agent output that has not yet been distilled.
+
+The important distinction is not who wrote the memo.
+The distinction is whether the material is still input, or has become something future work should read directly.
 
 ### Knowledge
 
 Knowledge is reusable material abstracted away from a specific issue or theme.
 It should be stable enough to reuse across future work.
+
+### Promotion path
+
+The intended information flow is:
+
+1. collect raw material in `memos/`
+2. shape it into issue-local or theme-local `context/`
+3. promote only the reusable remainder into `knowledge/`
+
+Most work should stop at `context/`.
+`knowledge/` is for the smaller set of results that should outlive the original issue or theme.
 
 ## Canonical Directory Layout
 
@@ -139,7 +148,6 @@ vault/
     <issue-id>/
       issue.md
       context/
-      logs/
       memos/
   themes/
     <theme-id>/
@@ -156,6 +164,7 @@ vault/
 - `knowledge/` is top-level because it is cross-theme by definition.
 - Only directories with real responsibility are created.
 - Avoid generic buckets such as `docs/`, `artifacts/`, or `global/` inside the vault.
+- Avoid splitting temporary material by author or tool unless a strong retrieval need emerges.
 
 ## Metadata Model
 
@@ -248,7 +257,7 @@ Both task and issue use only:
 - Avoids pseudo-workflow states such as `waiting` or `blocked`.
 - Preserves the difference between task and issue in structure, not in status labels.
 
-Operational nuance such as "waiting on review" should be recorded in context, memos, or logs rather than by multiplying workflow states.
+Operational nuance such as "waiting on review" should be recorded in context or memos rather than by multiplying workflow states.
 
 ## Information Flow
 
@@ -263,13 +272,12 @@ Operational nuance such as "waiting on review" should be recorded in context, me
 
 1. Read relevant `themes/<theme-id>/sources/`.
 2. Use agents to interpret material into `issue/context/`.
-3. Store agent interactions in `issue/logs/`.
-4. Store raw human thinking in `issue/memos/`.
-5. Promote only durable results into `issue/context/` or theme context.
+3. Store raw working notes, excerpts, and agent output in `issue/memos/`.
+4. Promote only durable results into `issue/context/` or theme context.
 
 ### Knowledge promotion
 
-1. Agents read relevant sources, contexts, logs, memos, and existing knowledge.
+1. Agents read relevant sources, contexts, memos, and existing knowledge.
 2. Agents propose candidate knowledge, new drafts, or patches.
 3. A human accepts, edits, or rejects the proposal.
 4. Accepted output is written into `vault/knowledge/`.
@@ -283,7 +291,6 @@ An agent may read:
 - theme sources
 - theme context
 - issue context
-- issue logs
 - issue memos
 - existing knowledge
 
@@ -297,7 +304,7 @@ An agent may read:
 
 - summarize sources
 - organize issue context
-- extract durable findings from logs and memos
+- extract durable findings from memos
 - draft knowledge candidates
 - suggest merges into existing knowledge
 - identify impact when a new source arrives
@@ -392,7 +399,7 @@ The app stores active state in:
 
 - Keep the vault as the only product storage model.
 - Move item metadata from YAML files into Markdown frontmatter.
-- Keep supporting content in `memos/`, `context/`, `logs/`, and `sources/`.
+- Keep supporting content in `memos/`, `context/`, and `sources/`.
 - Add rebuildable indexes only as cache layers, never as source of truth.
 
 ### Rationale
@@ -441,7 +448,7 @@ The MVP for this new model should support:
 - create themes
 - attach a theme to an issue
 - keep theme `sources/` and `context/`
-- keep issue `context/`, `logs/`, and `memos/`
+- keep issue `context/` and `memos/`
 - let an agent read an issue and its theme and propose context or knowledge drafts
 - keep everything Git-friendly as normal files
 

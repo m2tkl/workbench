@@ -1,4 +1,4 @@
-package taskbench
+package workbench
 
 import (
 	"crypto/rand"
@@ -58,6 +58,7 @@ type Item struct {
 	DeferredKind        DeferredKind   `json:"deferred_kind,omitempty"`
 	Status              string         `json:"status"`
 	Notes               []string       `json:"notes,omitempty"`
+	ContextNotes        []string       `json:"context_notes,omitempty"`
 	NoteMarkdown        string         `json:"-"`
 	NoteTailMarkdown    string         `json:"-"`
 	DoneForDayOn        string         `json:"done_for_day_on,omitempty"`
@@ -79,20 +80,25 @@ type State struct {
 	Items []Item `json:"items"`
 }
 
-func NewItem(now time.Time, title string, triage Triage, stage Stage, deferredKind DeferredKind) Item {
+func newBaseItem(now time.Time, title, entityType string) Item {
 	ts := now.Format(time.RFC3339)
-	item := Item{
-		ID:        newID(),
-		Title:     strings.TrimSpace(title),
-		Status:    "open",
-		CreatedAt: ts,
-		UpdatedAt: ts,
+	return Item{
+		ID:             newID(),
+		Title:          strings.TrimSpace(title),
+		EntityType:     entityType,
+		Status:         "open",
+		CreatedAt:      ts,
+		UpdatedAt:      ts,
+		LastReviewedOn: "",
 	}
+}
+
+func NewItem(now time.Time, title string, triage Triage, stage Stage, deferredKind DeferredKind) Item {
+	entityType := entityTask
 	if triage == TriageInbox {
-		item.EntityType = entityInbox
-	} else {
-		item.EntityType = entityTask
+		entityType = entityInbox
 	}
+	item := newBaseItem(now, title, entityType)
 	item.MoveTo(now, triage, stage, deferredKind)
 	item.Log = nil
 	item.LastReviewedOn = ""
@@ -100,12 +106,58 @@ func NewItem(now time.Time, title string, triage Triage, stage Stage, deferredKi
 }
 
 func NewInboxItem(now time.Time, title string) Item {
-	return NewItem(now, title, TriageInbox, "", "")
+	item := newBaseItem(now, title, entityInbox)
+	item.MoveTo(now, TriageInbox, "", "")
+	item.Log = nil
+	item.LastReviewedOn = ""
+	return item
 }
 
 func NewIssueItem(now time.Time, title string, triage Triage, stage Stage, deferredKind DeferredKind) Item {
-	item := NewItem(now, title, triage, stage, deferredKind)
-	item.EntityType = entityIssue
+	item := newBaseItem(now, title, entityIssue)
+	item.MoveTo(now, triage, stage, deferredKind)
+	item.Log = nil
+	item.LastReviewedOn = ""
+	return item
+}
+
+func NewStockItem(now time.Time, title string, stage Stage) Item {
+	return NewItem(now, title, TriageStock, stage, "")
+}
+
+func NewIssueStockItem(now time.Time, title string, stage Stage) Item {
+	return NewIssueItem(now, title, TriageStock, stage, "")
+}
+
+func NewScheduledItem(now time.Time, title, day string) Item {
+	item := newBaseItem(now, title, entityTask)
+	item.SetScheduledFor(now, day)
+	item.Log = nil
+	item.LastReviewedOn = ""
+	return item
+}
+
+func NewIssueScheduledItem(now time.Time, title, day string) Item {
+	item := newBaseItem(now, title, entityIssue)
+	item.SetScheduledFor(now, day)
+	item.Log = nil
+	item.LastReviewedOn = ""
+	return item
+}
+
+func NewRecurringItem(now time.Time, title string, everyDays int, anchor string) Item {
+	item := newBaseItem(now, title, entityTask)
+	item.SetRecurring(now, everyDays, anchor)
+	item.Log = nil
+	item.LastReviewedOn = ""
+	return item
+}
+
+func NewIssueRecurringItem(now time.Time, title string, everyDays int, anchor string) Item {
+	item := newBaseItem(now, title, entityIssue)
+	item.SetRecurring(now, everyDays, anchor)
+	item.Log = nil
+	item.LastReviewedOn = ""
 	return item
 }
 

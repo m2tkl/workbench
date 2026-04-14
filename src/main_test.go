@@ -1,4 +1,4 @@
-package taskbench
+package workbench
 
 import (
 	"os"
@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-func TestDefaultStorePathUsesTaskbenchDataDir(t *testing.T) {
-	customDir := filepath.Join(t.TempDir(), "taskbench-data")
+func TestDefaultStorePathUsesWorkbenchDataDir(t *testing.T) {
+	customDir := filepath.Join(t.TempDir(), "workbench-data")
 	t.Setenv("TASKBENCH_DATA_DIR", customDir)
 
 	got, err := defaultStorePath()
@@ -57,7 +57,7 @@ func TestParseRunOptionsPrefersExplicitDataDir(t *testing.T) {
 	t.Setenv("TASKBENCH_DATA_DIR", filepath.Join(t.TempDir(), "from-env"))
 	customDir := filepath.Join(t.TempDir(), "custom")
 
-	options, err := parseRunOptions([]string{"taskbench", "ui", "--data-dir", customDir, "--seed-demo"}, 2)
+	options, err := parseRunOptions([]string{"workbench", "ui", "--data-dir", customDir, "--seed-demo"}, 2)
 	if err != nil {
 		t.Fatalf("parseRunOptions returned error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestParseRunOptionsPrefersExplicitDataDir(t *testing.T) {
 }
 
 func TestParseRunOptionsRejectsUnexpectedArgs(t *testing.T) {
-	if _, err := parseRunOptions([]string{"taskbench", "ui", "extra"}, 2); err == nil {
+	if _, err := parseRunOptions([]string{"workbench", "ui", "extra"}, 2); err == nil {
 		t.Fatal("expected parseRunOptions to reject unexpected arguments")
 	}
 }
@@ -89,7 +89,7 @@ func TestParseRunOptionsDefaultsToWorkingDirectoryWithoutEnvOrConfig(t *testing.
 		t.Fatalf("os.Getwd returned error: %v", err)
 	}
 
-	options, err := parseRunOptions([]string{"taskbench", "ui"}, 2)
+	options, err := parseRunOptions([]string{"workbench", "ui"}, 2)
 	if err != nil {
 		t.Fatalf("parseRunOptions returned error: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestRunConfigSetWritesConfig(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "repo-data")
 	t.Setenv("TASKBENCH_CONFIG_DIR", configDir)
 
-	if code := runConfigSet([]string{"taskbench", "config", "set", "--data-dir", dataDir}); code != 0 {
+	if code := runConfigSet([]string{"workbench", "config", "set", "--data-dir", dataDir}); code != 0 {
 		t.Fatalf("runConfigSet exit code = %d, want 0", code)
 	}
 
@@ -137,7 +137,7 @@ func TestRunConfigEditUsesEditor(t *testing.T) {
 	}
 	t.Setenv("EDITOR", editorPath)
 
-	if code := runConfigEdit([]string{"taskbench", "config", "edit"}); code != 0 {
+	if code := runConfigEdit([]string{"workbench", "config", "edit"}); code != 0 {
 		t.Fatalf("runConfigEdit exit code = %d, want 0", code)
 	}
 
@@ -161,28 +161,28 @@ func TestRunConfigEditUsesEditor(t *testing.T) {
 
 func TestRunConfigEditRequiresEditor(t *testing.T) {
 	t.Setenv("EDITOR", "")
-	if code := runConfigEdit([]string{"taskbench", "config", "edit"}); code == 0 {
+	if code := runConfigEdit([]string{"workbench", "config", "edit"}); code == 0 {
 		t.Fatal("expected runConfigEdit to fail without $EDITOR")
 	}
 }
 
 func TestRunRootHelpIncludesTopLevelCommands(t *testing.T) {
 	output := captureStdout(t, func() {
-		if code := Run([]string{"taskbench", "--help"}); code != 0 {
+		if code := Run([]string{"workbench", "--help"}); code != 0 {
 			t.Fatalf("Run exit code = %d, want 0", code)
 		}
 	})
 
 	for _, want := range []string{
 		"Usage:",
-		"taskbench ui [--data-dir DIR] [--seed-demo]",
+		"workbench ui [--data-dir DIR] [--seed-demo]",
 		"Commands:",
 		"ui",
 		"vault",
 		"config",
 		"web",
 		"Examples:",
-		"taskbench vault --help",
+		"workbench vault --help",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing %q:\n%s", want, output)
@@ -195,15 +195,15 @@ func TestRunRootHelpIncludesTopLevelCommands(t *testing.T) {
 
 func TestRunRootHelpNormalizesExecutableName(t *testing.T) {
 	output := captureStdout(t, func() {
-		if code := Run([]string{"/tmp/nix-shell.qWit5o/go-build1164112336/b001/exe/taskbench", "--help"}); code != 0 {
+		if code := Run([]string{"/tmp/nix-shell.qWit5o/go-build1164112336/b001/exe/workbench", "--help"}); code != 0 {
 			t.Fatalf("Run exit code = %d, want 0", code)
 		}
 	})
 
 	for _, want := range []string{
-		"taskbench ui [--data-dir DIR] [--seed-demo]",
-		"taskbench vault --help",
-		"taskbench config show",
+		"workbench ui [--data-dir DIR] [--seed-demo]",
+		"workbench vault --help",
+		"workbench config show",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing %q:\n%s", want, output)
@@ -216,12 +216,12 @@ func TestRunRootHelpNormalizesExecutableName(t *testing.T) {
 
 func TestRunWithoutArgsShowsHelp(t *testing.T) {
 	output := captureStdout(t, func() {
-		if code := Run([]string{"taskbench"}); code != 0 {
+		if code := Run([]string{"workbench"}); code != 0 {
 			t.Fatalf("Run exit code = %d, want 0", code)
 		}
 	})
 
-	if !strings.Contains(output, "taskbench ui [--data-dir DIR] [--seed-demo]") {
+	if !strings.Contains(output, "workbench ui [--data-dir DIR] [--seed-demo]") {
 		t.Fatalf("help output missing ui usage:\n%s", output)
 	}
 }
@@ -229,7 +229,7 @@ func TestRunWithoutArgsShowsHelp(t *testing.T) {
 func TestRunUISeedDemoWritesDemoData(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "demo-data")
 	output := captureStdout(t, func() {
-		if code := Run([]string{"taskbench", "ui", "--data-dir", root, "--seed-demo"}); code != 0 {
+		if code := Run([]string{"workbench", "ui", "--data-dir", root, "--seed-demo"}); code != 0 {
 			t.Fatalf("Run exit code = %d, want 0", code)
 		}
 	})
@@ -240,7 +240,7 @@ func TestRunUISeedDemoWritesDemoData(t *testing.T) {
 }
 
 func TestRunRejectsTopLevelFlagsWithoutUICommand(t *testing.T) {
-	if code := Run([]string{"taskbench", "--seed-demo"}); code == 0 {
+	if code := Run([]string{"workbench", "--seed-demo"}); code == 0 {
 		t.Fatal("expected top-level --seed-demo without ui to fail")
 	}
 }

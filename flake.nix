@@ -1,5 +1,5 @@
 {
-  description = "Taskbench development environment";
+  description = "Workbench development environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
@@ -61,30 +61,30 @@
       packages = forAllSystems (
         pkgs:
         let
-          taskbench = pkgs.buildGoModule {
-            pname = "taskbench";
+          workbench = pkgs.buildGoModule {
+            pname = "workbench";
             version = "0.1.0";
             src = ./.;
             modRoot = ".";
-            subPackages = [ "cmd/taskbench" ];
+            subPackages = [ "cmd/workbench" ];
             proxyVendor = true;
             vendorHash = "sha256-ecWyRBlT1NjXHq7JF30IEUAdBr4J6oGkT7ioKyN91tg=";
           };
         in
         {
-          default = taskbench;
-          taskbench = taskbench;
+          default = workbench;
+          workbench = workbench;
         }
       );
 
       apps = forAllSystems (pkgs: {
         default = {
           type = "app";
-          program = "${self.packages.${pkgs.system}.taskbench}/bin/taskbench";
+          program = "${self.packages.${pkgs.system}.workbench}/bin/workbench";
         };
-        taskbench = {
+        workbench = {
           type = "app";
-          program = "${self.packages.${pkgs.system}.taskbench}/bin/taskbench";
+          program = "${self.packages.${pkgs.system}.workbench}/bin/workbench";
         };
       });
     };

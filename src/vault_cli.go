@@ -1,4 +1,4 @@
-package taskbench
+package workbench
 
 import (
 	"encoding/json"
@@ -53,7 +53,7 @@ func runVaultInit(args []string) int {
 			Usage: []string{
 				fmt.Sprintf("%s vault init [--data-dir DIR]", flagSetName(args)),
 			},
-			Description: "Create the standard vault directories used by taskbench.",
+			Description: "Create the standard vault directories used by workbench.",
 			Examples: []string{
 				fmt.Sprintf("%s vault init", flagSetName(args)),
 				fmt.Sprintf("%s vault init --data-dir ./vault", flagSetName(args)),
@@ -664,7 +664,7 @@ func runVaultAddInbox(args []string) int {
 	}
 	fs := flag.NewFlagSet("vault add inbox", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
 	title := fs.String("title", "", "inbox item title")
 	body := fs.String("body", "", "inbox item body")
 	tags := fs.String("tags", "", "comma-separated tags")
@@ -709,7 +709,7 @@ func runVaultAddTask(args []string) int {
 	}
 	fs := flag.NewFlagSet("vault add task", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
 	title := fs.String("title", "", "task title")
 	status := fs.String("status", "open", "task status")
 	triage := fs.String("triage", string(TriageStock), "task triage")
@@ -764,7 +764,7 @@ func runVaultAddIssue(args []string) int {
 	}
 	fs := flag.NewFlagSet("vault add issue", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
 	title := fs.String("title", "", "issue title")
 	theme := fs.String("theme", "", "theme id")
 	status := fs.String("status", "open", "issue status")
@@ -821,7 +821,7 @@ func runVaultAddTheme(args []string) int {
 	}
 	fs := flag.NewFlagSet("vault add theme", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
 	title := fs.String("title", "", "theme title")
 	tags := fs.String("tags", "", "comma-separated tags")
 	sourceRefs := fs.String("source-refs", "", "comma-separated source refs")
@@ -866,7 +866,7 @@ func runVaultAddThemeContext(args []string) int {
 	}
 	fs := flag.NewFlagSet("vault add theme-context", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
 	themeID := fs.String("theme", "", "theme id")
 	name := fs.String("name", "", "context filename")
 	title := fs.String("title", "", "context title")
@@ -916,7 +916,7 @@ func runVaultAddSource(args []string) int {
 	}
 	fs := flag.NewFlagSet("vault add source", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
 	filePath := fs.String("file", "", "path to the source file")
 	title := fs.String("title", "", "source title")
 	tags := fs.String("tags", "", "comma-separated tags")
@@ -970,7 +970,7 @@ func newItemFlagSet(name string) (*flag.FlagSet, *string, *string) {
 	}
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
 	id := fs.String("id", "", "item id")
 	return fs, dataDir, id
 }
@@ -1032,7 +1032,7 @@ func parseDataDirFlag(name string, args []string) (string, error) {
 	}
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
 	if err := fs.Parse(args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}

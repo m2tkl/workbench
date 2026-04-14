@@ -1,4 +1,4 @@
-package taskbench
+package workbench
 
 import (
 	"encoding/json"
@@ -48,9 +48,9 @@ func topLevelHelp(args []string) commandHelp {
 			fmt.Sprintf("%s ui [--data-dir DIR] [--seed-demo]", flagSetName(args)),
 			fmt.Sprintf("%s <vault|config|web> ...", flagSetName(args)),
 		},
-		Description: "Run the taskbench TUI or use subcommands to inspect and manage vault-backed data.",
+		Description: "Run the workbench TUI or use subcommands to inspect and manage vault-backed data.",
 		Commands: []helpCommand{
-			{Name: "ui", Summary: "Launch the taskbench TUI."},
+			{Name: "ui", Summary: "Launch the workbench TUI."},
 			{Name: "vault", Summary: "Manage inbox captures, tasks, issues, themes, and sources."},
 			{Name: "config", Summary: "Show or update persisted CLI configuration."},
 			{Name: "web", Summary: "Serve the source inbox web UI."},
@@ -150,7 +150,7 @@ func parseRunOptions(args []string, start int) (runOptions, error) {
 	options := runOptions{}
 	fs := flag.NewFlagSet(flagSetName(args), flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&options.storePath, "data-dir", defaultPath, "directory used to store taskbench data")
+	fs.StringVar(&options.storePath, "data-dir", defaultPath, "directory used to store workbench data")
 	fs.BoolVar(&options.seedDemo, "seed-demo", false, "write demo data to the active store")
 
 	if start < 0 {
@@ -175,15 +175,15 @@ func parseRunOptions(args []string, start int) (runOptions, error) {
 
 func flagSetName(args []string) string {
 	if len(args) == 0 {
-		return "taskbench"
+		return "workbench"
 	}
 	name := strings.TrimSpace(args[0])
 	if name == "" {
-		return "taskbench"
+		return "workbench"
 	}
 	base := path.Base(name)
-	if base == "." || base == string(filepath.Separator) || strings.HasPrefix(base, "taskbench") {
-		return "taskbench"
+	if base == "." || base == string(filepath.Separator) || strings.HasPrefix(base, "workbench") {
+		return "workbench"
 	}
 	return base
 }
@@ -221,7 +221,7 @@ func configCommandHelp(args []string) commandHelp {
 		Usage: []string{
 			fmt.Sprintf("%s config <show|path|set|edit>", flagSetName(args)),
 		},
-		Description: "Inspect, update, or open the persisted taskbench config file.",
+		Description: "Inspect, update, or open the persisted workbench config file.",
 		Commands: []helpCommand{
 			{Name: "show", Summary: "Print the config path and current values as JSON."},
 			{Name: "path", Summary: "Print only the config file path."},
@@ -278,7 +278,7 @@ func runConfigPath() int {
 func runConfigSet(args []string) int {
 	fs := flag.NewFlagSet("config set", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", "", "directory used to store taskbench data")
+	dataDir := fs.String("data-dir", "", "directory used to store workbench data")
 
 	if err := fs.Parse(args[3:]); err != nil {
 		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)

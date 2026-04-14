@@ -1,4 +1,4 @@
-package taskbench
+package workbench
 
 import (
 	"bufio"

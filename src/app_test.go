@@ -1,4 +1,4 @@
-package taskbench
+package workbench
 
 import (
 	"fmt"
@@ -18,7 +18,7 @@ func newTestStore(t *testing.T) Store {
 }
 
 func TestNowItemHiddenOnlyForSameDay(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC), "Ship release", TriageStock, StageNow, "")
+	item := NewStockItem(time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC), "Ship release", StageNow)
 	item.MarkDoneForDay(time.Date(2026, 4, 8, 17, 0, 0, 0, time.UTC), "continue tomorrow")
 
 	if item.IsVisibleToday(time.Date(2026, 4, 8, 18, 0, 0, 0, time.UTC)) {
@@ -30,8 +30,7 @@ func TestNowItemHiddenOnlyForSameDay(t *testing.T) {
 }
 
 func TestRecurringItemAppearsOnDueDay(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Check backups", TriageDeferred, "", DeferredKindRecurring)
-	item.SetRecurring(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), 2, "2026-04-06")
+	item := NewRecurringItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Check backups", 2, "2026-04-06")
 
 	if !item.IsVisibleToday(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)) {
 		t.Fatal("recurring item should be visible on due day")
@@ -42,7 +41,7 @@ func TestRecurringItemAppearsOnDueDay(t *testing.T) {
 }
 
 func TestRecurringWeeklyTaskStaysHiddenUntilNextWeekAfterComplete(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Plan sprint", TriageDeferred, "", DeferredKindRecurring)
+	item := NewRecurringItem(time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "Plan sprint", 7, "2026-04-06")
 	item.SetRecurringRule(
 		time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC),
 		[]string{"mon"},
@@ -70,7 +69,7 @@ func TestRecurringWeeklyTaskStaysHiddenUntilNextWeekAfterComplete(t *testing.T) 
 }
 
 func TestRecurringWeeksRequireWeekdays(t *testing.T) {
-	item := NewItem(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), "Invalid rule", TriageDeferred, "", DeferredKindRecurring)
+	item := NewRecurringItem(time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), "Invalid rule", 7, "2026-04-08")
 	item.SetRecurringRule(
 		time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC),
 		nil,
@@ -85,8 +84,7 @@ func TestRecurringWeeksRequireWeekdays(t *testing.T) {
 
 func TestDeferredSectionDisablesDoneActions(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
-	item := NewItem(now, "Pay rent", TriageDeferred, "", DeferredKindScheduled)
-	item.SetScheduledFor(now, "2026-04-08")
+	item := NewScheduledItem(now, "Pay rent", "2026-04-08")
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -396,6 +394,8 @@ func TestWorkbenchListShowsIssueWorkingSetDetails(t *testing.T) {
 				Status:       "open",
 				Refs:         []string{"knowledge/otp.md"},
 				NoteMarkdown: "# OTP Tx design\n\nNeed a constraint table.",
+				Notes:        []string{"Raw memo about open questions.", "Agent summarized the source deck."},
+				ContextNotes: []string{"Curated constraint summary."},
 			},
 		},
 	})
@@ -405,15 +405,27 @@ func TestWorkbenchListShowsIssueWorkingSetDetails(t *testing.T) {
 	app.workbenchNavCursor = 8
 	app.themes = []ThemeDoc{{ID: "auth-stepup", Title: "Auth step-up"}}
 	app.issueAssetSummary = func(string) IssueAssetSummary {
-		return IssueAssetSummary{ContextFiles: 3, MemoFiles: 2, LogFiles: 1}
+		return IssueAssetSummary{ContextFiles: 3, MemoFiles: 2}
 	}
 
 	joined := strings.Join(app.detailLines(80), "\n")
-	if !strings.Contains(joined, "context files: 3") || !strings.Contains(joined, "memo files: 2") || !strings.Contains(joined, "log files: 1") {
+	if !strings.Contains(joined, "context files: 3") || !strings.Contains(joined, "memo files: 2") {
 		t.Fatalf("expected issue working set details: %q", joined)
 	}
 	if !strings.Contains(joined, "Need a constraint table.") {
 		t.Fatalf("expected issue note summary: %q", joined)
+	}
+	if !strings.Contains(joined, "Memos") || !strings.Contains(joined, "Raw memo about open questions.") {
+		t.Fatalf("expected memo section: %q", joined)
+	}
+	if !strings.Contains(joined, "Context") || !strings.Contains(joined, "Curated constraint summary.") {
+		t.Fatalf("expected context section: %q", joined)
+	}
+	if strings.Contains(joined, "Logs") {
+		t.Fatalf("did not expect log section: %q", joined)
+	}
+	if !strings.Contains(joined, "Agent summarized the source deck.") {
+		t.Fatalf("expected agent output to stay in memos: %q", joined)
 	}
 }
 

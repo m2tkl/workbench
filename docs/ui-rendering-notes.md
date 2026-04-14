@@ -1,6 +1,6 @@
 # UI Rendering Notes
 
-This note captures a recurring class of TUI regressions in `taskbench`.
+This note captures a recurring class of TUI regressions in `workbench`.
 
 ## Symptoms
 

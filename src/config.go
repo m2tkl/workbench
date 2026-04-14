@@ -1,4 +1,4 @@
-package taskbench
+package workbench
 
 import (
 	"encoding/json"
@@ -20,7 +20,7 @@ func defaultConfigDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "taskbench"), nil
+	return filepath.Join(dir, "workbench"), nil
 }
 
 func defaultConfigPath() (string, error) {

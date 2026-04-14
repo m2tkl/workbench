@@ -38,7 +38,7 @@ Primary entities:
 
 - themes
 - issues
-- issue assets: refs, context, memos, logs
+- issue assets: refs, context, memos
 
 Main actions:
 
@@ -172,7 +172,6 @@ Important details:
 - detail assets:
   - `issues/<id>/context/`
   - `issues/<id>/memos/`
-  - `issues/<id>/logs/`
   - `themes/<id>/context/`
   - `themes/<id>/sources/`
 

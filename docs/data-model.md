@@ -7,7 +7,7 @@ This document explains how an item is classified, how action filters are derived
 
 ## Core Item
 
-The main runtime type is `Item` in [src/model.go](/Users/m2tkl/repos/github.com/m2tkl/taskbench/src/model.go).
+The main runtime type is `Item` in [src/model.go](/Users/m2tkl/repos/github.com/m2tkl/workbench/src/model.go).
 
 ```mermaid
 flowchart TD
@@ -31,6 +31,7 @@ Each item carries:
 - type: `entity_type`
 - planning context: `theme`, `refs`
 - workflow fields: `triage`, `stage`, `deferred_kind`
+- supporting content: primary note, memo snippets, context snippets, log snippets
 - lifecycle fields: `status`, `done_for_day_on`
 - scheduling fields: `scheduled_for`, recurring fields
 - audit fields: `created_at`, `updated_at`, `last_reviewed_on`, `log`
@@ -146,7 +147,7 @@ Examples:
 - `Later`: `triage == stock && stage == later`
 - `Deferred`: `triage == deferred`
 
-The code paths for this live mostly in [src/app.go](/Users/m2tkl/repos/github.com/m2tkl/taskbench/src/app.go).
+The code paths for this live mostly in [src/app.go](/Users/m2tkl/repos/github.com/m2tkl/workbench/src/app.go).
 
 ## Visibility Rules
 
@@ -188,6 +189,12 @@ Main constructors:
 - `NewInboxItem(now, title)`
 - `NewItem(now, title, triage, stage, deferredKind)`
 - `NewIssueItem(now, title, triage, stage, deferredKind)`
+- `NewStockItem(now, title, stage)`
+- `NewIssueStockItem(now, title, stage)`
+- `NewScheduledItem(now, title, day)`
+- `NewIssueScheduledItem(now, title, day)`
+- `NewRecurringItem(now, title, everyDays, anchor)`
+- `NewIssueRecurringItem(now, title, everyDays, anchor)`
 
 Main mutations:
 
@@ -203,6 +210,7 @@ Main mutations:
 Important rule:
 
 - general movement uses `MoveTo`
+- new code should prefer the specialized constructors for stock/scheduled/recurring items
 - deferred state should usually be changed through `SetScheduledFor` or recurring helpers, not by setting fields manually
 
 ## Sorting

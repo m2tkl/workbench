@@ -57,7 +57,6 @@ vault/
     <issue-id>/
       issue.md
       context/
-      logs/
       memos/
   themes/
     <theme-id>/
@@ -344,7 +343,6 @@ Do not flatten issue and theme content into one file.
 These directories still make sense:
 
 - issue `context/`
-- issue `logs/`
 - issue `memos/`
 - theme `sources/`
 - theme `context/`
