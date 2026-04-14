@@ -373,8 +373,9 @@ This preserves the design rule that Markdown and YAML files remain the source of
 
 ### IDs
 
-- IDs should be stable, human-readable, and path-safe.
-- Prefer slug-like IDs such as `otp-tx-design` or `expense-submit`.
+- IDs should be stable and path-safe.
+- Generate IDs as random 8-char hex strings.
+- Put human-readable text in the saved path slug, for example `otp-transaction-design--7fa3c2d1`.
 - IDs are unique within their collection.
 
 ### Content files

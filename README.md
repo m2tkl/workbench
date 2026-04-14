@@ -74,26 +74,27 @@ workbench config show
 workbench config path
 ```
 
-For agent-style workflows, the vault CLI now supports intent-level state changes:
+For agent-style workflows, the vault CLI now supports intent-level state changes. Item and theme IDs are random 8-char hex strings; saved file and directory names use `<title-slug>--<id>`:
 
 ```bash
-workbench vault get item --id otp-tx-design
-workbench vault update item --id otp-tx-design --theme auth-stepup --refs knowledge/otp.md
-workbench vault move --id otp-tx-design --to next
-workbench vault move --id otp-tx-design --to scheduled --day 2026-04-20
-workbench vault complete --id otp-tx-design --note "done"
-workbench vault reopen --id otp-tx-design --scope complete
-workbench vault done-for-day --id otp-tx-design --note "resume tomorrow"
-workbench vault convert inbox --id capture-1 --to issue --theme auth-stepup --stage next
+workbench vault list themes
+workbench vault get item --id 7fa3c2d1
+workbench vault update item --id 7fa3c2d1 --theme 3b91e4aa --refs knowledge/otp.md
+workbench vault move --id 7fa3c2d1 --to next
+workbench vault move --id 7fa3c2d1 --to scheduled --day 2026-04-20
+workbench vault complete --id 7fa3c2d1 --note "done"
+workbench vault reopen --id 7fa3c2d1 --scope complete
+workbench vault done-for-day --id 7fa3c2d1 --note "resume tomorrow"
+workbench vault convert inbox --id c4e12a9b --to issue --theme 3b91e4aa --stage next
 ```
 
 Active task state is stored in the configured data directory. A one-off override is still available with `--data-dir` or `TASKBENCH_DATA_DIR`:
 
 ```text
-./vault/inbox/<id>.md
-./vault/tasks/<id>/task.md
-./vault/issues/<id>/issue.md
-./vault/themes/<id>/theme.md
+./vault/inbox/<title-slug>--<id>.md
+./vault/tasks/<title-slug>--<id>/task.md
+./vault/issues/<title-slug>--<id>/issue.md
+./vault/themes/<title-slug>--<id>/theme.md
 ```
 
 Sources can also keep converted Markdown and raw attachments side by side:
@@ -117,7 +118,7 @@ Themes refer to the sources they need from `theme.md` via `source_refs`, and the
 You can also create a theme-local context document that cites a subset of the theme's `source_refs`:
 
 ```bash
-workbench vault add theme-context --theme auth-stepup --name constraints --title "Constraints" --source-refs sources/documents/auth-deck.pptx --body "Step-up flow constraints"
+workbench vault add theme-context --theme 3b91e4aa --name constraints --title "Constraints" --source-refs sources/documents/auth-deck.pptx --body "Step-up flow constraints"
 ```
 
 You can import a local file into the global source collection with:

@@ -158,11 +158,11 @@ func (v VaultFS) SourceImportedDir() string {
 }
 
 func (v VaultFS) InboxPath(id string) string {
-	return filepath.Join(v.InboxDir(), id+".md")
+	return v.resolveInboxPath(id)
 }
 
 func (v VaultFS) TaskDir(id string) string {
-	return filepath.Join(v.TasksDir(), id)
+	return v.resolveEntityDir(v.TasksDir(), id)
 }
 
 func (v VaultFS) TaskMetaPath(id string) string {
@@ -174,7 +174,7 @@ func (v VaultFS) TaskMemosDir(id string) string {
 }
 
 func (v VaultFS) IssueDir(id string) string {
-	return filepath.Join(v.IssuesDir(), id)
+	return v.resolveEntityDir(v.IssuesDir(), id)
 }
 
 func (v VaultFS) IssueMetaPath(id string) string {
@@ -190,7 +190,7 @@ func (v VaultFS) IssueMemosDir(id string) string {
 }
 
 func (v VaultFS) ThemeDir(id string) string {
-	return filepath.Join(v.ThemesDir(), id)
+	return v.resolveEntityDir(v.ThemesDir(), id)
 }
 
 func (v VaultFS) ThemeMetaPath(id string) string {
@@ -326,7 +326,12 @@ func (v VaultFS) SaveInboxItem(item InboxItem) error {
 	if err := v.EnsureLayout(); err != nil {
 		return err
 	}
-	return os.WriteFile(v.InboxPath(item.ID), []byte(renderInboxItem(item)), 0o644)
+	current := v.resolveInboxPath(item.ID)
+	path := v.preferredInboxPath(item.ID, item.Title)
+	if err := os.WriteFile(path, []byte(renderInboxItem(item)), 0o644); err != nil {
+		return err
+	}
+	return removeIfDifferent(current, path)
 }
 
 func (v VaultFS) SaveTask(task TaskDoc) error {
@@ -334,10 +339,14 @@ func (v VaultFS) SaveTask(task TaskDoc) error {
 	if err := validateMetadata(task.Metadata); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(v.TaskMemosDir(task.ID), 0o755); err != nil {
+	taskDir := v.preferredEntityDir(v.TasksDir(), task.ID, task.Title)
+	if err := v.moveEntityDir(v.TasksDir(), task.ID, task.Title); err != nil {
 		return err
 	}
-	return os.WriteFile(v.TaskMetaPath(task.ID), []byte(renderTaskDoc(task)), 0o644)
+	if err := os.MkdirAll(filepath.Join(taskDir, "memos"), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(taskDir, "task.md"), []byte(renderTaskDoc(task)), 0o644)
 }
 
 func (v VaultFS) SaveIssue(issue IssueDoc) error {
@@ -346,15 +355,19 @@ func (v VaultFS) SaveIssue(issue IssueDoc) error {
 	if err := validateMetadata(issue.Metadata); err != nil {
 		return err
 	}
+	issueDir := v.preferredEntityDir(v.IssuesDir(), issue.ID, issue.Title)
+	if err := v.moveEntityDir(v.IssuesDir(), issue.ID, issue.Title); err != nil {
+		return err
+	}
 	for _, dir := range []string{
-		v.IssueContextDir(issue.ID),
-		v.IssueMemosDir(issue.ID),
+		filepath.Join(issueDir, "context"),
+		filepath.Join(issueDir, "memos"),
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	return os.WriteFile(v.IssueMetaPath(issue.ID), []byte(renderIssueDoc(issue)), 0o644)
+	return os.WriteFile(filepath.Join(issueDir, "issue.md"), []byte(renderIssueDoc(issue)), 0o644)
 }
 
 func (v VaultFS) SaveTheme(theme ThemeDoc) error {
@@ -362,14 +375,18 @@ func (v VaultFS) SaveTheme(theme ThemeDoc) error {
 	if err := validateThemeDoc(theme); err != nil {
 		return err
 	}
+	themeDir := v.preferredEntityDir(v.ThemesDir(), theme.ID, theme.Title)
+	if err := v.moveEntityDir(v.ThemesDir(), theme.ID, theme.Title); err != nil {
+		return err
+	}
 	for _, dir := range []string{
-		v.ThemeContextDir(theme.ID),
+		filepath.Join(themeDir, "context"),
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	return os.WriteFile(v.ThemeMetaPath(theme.ID), []byte(renderThemeDoc(theme)), 0o644)
+	return os.WriteFile(filepath.Join(themeDir, "theme.md"), []byte(renderThemeDoc(theme)), 0o644)
 }
 
 func (v VaultFS) SaveThemeContextDoc(themeID, name string, doc ThemeContextDoc) error {
@@ -455,7 +472,7 @@ func (v VaultFS) WriteIssueMemo(id, name, content string) error {
 }
 
 func (v VaultFS) DeleteInboxItem(id string) error {
-	err := os.Remove(v.InboxPath(id))
+	err := os.Remove(v.resolveInboxPath(id))
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -1156,6 +1173,115 @@ func countFiles(root string) (int, error) {
 	return count, err
 }
 
+func (v VaultFS) preferredInboxPath(id, title string) string {
+	return filepath.Join(v.InboxDir(), sluggedMarkdownName(id, title))
+}
+
+func (v VaultFS) resolveInboxPath(id string) string {
+	path := filepath.Join(v.InboxDir(), id+".md")
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	matches, err := filepath.Glob(filepath.Join(v.InboxDir(), "*--"+id+".md"))
+	if err == nil && len(matches) > 0 {
+		slices.Sort(matches)
+		return matches[0]
+	}
+	return path
+}
+
+func (v VaultFS) preferredEntityDir(root, id, title string) string {
+	return filepath.Join(root, sluggedDirName(id, title))
+}
+
+func (v VaultFS) resolveEntityDir(root, id string) string {
+	path := filepath.Join(root, id)
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	matches, err := filepath.Glob(filepath.Join(root, "*--"+id))
+	if err == nil && len(matches) > 0 {
+		slices.Sort(matches)
+		return matches[0]
+	}
+	return path
+}
+
+func (v VaultFS) moveEntityDir(root, id, title string) error {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	current := v.resolveEntityDir(root, id)
+	target := v.preferredEntityDir(root, id, title)
+	if current == target {
+		return nil
+	}
+	if _, err := os.Stat(current); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(current, target)
+}
+
+func removeIfDifferent(current, target string) error {
+	if current == target {
+		return nil
+	}
+	if _, err := os.Stat(current); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.Remove(current)
+}
+
+func sluggedMarkdownName(id, title string) string {
+	return sluggedBaseName(id, title) + ".md"
+}
+
+func sluggedDirName(id, title string) string {
+	return sluggedBaseName(id, title)
+}
+
+func sluggedBaseName(id, title string) string {
+	id = strings.TrimSpace(id)
+	slug := slugify(title)
+	if slug == "" {
+		return id
+	}
+	return slug + "--" + id
+}
+
+func slugify(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastHyphen := false
+	for _, r := range raw {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastHyphen = false
+		default:
+			if !lastHyphen {
+				b.WriteByte('-')
+				lastHyphen = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
 func ensureMarkdownName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -1529,7 +1655,7 @@ func removeMissingInboxItems(vault VaultFS, keep map[string]struct{}) error {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
 			continue
 		}
-		id := strings.TrimSuffix(entry.Name(), ".md")
+		id := entityIDFromName(strings.TrimSuffix(entry.Name(), ".md"))
 		if _, ok := keep[id]; ok {
 			continue
 		}
@@ -1552,7 +1678,7 @@ func removeMissingDirs(root string, keep map[string]struct{}) error {
 		if !entry.IsDir() {
 			continue
 		}
-		if _, ok := keep[entry.Name()]; ok {
+		if _, ok := keep[entityIDFromName(entry.Name())]; ok {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
@@ -1560,4 +1686,12 @@ func removeMissingDirs(root string, keep map[string]struct{}) error {
 		}
 	}
 	return nil
+}
+
+func entityIDFromName(name string) string {
+	name = strings.TrimSpace(name)
+	if _, id, ok := strings.Cut(name, "--"); ok && strings.TrimSpace(id) != "" {
+		return id
+	}
+	return name
 }

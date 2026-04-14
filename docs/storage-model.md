@@ -9,18 +9,18 @@ Persist workbench state directly in the vault. Metadata should live beside each 
 ```text
 vault/
   inbox/
-    <capture-id>.md
+    <title-slug>--<capture-id>.md
   tasks/
-    <task-id>/
+    <title-slug>--<task-id>/
       task.md
       memos/
   issues/
-    <issue-id>/
+    <title-slug>--<issue-id>/
       issue.md
       context/
       memos/
   themes/
-    <theme-id>/
+    <title-slug>--<theme-id>/
       theme.md
       context/
   sources/
@@ -36,6 +36,7 @@ vault/
 - The vault is the only source of truth.
 - Inbox items are single Markdown files with frontmatter and body content.
 - Tasks, issues, and themes are directory-scoped items with a primary Markdown document plus supporting directories.
+- Item and theme IDs are random 8-char hex strings; the human-readable title slug lives in the saved path name.
 - `status`, `triage`, `stage`, and `deferred_kind` are stored explicitly.
 - Notes and context stay outside metadata files.
 

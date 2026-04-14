@@ -299,6 +299,132 @@ func TestDeleteInboxItemRemovesFile(t *testing.T) {
 	}
 }
 
+func TestSaveUsesSluggedPaths(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+
+	inbox := InboxItem{
+		ID:      "capture-1",
+		Title:   "Capture Me",
+		Created: "2026-04-12",
+		Updated: "2026-04-12",
+	}
+	if err := vault.SaveInboxItem(inbox); err != nil {
+		t.Fatalf("SaveInboxItem returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(vault.InboxDir(), "capture-me--capture-1.md")); err != nil {
+		t.Fatalf("expected slugged inbox path: %v", err)
+	}
+
+	task := TaskDoc{
+		Metadata: Metadata{
+			ID:      "expense-submit",
+			Title:   "Submit Expense",
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNow,
+			Created: "2026-04-12",
+			Updated: "2026-04-12",
+		},
+	}
+	if err := vault.SaveTask(task); err != nil {
+		t.Fatalf("SaveTask returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(vault.TasksDir(), "submit-expense--expense-submit", "task.md")); err != nil {
+		t.Fatalf("expected slugged task path: %v", err)
+	}
+
+	issue := IssueDoc{
+		Metadata: Metadata{
+			ID:      "otp-tx-design",
+			Title:   "OTP Tx Design",
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNext,
+			Created: "2026-04-12",
+			Updated: "2026-04-12",
+		},
+		Theme: "auth-stepup",
+	}
+	if err := vault.SaveIssue(issue); err != nil {
+		t.Fatalf("SaveIssue returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(vault.IssuesDir(), "otp-tx-design--otp-tx-design", "issue.md")); err != nil {
+		t.Fatalf("expected slugged issue path: %v", err)
+	}
+
+	theme := ThemeDoc{
+		ID:      "auth-stepup",
+		Title:   "Auth Step Up",
+		Created: "2026-04-12",
+		Updated: "2026-04-12",
+	}
+	if err := vault.SaveTheme(theme); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(vault.ThemesDir(), "auth-step-up--auth-stepup", "theme.md")); err != nil {
+		t.Fatalf("expected slugged theme path: %v", err)
+	}
+}
+
+func TestSaveMigratesLegacyPathsToSluggedPaths(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+
+	legacyInboxPath := filepath.Join(vault.InboxDir(), "capture-1.md")
+	if err := os.MkdirAll(vault.InboxDir(), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(legacyInboxPath, []byte("---\nid: capture-1\ntitle: Capture me\ncreated: 2026-04-12\nupdated: 2026-04-12\n---\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := vault.SaveInboxItem(InboxItem{
+		ID:      "capture-1",
+		Title:   "Capture Me Again",
+		Created: "2026-04-12",
+		Updated: "2026-04-13",
+	}); err != nil {
+		t.Fatalf("SaveInboxItem returned error: %v", err)
+	}
+	if _, err := os.Stat(legacyInboxPath); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy inbox path removed, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(vault.InboxDir(), "capture-me-again--capture-1.md")); err != nil {
+		t.Fatalf("expected migrated inbox path: %v", err)
+	}
+
+	legacyTaskDir := filepath.Join(vault.TasksDir(), "expense-submit")
+	if err := os.MkdirAll(filepath.Join(legacyTaskDir, "memos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyTaskDir, "memos", "work.md"), []byte("memo\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyTaskDir, "task.md"), []byte("---\nid: expense-submit\ntitle: Submit expense\nstatus: open\ntriage: stock\nstage: now\ncreated: 2026-04-12\nupdated: 2026-04-12\n---\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := vault.SaveTask(TaskDoc{
+		Metadata: Metadata{
+			ID:      "expense-submit",
+			Title:   "Submit Expense Report",
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNow,
+			Created: "2026-04-12",
+			Updated: "2026-04-13",
+		},
+	}); err != nil {
+		t.Fatalf("SaveTask returned error: %v", err)
+	}
+	newTaskDir := filepath.Join(vault.TasksDir(), "submit-expense-report--expense-submit")
+	if _, err := os.Stat(legacyTaskDir); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy task dir removed, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(newTaskDir, "memos", "work.md")); err != nil {
+		t.Fatalf("expected memos preserved after migration: %v", err)
+	}
+}
+
 func TestLoadVaultStateMapsInboxTasksAndIssuesIntoSections(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)

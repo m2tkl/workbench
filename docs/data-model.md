@@ -246,7 +246,7 @@ Mapped as:
 
 ### Task
 
-Stored under `vault/tasks/<id>/task.md`.
+Stored under `vault/tasks/<title-slug>--<id>/task.md`.
 
 Mapped as:
 
@@ -255,7 +255,7 @@ Mapped as:
 
 ### Issue
 
-Stored under `vault/issues/<id>/issue.md`.
+Stored under `vault/issues/<title-slug>--<id>/issue.md`.
 
 Mapped as:
 
@@ -265,7 +265,7 @@ Mapped as:
 
 ### Theme
 
-Stored separately under `vault/themes/<id>/theme.md`.
+Stored separately under `vault/themes/<title-slug>--<id>/theme.md`.
 
 Themes are not embedded into items.
 Items link to themes by `theme` id only.

@@ -174,7 +174,7 @@ func vaultCommandHelp(args []string) commandHelp {
 		Usage: []string{
 			fmt.Sprintf("%s vault <command> [args]", flagSetName(args)),
 		},
-		Description: "Manage the vault that stores inbox captures, tasks, issues, themes, knowledge, and imported sources.",
+		Description: "Manage the vault that stores inbox captures, tasks, issues, themes, knowledge, and imported sources. Item and theme IDs are generated as random 8-char hex strings, while saved paths include a title slug plus that ID.",
 		Commands: []helpCommand{
 			{Name: "init", Summary: "Create the vault directory layout."},
 			{Name: "list", Summary: "Inspect inbox, tasks, issues, themes, or knowledge entries."},
@@ -189,8 +189,8 @@ func vaultCommandHelp(args []string) commandHelp {
 		},
 		Examples: []string{
 			fmt.Sprintf("%s vault add inbox --title \"Investigate OTP edge case\"", flagSetName(args)),
-			fmt.Sprintf("%s vault convert inbox --id ab12cd34 --to issue --theme auth-stepup --stage next", flagSetName(args)),
-			fmt.Sprintf("%s vault move --id ab12cd34 --to scheduled --day 2026-04-20", flagSetName(args)),
+			fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to issue --theme 3b91e4aa --stage next", flagSetName(args)),
+			fmt.Sprintf("%s vault move --id 7fa3c2d1 --to scheduled --day 2026-04-20", flagSetName(args)),
 			fmt.Sprintf("%s vault add source --file ./docs/brief.txt --title \"OTP brief\"", flagSetName(args)),
 		},
 	}
@@ -201,7 +201,7 @@ func vaultAddHelp(args []string) commandHelp {
 		Usage: []string{
 			fmt.Sprintf("%s vault add <inbox|task|issue|theme|theme-context|source> [flags]", flagSetName(args)),
 		},
-		Description: "Create a new vault document or import a new source file.",
+			Description: "Create a new vault document or import a new source file. New inbox items, tasks, issues, and themes receive random 8-char hex IDs automatically.",
 		Commands: []helpCommand{
 			{Name: "inbox", Summary: "Capture a raw note before triage."},
 			{Name: "task", Summary: "Create a task document directly."},
@@ -212,7 +212,7 @@ func vaultAddHelp(args []string) commandHelp {
 		},
 		Examples: []string{
 			fmt.Sprintf("%s vault add inbox --title \"Investigate retry rules\"", flagSetName(args)),
-			fmt.Sprintf("%s vault add issue --title \"OTP Tx design\" --theme auth-stepup --stage next", flagSetName(args)),
+			fmt.Sprintf("%s vault add issue --title \"OTP Tx design\" --theme 3b91e4aa --stage next", flagSetName(args)),
 			fmt.Sprintf("%s vault add source --file ./brief.txt --title \"Planning brief\"", flagSetName(args)),
 		},
 	}
@@ -224,10 +224,10 @@ func runVaultGet(args []string) int {
 			Usage: []string{
 				fmt.Sprintf("%s vault get <item|inbox|task|issue|theme> --id ID [--data-dir DIR]", flagSetName(args)),
 			},
-			Description: "Load one vault record by id and print it as JSON.",
+			Description: "Load one vault record by its random 8-char hex ID and print it as JSON.",
 			Examples: []string{
-				fmt.Sprintf("%s vault get item --id ab12cd34", flagSetName(args)),
-				fmt.Sprintf("%s vault get theme --id auth-stepup --data-dir ./vault", flagSetName(args)),
+				fmt.Sprintf("%s vault get item --id 7fa3c2d1", flagSetName(args)),
+				fmt.Sprintf("%s vault get theme --id 3b91e4aa --data-dir ./vault", flagSetName(args)),
 			},
 		})
 		if len(args) < 4 {
@@ -303,9 +303,9 @@ func runVaultMove(args []string) int {
 			},
 			Description: "Change where an item sits in triage, planning, or recurrence.",
 			Examples: []string{
-				fmt.Sprintf("%s vault move --id ab12cd34 --to now", flagSetName(args)),
-				fmt.Sprintf("%s vault move --id ab12cd34 --to scheduled --day 2026-04-20", flagSetName(args)),
-				fmt.Sprintf("%s vault move --id ab12cd34 --to recurring --every-days 7 --anchor 2026-04-14", flagSetName(args)),
+				fmt.Sprintf("%s vault move --id 7fa3c2d1 --to now", flagSetName(args)),
+				fmt.Sprintf("%s vault move --id 7fa3c2d1 --to scheduled --day 2026-04-20", flagSetName(args)),
+				fmt.Sprintf("%s vault move --id 7fa3c2d1 --to recurring --every-days 7 --anchor 2026-04-14", flagSetName(args)),
 			},
 		})
 		return 0
@@ -377,9 +377,9 @@ func runVaultUpdate(args []string) int {
 			},
 			Description: "Edit item metadata without changing its lifecycle state.",
 			Examples: []string{
-				fmt.Sprintf("%s vault update item --id ab12cd34 --title \"Clarify OTP retry rules\"", flagSetName(args)),
-				fmt.Sprintf("%s vault update item --id ab12cd34 --theme auth-stepup --refs knowledge/otp.md,themes/auth-stepup/context/constraints.md", flagSetName(args)),
-				fmt.Sprintf("%s vault update item --id ab12cd34 --clear-theme", flagSetName(args)),
+				fmt.Sprintf("%s vault update item --id 7fa3c2d1 --title \"Clarify OTP retry rules\"", flagSetName(args)),
+				fmt.Sprintf("%s vault update item --id 7fa3c2d1 --theme 3b91e4aa --refs knowledge/otp.md,themes/auth-step-up--3b91e4aa/context/constraints.md", flagSetName(args)),
+				fmt.Sprintf("%s vault update item --id 7fa3c2d1 --clear-theme", flagSetName(args)),
 			},
 		})
 		return 0
@@ -391,9 +391,9 @@ func runVaultUpdate(args []string) int {
 			},
 			Description: "Edit item metadata without changing its lifecycle state.",
 			Examples: []string{
-				fmt.Sprintf("%s vault update item --id ab12cd34 --title \"Clarify OTP retry rules\"", flagSetName(args)),
-				fmt.Sprintf("%s vault update item --id ab12cd34 --theme auth-stepup --refs knowledge/otp.md,themes/auth-stepup/context/constraints.md", flagSetName(args)),
-				fmt.Sprintf("%s vault update item --id ab12cd34 --clear-theme", flagSetName(args)),
+				fmt.Sprintf("%s vault update item --id 7fa3c2d1 --title \"Clarify OTP retry rules\"", flagSetName(args)),
+				fmt.Sprintf("%s vault update item --id 7fa3c2d1 --theme 3b91e4aa --refs knowledge/otp.md,themes/auth-step-up--3b91e4aa/context/constraints.md", flagSetName(args)),
+				fmt.Sprintf("%s vault update item --id 7fa3c2d1 --clear-theme", flagSetName(args)),
 			},
 		})
 		return 1
@@ -450,8 +450,8 @@ func runVaultComplete(args []string) int {
 			},
 			Description: "Mark an item complete and optionally record why it was finished.",
 			Examples: []string{
-				fmt.Sprintf("%s vault complete --id ab12cd34", flagSetName(args)),
-				fmt.Sprintf("%s vault complete --id ab12cd34 --note \"shipped in PR #42\"", flagSetName(args)),
+				fmt.Sprintf("%s vault complete --id 7fa3c2d1", flagSetName(args)),
+				fmt.Sprintf("%s vault complete --id 7fa3c2d1 --note \"shipped in PR #42\"", flagSetName(args)),
 			},
 		})
 		return 0
@@ -487,8 +487,8 @@ func runVaultReopen(args []string) int {
 			},
 			Description: "Undo a complete or done-for-day state so work can continue.",
 			Examples: []string{
-				fmt.Sprintf("%s vault reopen --id ab12cd34", flagSetName(args)),
-				fmt.Sprintf("%s vault reopen --id ab12cd34 --scope today", flagSetName(args)),
+				fmt.Sprintf("%s vault reopen --id 7fa3c2d1", flagSetName(args)),
+				fmt.Sprintf("%s vault reopen --id 7fa3c2d1 --scope today", flagSetName(args)),
 			},
 		})
 		return 0
@@ -539,8 +539,8 @@ func runVaultDoneForDay(args []string) int {
 			},
 			Description: "Pause an item for the rest of the day while keeping it open.",
 			Examples: []string{
-				fmt.Sprintf("%s vault done-for-day --id ab12cd34", flagSetName(args)),
-				fmt.Sprintf("%s vault done-for-day --id ab12cd34 --note \"waiting on design review\"", flagSetName(args)),
+				fmt.Sprintf("%s vault done-for-day --id 7fa3c2d1", flagSetName(args)),
+				fmt.Sprintf("%s vault done-for-day --id 7fa3c2d1 --note \"waiting on design review\"", flagSetName(args)),
 			},
 		})
 		return 0
@@ -576,8 +576,8 @@ func runVaultConvert(args []string) int {
 			},
 			Description: "Turn an inbox capture into a task or issue and place it into a planning stage.",
 			Examples: []string{
-				fmt.Sprintf("%s vault convert inbox --id ab12cd34 --to task --stage now", flagSetName(args)),
-				fmt.Sprintf("%s vault convert inbox --id ab12cd34 --to issue --theme auth-stepup --stage next", flagSetName(args)),
+				fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to task --stage now", flagSetName(args)),
+				fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to issue --theme 3b91e4aa --stage next", flagSetName(args)),
 			},
 		})
 		return 0
@@ -589,8 +589,8 @@ func runVaultConvert(args []string) int {
 			},
 			Description: "Turn an inbox capture into a task or issue and place it into a planning stage.",
 			Examples: []string{
-				fmt.Sprintf("%s vault convert inbox --id ab12cd34 --to task --stage now", flagSetName(args)),
-				fmt.Sprintf("%s vault convert inbox --id ab12cd34 --to issue --theme auth-stepup --stage next", flagSetName(args)),
+				fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to task --stage now", flagSetName(args)),
+				fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to issue --theme 3b91e4aa --stage next", flagSetName(args)),
 			},
 		})
 		return 1
@@ -751,8 +751,8 @@ func runVaultAddIssue(args []string) int {
 			},
 			Description: "Create an issue directly and optionally attach it to a theme.",
 			Examples: []string{
-				fmt.Sprintf("%s vault add issue --title \"OTP Tx design\" --theme auth-stepup --stage next", flagSetName(args)),
-				fmt.Sprintf("%s vault add issue --title \"Retry policy\" --refs themes/auth-stepup/context/constraints.md", flagSetName(args)),
+				fmt.Sprintf("%s vault add issue --title \"OTP Tx design\" --theme 3b91e4aa --stage next", flagSetName(args)),
+				fmt.Sprintf("%s vault add issue --title \"Retry policy\" --refs themes/auth-step-up--3b91e4aa/context/constraints.md", flagSetName(args)),
 			},
 		})
 		return 0
@@ -766,7 +766,7 @@ func runVaultAddIssue(args []string) int {
 	fs.SetOutput(io.Discard)
 	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
 	title := fs.String("title", "", "issue title")
-	theme := fs.String("theme", "", "theme id")
+	theme := fs.String("theme", "", "theme id (8-char hex)")
 	status := fs.String("status", "open", "issue status")
 	triage := fs.String("triage", string(TriageStock), "issue triage")
 	stage := fs.String("stage", string(StageNext), "issue stage")
@@ -853,8 +853,8 @@ func runVaultAddThemeContext(args []string) int {
 			},
 			Description: "Add a context markdown document under an existing theme.",
 			Examples: []string{
-				fmt.Sprintf("%s vault add theme-context --theme auth-stepup --name constraints --title \"Constraints\"", flagSetName(args)),
-				fmt.Sprintf("%s vault add theme-context --theme auth-stepup --name risks --title \"Risks\" --source-refs sources/documents/auth-deck.pptx", flagSetName(args)),
+				fmt.Sprintf("%s vault add theme-context --theme 3b91e4aa --name constraints --title \"Constraints\"", flagSetName(args)),
+				fmt.Sprintf("%s vault add theme-context --theme 3b91e4aa --name risks --title \"Risks\" --source-refs sources/documents/auth-deck.pptx", flagSetName(args)),
 			},
 		})
 		return 0
@@ -867,7 +867,7 @@ func runVaultAddThemeContext(args []string) int {
 	fs := flag.NewFlagSet("vault add theme-context", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
-	themeID := fs.String("theme", "", "theme id")
+	themeID := fs.String("theme", "", "theme id (8-char hex)")
 	name := fs.String("name", "", "context filename")
 	title := fs.String("title", "", "context title")
 	body := fs.String("body", "", "context body")
@@ -971,7 +971,7 @@ func newItemFlagSet(name string) (*flag.FlagSet, *string, *string) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
-	id := fs.String("id", "", "item id")
+	id := fs.String("id", "", "item id (8-char hex)")
 	return fs, dataDir, id
 }
 
