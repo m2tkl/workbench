@@ -2,12 +2,15 @@ package taskbench
 
 import (
 	"archive/zip"
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunVaultInitCreatesLayout(t *testing.T) {
@@ -33,6 +36,74 @@ func TestRunVaultInitCreatesLayout(t *testing.T) {
 		if !info.IsDir() {
 			t.Fatalf("%q is not a directory", path)
 		}
+	}
+}
+
+func TestRunVaultCommandHelpListsAgentOperations(t *testing.T) {
+	output := captureStdout(t, func() {
+		if code := runVaultCommand([]string{"taskbench", "vault", "--help"}); code != 0 {
+			t.Fatalf("runVaultCommand exit code = %d, want 0", code)
+		}
+	})
+
+	for _, want := range []string{
+		"Description:",
+		"Manage the vault",
+		"convert",
+		"move",
+		"done-for-day",
+		"Examples:",
+		"taskbench vault convert inbox",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(strings.ToLower(output), "nix") {
+		t.Fatalf("vault help unexpectedly mentions nix:\n%s", output)
+	}
+}
+
+func TestRunVaultAddSourceHelpIncludesExamples(t *testing.T) {
+	output := captureStdout(t, func() {
+		if code := runVaultCommand([]string{"taskbench", "vault", "add", "source", "--help"}); code != 0 {
+			t.Fatalf("runVaultCommand exit code = %d, want 0", code)
+		}
+	})
+
+	for _, want := range []string{
+		"Usage:",
+		"Import a source file into the vault",
+		"Examples:",
+		"taskbench vault add source --file ./brief.txt",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(strings.ToLower(output), "nix") {
+		t.Fatalf("source help unexpectedly mentions nix:\n%s", output)
+	}
+}
+
+func TestRunVaultMoveHelpIncludesScheduledAndRecurringExamples(t *testing.T) {
+	output := captureStdout(t, func() {
+		if code := runVaultCommand([]string{"taskbench", "vault", "move", "--help"}); code != 0 {
+			t.Fatalf("runVaultCommand exit code = %d, want 0", code)
+		}
+	})
+
+	for _, want := range []string{
+		"Change where an item sits",
+		"--to scheduled --day 2026-04-20",
+		"--to recurring --every-days 7 --anchor 2026-04-14",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(strings.ToLower(output), "nix") {
+		t.Fatalf("move help unexpectedly mentions nix:\n%s", output)
 	}
 }
 
@@ -96,9 +167,6 @@ func TestRunVaultAddCommandsCreateFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(vault.IssueContextDir(issues[0].ID)); err != nil {
 		t.Fatalf("expected issue context dir to exist: %v", err)
-	}
-	if _, err := os.Stat(vault.IssueLogsDir(issues[0].ID)); err != nil {
-		t.Fatalf("expected issue logs dir to exist: %v", err)
 	}
 	if _, err := os.Stat(vault.IssueMemosDir(issues[0].ID)); err != nil {
 		t.Fatalf("expected issue memos dir to exist: %v", err)
@@ -256,6 +324,135 @@ func TestRunVaultAddRejectsIDFlag(t *testing.T) {
 		"--title", "Submit expense",
 	}); code == 0 {
 		t.Fatalf("runVaultCommand accepted removed --id flag")
+	}
+}
+
+func TestRunVaultConvertInboxToIssue(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.SaveInboxItem(InboxItem{
+		ID:      "capture-1",
+		Title:   "Investigate OTP edge case",
+		Created: "2026-04-12",
+		Updated: "2026-04-12",
+		Body:    "raw notes",
+	}); err != nil {
+		t.Fatalf("SaveInboxItem returned error: %v", err)
+	}
+
+	code := runVaultCommand([]string{
+		"taskbench", "vault", "convert", "inbox",
+		"--data-dir", root,
+		"--id", "capture-1",
+		"--to", "issue",
+		"--theme", "auth-stepup",
+		"--stage", "next",
+	})
+	if code != 0 {
+		t.Fatalf("runVaultCommand exit code = %d, want 0", code)
+	}
+
+	issues, err := vault.LoadIssues()
+	if err != nil {
+		t.Fatalf("LoadIssues returned error: %v", err)
+	}
+	if len(issues) != 1 || issues[0].ID != "capture-1" || issues[0].Theme != "auth-stepup" || issues[0].Stage != StageNext {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if _, err := os.Stat(vault.InboxPath("capture-1")); !os.IsNotExist(err) {
+		t.Fatalf("expected inbox file removed, got %v", err)
+	}
+}
+
+func TestRunVaultMoveUpdateAndLifecycleCommands(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root)
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	item := NewIssueStockItem(now, "OTP Tx design", StageNext)
+	item.ID = "otp-tx-design"
+	item.Theme = "auth-old"
+	if err := store.Save(State{Items: []Item{item}}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	if code := runVaultCommand([]string{
+		"taskbench", "vault", "update", "item",
+		"--data-dir", root,
+		"--id", "otp-tx-design",
+		"--theme", "auth-stepup",
+		"--refs", "knowledge/otp.md,themes/auth-stepup/context/constraints.md",
+	}); code != 0 {
+		t.Fatalf("update exit code = %d, want 0", code)
+	}
+
+	if code := runVaultCommand([]string{
+		"taskbench", "vault", "move",
+		"--data-dir", root,
+		"--id", "otp-tx-design",
+		"--to", "scheduled",
+		"--day", "2026-04-20",
+	}); code != 0 {
+		t.Fatalf("move exit code = %d, want 0", code)
+	}
+
+	if code := runVaultCommand([]string{
+		"taskbench", "vault", "done-for-day",
+		"--data-dir", root,
+		"--id", "otp-tx-design",
+		"--note", "pause for now",
+	}); code != 0 {
+		t.Fatalf("done-for-day exit code = %d, want 0", code)
+	}
+
+	if code := runVaultCommand([]string{
+		"taskbench", "vault", "reopen",
+		"--data-dir", root,
+		"--id", "otp-tx-design",
+		"--scope", "today",
+	}); code != 0 {
+		t.Fatalf("reopen today exit code = %d, want 0", code)
+	}
+
+	if code := runVaultCommand([]string{
+		"taskbench", "vault", "complete",
+		"--data-dir", root,
+		"--id", "otp-tx-design",
+		"--note", "done",
+	}); code != 0 {
+		t.Fatalf("complete exit code = %d, want 0", code)
+	}
+
+	if code := runVaultCommand([]string{
+		"taskbench", "vault", "reopen",
+		"--data-dir", root,
+		"--id", "otp-tx-design",
+		"--scope", "complete",
+	}); code != 0 {
+		t.Fatalf("reopen complete exit code = %d, want 0", code)
+	}
+
+	state, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	got, err := state.FindItem("otp-tx-design")
+	if err != nil {
+		t.Fatalf("FindItem returned error: %v", err)
+	}
+	if got.Theme != "auth-stepup" {
+		t.Fatalf("theme = %q, want auth-stepup", got.Theme)
+	}
+	if got.Triage != TriageDeferred || got.DeferredKind != DeferredKindScheduled || got.ScheduledFor != "2026-04-20" {
+		t.Fatalf("unexpected deferred state: %#v", got)
+	}
+	if got.Status != "open" {
+		t.Fatalf("status = %q, want open", got.Status)
+	}
+	if got.DoneForDayOn != "" {
+		t.Fatalf("done_for_day_on = %q, want empty", got.DoneForDayOn)
+	}
+	if !slices.Equal(got.Refs, []string{"knowledge/otp.md", "themes/auth-stepup/context/constraints.md"}) {
+		t.Fatalf("refs = %#v", got.Refs)
 	}
 }
 
@@ -463,4 +660,32 @@ func writeTestZip(path string, files map[string]string) error {
 		return err
 	}
 	return file.Close()
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	orig := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe returned error: %v", err)
+	}
+	defer reader.Close()
+
+	os.Stdout = writer
+	defer func() {
+		os.Stdout = orig
+	}()
+
+	fn()
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close returned error: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, reader); err != nil {
+		t.Fatalf("io.Copy returned error: %v", err)
+	}
+	return buf.String()
 }

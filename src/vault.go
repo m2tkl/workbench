@@ -91,7 +91,6 @@ type KnowledgeDoc struct {
 
 type IssueAssetSummary struct {
 	ContextFiles int
-	LogFiles     int
 	MemoFiles    int
 }
 
@@ -184,10 +183,6 @@ func (v VaultFS) IssueMetaPath(id string) string {
 
 func (v VaultFS) IssueContextDir(id string) string {
 	return filepath.Join(v.IssueDir(id), "context")
-}
-
-func (v VaultFS) IssueLogsDir(id string) string {
-	return filepath.Join(v.IssueDir(id), "logs")
 }
 
 func (v VaultFS) IssueMemosDir(id string) string {
@@ -302,17 +297,12 @@ func (v VaultFS) SummarizeIssue(id string) (IssueAssetSummary, error) {
 	if err != nil {
 		return IssueAssetSummary{}, err
 	}
-	logFiles, err := countFiles(v.IssueLogsDir(id))
-	if err != nil {
-		return IssueAssetSummary{}, err
-	}
 	memoFiles, err := countFiles(v.IssueMemosDir(id))
 	if err != nil {
 		return IssueAssetSummary{}, err
 	}
 	return IssueAssetSummary{
 		ContextFiles: contextFiles,
-		LogFiles:     logFiles,
 		MemoFiles:    memoFiles,
 	}, nil
 }
@@ -358,7 +348,6 @@ func (v VaultFS) SaveIssue(issue IssueDoc) error {
 	}
 	for _, dir := range []string{
 		v.IssueContextDir(issue.ID),
-		v.IssueLogsDir(issue.ID),
 		v.IssueMemosDir(issue.ID),
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1109,6 +1098,9 @@ func loadDirectoryItems[T any](root, metaName string, read func(string) (T, erro
 		}
 		item, err := read(filepath.Join(root, entry.Name(), metaName))
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			return nil, err
 		}
 		items = append(items, item)
@@ -1236,7 +1228,8 @@ func itemFromTaskDoc(vault VaultFS, task TaskDoc) (Item, error) {
 	if err != nil {
 		return Item{}, err
 	}
-	applyMarkdownSnippets(&item, memos)
+	item.Notes = append([]string(nil), memos...)
+	item.NoteTailMarkdown = strings.Join(memos, "\n\n---\n\n")
 	return item, nil
 }
 
@@ -1253,7 +1246,9 @@ func itemFromIssueDoc(vault VaultFS, issue IssueDoc) (Item, error) {
 	if err != nil {
 		return Item{}, err
 	}
-	applyMarkdownSnippets(&item, append(memos, contexts...))
+	item.Notes = append([]string(nil), memos...)
+	item.ContextNotes = append([]string(nil), contexts...)
+	item.NoteTailMarkdown = strings.Join(memos, "\n\n---\n\n")
 	return item, nil
 }
 
@@ -1319,22 +1314,6 @@ func markdownBodyWithoutFrontmatter(raw string) string {
 		return body
 	}
 	return raw
-}
-
-func applyMarkdownSnippets(item *Item, snippets []string) {
-	clean := []string{}
-	for _, snippet := range snippets {
-		snippet = strings.TrimSpace(snippet)
-		if snippet == "" {
-			continue
-		}
-		clean = append(clean, snippet)
-	}
-	if len(clean) == 0 {
-		return
-	}
-	item.NoteTailMarkdown = strings.Join(clean, "\n\n---\n\n")
-	item.Notes = append([]string(nil), clean...)
 }
 
 func parseDateFallback(raw string) time.Time {

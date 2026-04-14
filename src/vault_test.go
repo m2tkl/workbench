@@ -3,6 +3,7 @@ package taskbench
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -193,6 +194,31 @@ func TestThemeContextDocRejectsRefsOutsideTheme(t *testing.T) {
 	}
 }
 
+func TestLoadThemesSkipsDirectoriesWithoutThemeMeta(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+
+	if err := vault.SaveTheme(ThemeDoc{
+		ID:      "auth-stepup",
+		Title:   "Step-up authentication design",
+		Created: "2026-04-12",
+		Updated: "2026-04-12",
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if err := os.MkdirAll(vault.ThemeDir("auth-step-up"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	themes, err := vault.LoadThemes()
+	if err != nil {
+		t.Fatalf("LoadThemes returned error: %v", err)
+	}
+	if len(themes) != 1 || themes[0].ID != "auth-stepup" {
+		t.Fatalf("themes = %#v", themes)
+	}
+}
+
 func TestLoadMarkdownSnippetsStripsFrontmatter(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "context.md"), []byte("---\ntitle: Constraints\nsource_refs:\n  - sources/documents/research-brief.pptx\n---\n\n# Constraints\n\nBody text\n"), 0o644); err != nil {
@@ -320,6 +346,12 @@ func TestLoadVaultStateMapsInboxTasksAndIssuesIntoSections(t *testing.T) {
 	if err := vault.WriteIssueMemo("otp-tx-design", "notes", "# Notes\n\nOpen question"); err != nil {
 		t.Fatalf("WriteIssueMemo returned error: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(vault.IssueContextDir("otp-tx-design"), "constraints.md"), []byte("---\ntitle: Constraints\n---\n\nRetry is capped at 3.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := vault.WriteIssueMemo("otp-tx-design", "agent-run", "Reviewed source deck and extracted open questions."); err != nil {
+		t.Fatalf("WriteIssueMemo returned error: %v", err)
+	}
 
 	state, err := LoadVaultState(vault)
 	if err != nil {
@@ -341,6 +373,12 @@ func TestLoadVaultStateMapsInboxTasksAndIssuesIntoSections(t *testing.T) {
 	if nextItem.EntityType != entityIssue || nextItem.Theme != "auth-stepup" {
 		t.Fatalf("next item = %#v", nextItem)
 	}
+	if len(nextItem.Notes) != 2 || !containsText(nextItem.Notes[0], "Reviewed source deck") || !containsText(nextItem.Notes[1], "Open question") {
+		t.Fatalf("expected issue memos, got %#v", nextItem.Notes)
+	}
+	if len(nextItem.ContextNotes) != 1 || !containsText(nextItem.ContextNotes[0], "Retry is capped at 3.") {
+		t.Fatalf("expected issue context, got %#v", nextItem.ContextNotes)
+	}
 	todayItem := app.itemsForSection(sectionToday)[0].item
 	if len(todayItem.Notes) == 0 {
 		t.Fatalf("expected task memo notes, got %#v", todayItem)
@@ -348,6 +386,10 @@ func TestLoadVaultStateMapsInboxTasksAndIssuesIntoSections(t *testing.T) {
 	if len(todayItem.Refs) != 1 || todayItem.Refs[0] != "knowledge/expense-submit.md" {
 		t.Fatalf("expected refs on today item, got %#v", todayItem.Refs)
 	}
+}
+
+func containsText(raw, want string) bool {
+	return strings.Contains(raw, want)
 }
 
 func TestSaveVaultStatePersistsMutationAndConversion(t *testing.T) {

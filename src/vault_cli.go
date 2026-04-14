@@ -16,9 +16,8 @@ func isVaultCommand(args []string) bool {
 }
 
 func runVaultCommand(args []string) int {
-	if len(args) < 3 {
-		fmt.Fprintf(os.Stderr, "usage: %s vault <init|list|add>\n", flagSetName(args))
-		return 1
+	if handled, exitCode := maybeHandleCommandHelp(args, 2, 3, vaultCommandHelp(args)); handled {
+		return exitCode
 	}
 
 	switch args[2] {
@@ -28,6 +27,20 @@ func runVaultCommand(args []string) int {
 		return runVaultList(args)
 	case "add":
 		return runVaultAdd(args)
+	case "get":
+		return runVaultGet(args)
+	case "move":
+		return runVaultMove(args)
+	case "update":
+		return runVaultUpdate(args)
+	case "complete":
+		return runVaultComplete(args)
+	case "reopen":
+		return runVaultReopen(args)
+	case "done-for-day":
+		return runVaultDoneForDay(args)
+	case "convert":
+		return runVaultConvert(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown vault command: %s\n", args[2])
 		return 1
@@ -35,6 +48,19 @@ func runVaultCommand(args []string) int {
 }
 
 func runVaultInit(args []string) int {
+	if hasHelpFlag(args[3:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault init [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Create the standard vault directories used by taskbench.",
+			Examples: []string{
+				fmt.Sprintf("%s vault init", flagSetName(args)),
+				fmt.Sprintf("%s vault init --data-dir ./vault", flagSetName(args)),
+			},
+		})
+		return 0
+	}
 	root, err := parseDataDirFlag("vault init", args[3:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -51,8 +77,23 @@ func runVaultInit(args []string) int {
 }
 
 func runVaultList(args []string) int {
+	if len(args) < 4 || hasHelpFlag(args[3:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault list <inbox|tasks|issues|themes|knowledge> [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Print one vault collection as formatted JSON.",
+			Examples: []string{
+				fmt.Sprintf("%s vault list inbox", flagSetName(args)),
+				fmt.Sprintf("%s vault list issues --data-dir ./vault", flagSetName(args)),
+			},
+		})
+		if len(args) < 4 {
+			return 1
+		}
+		return 0
+	}
 	if len(args) < 4 {
-		fmt.Fprintf(os.Stderr, "usage: %s vault list <inbox|tasks|issues|themes|knowledge> [--data-dir DIR]\n", flagSetName(args))
 		return 1
 	}
 	root, err := parseDataDirFlag("vault list", args[4:])
@@ -106,9 +147,8 @@ func runVaultList(args []string) int {
 }
 
 func runVaultAdd(args []string) int {
-	if len(args) < 4 {
-		fmt.Fprintf(os.Stderr, "usage: %s vault add <inbox|task|issue|theme|theme-context|source> [flags]\n", flagSetName(args))
-		return 1
+	if handled, exitCode := maybeHandleCommandHelp(args, 3, 4, vaultAddHelp(args)); handled {
+		return exitCode
 	}
 	switch args[3] {
 	case "inbox":
@@ -129,7 +169,494 @@ func runVaultAdd(args []string) int {
 	}
 }
 
+func vaultCommandHelp(args []string) commandHelp {
+	return commandHelp{
+		Usage: []string{
+			fmt.Sprintf("%s vault <command> [args]", flagSetName(args)),
+		},
+		Description: "Manage the vault that stores inbox captures, tasks, issues, themes, knowledge, and imported sources.",
+		Commands: []helpCommand{
+			{Name: "init", Summary: "Create the vault directory layout."},
+			{Name: "list", Summary: "Inspect inbox, tasks, issues, themes, or knowledge entries."},
+			{Name: "add", Summary: "Create inbox items, tasks, issues, themes, theme context, or source docs."},
+			{Name: "get", Summary: "Fetch a single item or theme by id."},
+			{Name: "move", Summary: "Move an item between inbox, working stages, scheduled, or recurring states."},
+			{Name: "update", Summary: "Edit item metadata such as title, refs, or theme."},
+			{Name: "done-for-day", Summary: "Pause an item for today without completing it."},
+			{Name: "reopen", Summary: "Undo done-for-day or complete state."},
+			{Name: "complete", Summary: "Mark an item done and optionally record a note."},
+			{Name: "convert", Summary: "Promote an inbox capture into a task or issue."},
+		},
+		Examples: []string{
+			fmt.Sprintf("%s vault add inbox --title \"Investigate OTP edge case\"", flagSetName(args)),
+			fmt.Sprintf("%s vault convert inbox --id ab12cd34 --to issue --theme auth-stepup --stage next", flagSetName(args)),
+			fmt.Sprintf("%s vault move --id ab12cd34 --to scheduled --day 2026-04-20", flagSetName(args)),
+			fmt.Sprintf("%s vault add source --file ./docs/brief.txt --title \"OTP brief\"", flagSetName(args)),
+		},
+	}
+}
+
+func vaultAddHelp(args []string) commandHelp {
+	return commandHelp{
+		Usage: []string{
+			fmt.Sprintf("%s vault add <inbox|task|issue|theme|theme-context|source> [flags]", flagSetName(args)),
+		},
+		Description: "Create a new vault document or import a new source file.",
+		Commands: []helpCommand{
+			{Name: "inbox", Summary: "Capture a raw note before triage."},
+			{Name: "task", Summary: "Create a task document directly."},
+			{Name: "issue", Summary: "Create an issue document directly."},
+			{Name: "theme", Summary: "Create a theme and its context folder."},
+			{Name: "theme-context", Summary: "Add a markdown context doc under an existing theme."},
+			{Name: "source", Summary: "Import a source file into vault/sources/."},
+		},
+		Examples: []string{
+			fmt.Sprintf("%s vault add inbox --title \"Investigate retry rules\"", flagSetName(args)),
+			fmt.Sprintf("%s vault add issue --title \"OTP Tx design\" --theme auth-stepup --stage next", flagSetName(args)),
+			fmt.Sprintf("%s vault add source --file ./brief.txt --title \"Planning brief\"", flagSetName(args)),
+		},
+	}
+}
+
+func runVaultGet(args []string) int {
+	if len(args) < 4 || hasHelpFlag(args[3:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault get <item|inbox|task|issue|theme> --id ID [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Load one vault record by id and print it as JSON.",
+			Examples: []string{
+				fmt.Sprintf("%s vault get item --id ab12cd34", flagSetName(args)),
+				fmt.Sprintf("%s vault get theme --id auth-stepup --data-dir ./vault", flagSetName(args)),
+			},
+		})
+		if len(args) < 4 {
+			return 1
+		}
+		return 0
+	}
+	if len(args) < 4 {
+		return 1
+	}
+	root, id, err := parseIDCommandArgs("vault get", args[4:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	target := strings.TrimSpace(args[3])
+	vault := NewVault(root)
+
+	switch target {
+	case "item":
+		state, err := LoadVaultState(vault)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load state: %v\n", err)
+			return 1
+		}
+		item, err := state.FindItem(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			return 1
+		}
+		return printJSON(item)
+	case "inbox", "task", "issue":
+		state, err := LoadVaultState(vault)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load state: %v\n", err)
+			return 1
+		}
+		item, err := state.FindItem(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			return 1
+		}
+		want := target
+		if item.EntityType != want {
+			fmt.Fprintf(os.Stderr, "item %s is %s, not %s\n", id, item.EntityType, want)
+			return 1
+		}
+		return printJSON(item)
+	case "theme":
+		themes, err := vault.LoadThemes()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load themes: %v\n", err)
+			return 1
+		}
+		for _, theme := range themes {
+			if theme.ID == id {
+				return printJSON(theme)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "theme not found: %s\n", id)
+		return 1
+	default:
+		fmt.Fprintf(os.Stderr, "unknown vault get target: %s\n", target)
+		return 1
+	}
+}
+
+func runVaultMove(args []string) int {
+	if hasHelpFlag(args[3:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault move --id ID --to <inbox|now|next|later|scheduled|recurring> [flags]", flagSetName(args)),
+			},
+			Description: "Change where an item sits in triage, planning, or recurrence.",
+			Examples: []string{
+				fmt.Sprintf("%s vault move --id ab12cd34 --to now", flagSetName(args)),
+				fmt.Sprintf("%s vault move --id ab12cd34 --to scheduled --day 2026-04-20", flagSetName(args)),
+				fmt.Sprintf("%s vault move --id ab12cd34 --to recurring --every-days 7 --anchor 2026-04-14", flagSetName(args)),
+			},
+		})
+		return 0
+	}
+	fs, dataDir, id := newItemFlagSet("vault move")
+	target := fs.String("to", "", "target state: inbox|now|next|later|scheduled|recurring")
+	day := fs.String("day", "", "scheduled date as YYYY-MM-DD")
+	everyDays := fs.String("every-days", "", "recurring interval in days")
+	anchor := fs.String("anchor", "", "recurring anchor as YYYY-MM-DD")
+	if err := fs.Parse(args[3:]); err != nil {
+		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
+		return 1
+	}
+	if err := fsValidation(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	root, now, state, item, err := loadMutableItem(*dataDir, *id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+
+	switch strings.TrimSpace(*target) {
+	case "inbox":
+		item.MoveTo(now, TriageInbox, "", "")
+	case "now":
+		item.MoveTo(now, TriageStock, StageNow, "")
+	case "next":
+		item.MoveTo(now, TriageStock, StageNext, "")
+	case "later":
+		item.MoveTo(now, TriageStock, StageLater, "")
+	case "scheduled":
+		parsedDay, err := parseDate(*day)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			return 1
+		}
+		item.SetScheduledFor(now, parsedDay)
+	case "recurring":
+		parsedEvery, err := parseRecurringEveryDays(*everyDays)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			return 1
+		}
+		parsedAnchor, err := parseDate(*anchor)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			return 1
+		}
+		item.SetRecurring(now, parsedEvery, parsedAnchor)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown move target: %s\n", strings.TrimSpace(*target))
+		return 1
+	}
+
+	if err := SaveVaultState(NewVault(root), state); err != nil {
+		fmt.Fprintf(os.Stderr, "save state: %v\n", err)
+		return 1
+	}
+	return printJSON(item)
+}
+
+func runVaultUpdate(args []string) int {
+	if hasHelpFlag(args[3:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault update item --id ID [--title TEXT] [--theme THEME] [--refs a,b] [--clear-theme] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Edit item metadata without changing its lifecycle state.",
+			Examples: []string{
+				fmt.Sprintf("%s vault update item --id ab12cd34 --title \"Clarify OTP retry rules\"", flagSetName(args)),
+				fmt.Sprintf("%s vault update item --id ab12cd34 --theme auth-stepup --refs knowledge/otp.md,themes/auth-stepup/context/constraints.md", flagSetName(args)),
+				fmt.Sprintf("%s vault update item --id ab12cd34 --clear-theme", flagSetName(args)),
+			},
+		})
+		return 0
+	}
+	if len(args) < 4 || strings.TrimSpace(args[3]) != "item" {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault update item --id ID [--title TEXT] [--theme THEME] [--refs a,b] [--clear-theme] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Edit item metadata without changing its lifecycle state.",
+			Examples: []string{
+				fmt.Sprintf("%s vault update item --id ab12cd34 --title \"Clarify OTP retry rules\"", flagSetName(args)),
+				fmt.Sprintf("%s vault update item --id ab12cd34 --theme auth-stepup --refs knowledge/otp.md,themes/auth-stepup/context/constraints.md", flagSetName(args)),
+				fmt.Sprintf("%s vault update item --id ab12cd34 --clear-theme", flagSetName(args)),
+			},
+		})
+		return 1
+	}
+	fs, dataDir, id := newItemFlagSet("vault update item")
+	title := fs.String("title", "", "updated title")
+	theme := fs.String("theme", "", "updated issue theme")
+	refs := fs.String("refs", "", "comma-separated refs")
+	clearTheme := fs.Bool("clear-theme", false, "clear current theme")
+	if err := fs.Parse(args[4:]); err != nil {
+		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
+		return 1
+	}
+	if err := fsValidation(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	root, now, state, item, err := loadMutableItem(*dataDir, *id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+
+	if isFlagProvided(fs, "title") {
+		item.Title = strings.TrimSpace(*title)
+	}
+	if isFlagProvided(fs, "refs") {
+		item.Refs = splitCSV(*refs)
+	}
+	if *clearTheme {
+		item.Theme = ""
+	} else if isFlagProvided(fs, "theme") {
+		if item.EntityType != entityIssue && strings.TrimSpace(*theme) != "" {
+			fmt.Fprintln(os.Stderr, "theme can only be set on issues")
+			return 1
+		}
+		item.Theme = strings.TrimSpace(*theme)
+	}
+	item.LastReviewedOn = dateKey(now)
+	item.UpdatedAt = now.Format(time.RFC3339)
+
+	if err := SaveVaultState(NewVault(root), state); err != nil {
+		fmt.Fprintf(os.Stderr, "save state: %v\n", err)
+		return 1
+	}
+	return printJSON(item)
+}
+
+func runVaultComplete(args []string) int {
+	if hasHelpFlag(args[3:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault complete --id ID [--note TEXT] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Mark an item complete and optionally record why it was finished.",
+			Examples: []string{
+				fmt.Sprintf("%s vault complete --id ab12cd34", flagSetName(args)),
+				fmt.Sprintf("%s vault complete --id ab12cd34 --note \"shipped in PR #42\"", flagSetName(args)),
+			},
+		})
+		return 0
+	}
+	fs, dataDir, id := newItemFlagSet("vault complete")
+	note := fs.String("note", "", "completion note")
+	if err := fs.Parse(args[3:]); err != nil {
+		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
+		return 1
+	}
+	if err := fsValidation(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	root, now, state, item, err := loadMutableItem(*dataDir, *id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	item.Complete(now, *note)
+	if err := SaveVaultState(NewVault(root), state); err != nil {
+		fmt.Fprintf(os.Stderr, "save state: %v\n", err)
+		return 1
+	}
+	return printJSON(item)
+}
+
+func runVaultReopen(args []string) int {
+	if hasHelpFlag(args[3:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault reopen --id ID [--scope auto|complete|today] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Undo a complete or done-for-day state so work can continue.",
+			Examples: []string{
+				fmt.Sprintf("%s vault reopen --id ab12cd34", flagSetName(args)),
+				fmt.Sprintf("%s vault reopen --id ab12cd34 --scope today", flagSetName(args)),
+			},
+		})
+		return 0
+	}
+	fs, dataDir, id := newItemFlagSet("vault reopen")
+	scope := fs.String("scope", "auto", "reopen scope: auto|complete|today")
+	if err := fs.Parse(args[3:]); err != nil {
+		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
+		return 1
+	}
+	if err := fsValidation(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	root, now, state, item, err := loadMutableItem(*dataDir, *id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+
+	switch strings.TrimSpace(*scope) {
+	case "auto":
+		if item.Status == "done" {
+			item.ReopenComplete(now)
+		}
+		item.ReopenForToday(now)
+	case "complete":
+		item.ReopenComplete(now)
+	case "today":
+		item.ReopenForToday(now)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown reopen scope: %s\n", strings.TrimSpace(*scope))
+		return 1
+	}
+
+	if err := SaveVaultState(NewVault(root), state); err != nil {
+		fmt.Fprintf(os.Stderr, "save state: %v\n", err)
+		return 1
+	}
+	return printJSON(item)
+}
+
+func runVaultDoneForDay(args []string) int {
+	if hasHelpFlag(args[3:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault done-for-day --id ID [--note TEXT] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Pause an item for the rest of the day while keeping it open.",
+			Examples: []string{
+				fmt.Sprintf("%s vault done-for-day --id ab12cd34", flagSetName(args)),
+				fmt.Sprintf("%s vault done-for-day --id ab12cd34 --note \"waiting on design review\"", flagSetName(args)),
+			},
+		})
+		return 0
+	}
+	fs, dataDir, id := newItemFlagSet("vault done-for-day")
+	note := fs.String("note", "", "done-for-day note")
+	if err := fs.Parse(args[3:]); err != nil {
+		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
+		return 1
+	}
+	if err := fsValidation(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	root, now, state, item, err := loadMutableItem(*dataDir, *id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	item.MarkDoneForDay(now, *note)
+	if err := SaveVaultState(NewVault(root), state); err != nil {
+		fmt.Fprintf(os.Stderr, "save state: %v\n", err)
+		return 1
+	}
+	return printJSON(item)
+}
+
+func runVaultConvert(args []string) int {
+	if hasHelpFlag(args[3:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault convert inbox --id ID --to task|issue [--theme THEME] [--stage now|next|later] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Turn an inbox capture into a task or issue and place it into a planning stage.",
+			Examples: []string{
+				fmt.Sprintf("%s vault convert inbox --id ab12cd34 --to task --stage now", flagSetName(args)),
+				fmt.Sprintf("%s vault convert inbox --id ab12cd34 --to issue --theme auth-stepup --stage next", flagSetName(args)),
+			},
+		})
+		return 0
+	}
+	if len(args) < 4 || strings.TrimSpace(args[3]) != "inbox" {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault convert inbox --id ID --to task|issue [--theme THEME] [--stage now|next|later] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Turn an inbox capture into a task or issue and place it into a planning stage.",
+			Examples: []string{
+				fmt.Sprintf("%s vault convert inbox --id ab12cd34 --to task --stage now", flagSetName(args)),
+				fmt.Sprintf("%s vault convert inbox --id ab12cd34 --to issue --theme auth-stepup --stage next", flagSetName(args)),
+			},
+		})
+		return 1
+	}
+	fs, dataDir, id := newItemFlagSet("vault convert inbox")
+	target := fs.String("to", "", "conversion target: task|issue")
+	theme := fs.String("theme", "", "issue theme")
+	stage := fs.String("stage", string(StageNext), "initial stage: now|next|later")
+	if err := fs.Parse(args[4:]); err != nil {
+		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
+		return 1
+	}
+	if err := fsValidation(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	root, now, state, item, err := loadMutableItem(*dataDir, *id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	if item.Triage != TriageInbox {
+		fmt.Fprintf(os.Stderr, "item %s is not in inbox\n", *id)
+		return 1
+	}
+	parsedStage, err := parseCLIStage(*stage)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+
+	switch strings.TrimSpace(*target) {
+	case "task":
+		item.EntityType = entityTask
+		item.Theme = ""
+		item.MoveTo(now, TriageStock, parsedStage, "")
+	case "issue":
+		item.EntityType = entityIssue
+		item.Theme = strings.TrimSpace(*theme)
+		item.MoveTo(now, TriageStock, parsedStage, "")
+	default:
+		fmt.Fprintf(os.Stderr, "unknown conversion target: %s\n", strings.TrimSpace(*target))
+		return 1
+	}
+
+	if err := SaveVaultState(NewVault(root), state); err != nil {
+		fmt.Fprintf(os.Stderr, "save state: %v\n", err)
+		return 1
+	}
+	return printJSON(item)
+}
+
 func runVaultAddInbox(args []string) int {
+	if hasHelpFlag(args[4:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault add inbox --title TEXT [--body TEXT] [--tags a,b] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Capture a raw inbox note before it becomes a task or issue.",
+			Examples: []string{
+				fmt.Sprintf("%s vault add inbox --title \"Investigate retry rules\"", flagSetName(args)),
+				fmt.Sprintf("%s vault add inbox --title \"OTP note\" --body \"Need a decision\" --tags otp,auth", flagSetName(args)),
+			},
+		})
+		return 0
+	}
 	defaultPath, err := defaultStorePath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
@@ -162,6 +689,19 @@ func runVaultAddInbox(args []string) int {
 }
 
 func runVaultAddTask(args []string) int {
+	if hasHelpFlag(args[4:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault add task --title TEXT [--status STATUS] [--triage TRIAGE] [--stage now|next|later] [--deferred-kind KIND] [--tags a,b] [--refs a,b] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Create a task directly when you already know its metadata.",
+			Examples: []string{
+				fmt.Sprintf("%s vault add task --title \"Submit expense\" --stage now", flagSetName(args)),
+				fmt.Sprintf("%s vault add task --title \"Review memo\" --tags finance --refs knowledge/expense-submit.md", flagSetName(args)),
+			},
+		})
+		return 0
+	}
 	defaultPath, err := defaultStorePath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
@@ -204,6 +744,19 @@ func runVaultAddTask(args []string) int {
 }
 
 func runVaultAddIssue(args []string) int {
+	if hasHelpFlag(args[4:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault add issue --title TEXT [--theme THEME] [--status STATUS] [--triage TRIAGE] [--stage now|next|later] [--deferred-kind KIND] [--tags a,b] [--refs a,b] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Create an issue directly and optionally attach it to a theme.",
+			Examples: []string{
+				fmt.Sprintf("%s vault add issue --title \"OTP Tx design\" --theme auth-stepup --stage next", flagSetName(args)),
+				fmt.Sprintf("%s vault add issue --title \"Retry policy\" --refs themes/auth-stepup/context/constraints.md", flagSetName(args)),
+			},
+		})
+		return 0
+	}
 	defaultPath, err := defaultStorePath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
@@ -248,6 +801,19 @@ func runVaultAddIssue(args []string) int {
 }
 
 func runVaultAddTheme(args []string) int {
+	if hasHelpFlag(args[4:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault add theme --title TEXT [--tags a,b] [--source-refs a,b] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Create a theme that groups related issues and context.",
+			Examples: []string{
+				fmt.Sprintf("%s vault add theme --title \"Auth step-up\"", flagSetName(args)),
+				fmt.Sprintf("%s vault add theme --title \"Auth step-up\" --source-refs sources/documents/auth-deck.pptx", flagSetName(args)),
+			},
+		})
+		return 0
+	}
 	defaultPath, err := defaultStorePath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
@@ -280,6 +846,19 @@ func runVaultAddTheme(args []string) int {
 }
 
 func runVaultAddThemeContext(args []string) int {
+	if hasHelpFlag(args[4:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault add theme-context --theme THEME --name NAME --title TEXT [--body TEXT] [--source-refs a,b] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Add a context markdown document under an existing theme.",
+			Examples: []string{
+				fmt.Sprintf("%s vault add theme-context --theme auth-stepup --name constraints --title \"Constraints\"", flagSetName(args)),
+				fmt.Sprintf("%s vault add theme-context --theme auth-stepup --name risks --title \"Risks\" --source-refs sources/documents/auth-deck.pptx", flagSetName(args)),
+			},
+		})
+		return 0
+	}
 	defaultPath, err := defaultStorePath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
@@ -317,6 +896,19 @@ func runVaultAddThemeContext(args []string) int {
 }
 
 func runVaultAddSource(args []string) int {
+	if hasHelpFlag(args[4:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault add source --file PATH [--title TEXT] [--tags a,b] [--links a,b] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Import a source file into the vault and extract a markdown document from it.",
+			Examples: []string{
+				fmt.Sprintf("%s vault add source --file ./brief.txt", flagSetName(args)),
+				fmt.Sprintf("%s vault add source --file ./deck.pptx --title \"Planning deck\" --links https://example.com/spec", flagSetName(args)),
+			},
+		})
+		return 0
+	}
 	defaultPath, err := defaultStorePath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
@@ -354,6 +946,83 @@ func runVaultAddSource(args []string) int {
 		return 1
 	}
 	return printJSON(doc)
+}
+
+func parseIDCommandArgs(name string, args []string) (string, string, error) {
+	fs, dataDir, id := newItemFlagSet(name)
+	if err := fs.Parse(args); err != nil {
+		return "", "", fmt.Errorf("parse args: %w", err)
+	}
+	if err := fsValidation(fs); err != nil {
+		return "", "", err
+	}
+	root, err := filepath.Abs(*dataDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve data dir: %w", err)
+	}
+	return root, strings.TrimSpace(*id), nil
+}
+
+func newItemFlagSet(name string) (*flag.FlagSet, *string, *string) {
+	defaultPath, err := defaultStorePath()
+	if err != nil {
+		defaultPath = "."
+	}
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dataDir := fs.String("data-dir", defaultPath, "directory used to store taskbench data")
+	id := fs.String("id", "", "item id")
+	return fs, dataDir, id
+}
+
+func fsValidation(fs *flag.FlagSet) error {
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	if idFlag := fs.Lookup("id"); idFlag != nil && strings.TrimSpace(idFlag.Value.String()) == "" {
+		return fmt.Errorf("%s requires --id", fs.Name())
+	}
+	return nil
+}
+
+func loadMutableItem(dataDir, id string) (string, time.Time, State, *Item, error) {
+	root, err := filepath.Abs(strings.TrimSpace(dataDir))
+	if err != nil {
+		return "", time.Time{}, State{}, nil, fmt.Errorf("resolve data dir: %w", err)
+	}
+	vault := NewVault(root)
+	state, err := LoadVaultState(vault)
+	if err != nil {
+		return "", time.Time{}, State{}, nil, fmt.Errorf("load state: %w", err)
+	}
+	item, err := state.FindItem(strings.TrimSpace(id))
+	if err != nil {
+		return "", time.Time{}, State{}, nil, err
+	}
+	return root, todayLocal(), state, item, nil
+}
+
+func isFlagProvided(fs *flag.FlagSet, name string) bool {
+	provided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			provided = true
+		}
+	})
+	return provided
+}
+
+func parseCLIStage(raw string) (Stage, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "now":
+		return StageNow, nil
+	case "next":
+		return StageNext, nil
+	case "", "later":
+		return StageLater, nil
+	default:
+		return "", fmt.Errorf("expected stage as now/next/later")
+	}
 }
 
 func parseDataDirFlag(name string, args []string) (string, error) {
@@ -405,4 +1074,62 @@ func splitCSV(raw string) []string {
 
 func todayLocal() time.Time {
 	return time.Now()
+}
+
+type commandHelp struct {
+	Usage       []string
+	Description string
+	Commands    []helpCommand
+	Examples    []string
+}
+
+type helpCommand struct {
+	Name    string
+	Summary string
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if isHelpToken(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHelpToken(arg string) bool {
+	switch strings.TrimSpace(arg) {
+	case "-h", "--help":
+		return true
+	default:
+		return false
+	}
+}
+
+func printHelp(help commandHelp) {
+	if len(help.Usage) > 0 {
+		fmt.Fprintln(os.Stdout, "Usage:")
+		for _, usage := range help.Usage {
+			fmt.Fprintf(os.Stdout, "  %s\n", usage)
+		}
+	}
+	if help.Description != "" {
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, "Description:")
+		fmt.Fprintf(os.Stdout, "  %s\n", help.Description)
+	}
+	if len(help.Commands) > 0 {
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, "Commands:")
+		for _, command := range help.Commands {
+			fmt.Fprintf(os.Stdout, "  %-14s %s\n", command.Name, command.Summary)
+		}
+	}
+	if len(help.Examples) > 0 {
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, "Examples:")
+		for _, example := range help.Examples {
+			fmt.Fprintf(os.Stdout, "  %s\n", example)
+		}
+	}
 }
