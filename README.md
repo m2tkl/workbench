@@ -80,6 +80,7 @@ For agent-style workflows, the vault CLI now supports intent-level state changes
 workbench vault list themes
 workbench vault get item --id 7fa3c2d1
 workbench vault update item --id 7fa3c2d1 --theme 3b91e4aa --refs knowledge/otp.md
+workbench vault update theme --id 3b91e4aa --source-refs sources/documents/auth-deck.pptx
 workbench vault move --id 7fa3c2d1 --to next
 workbench vault move --id 7fa3c2d1 --to scheduled --day 2026-04-20
 workbench vault complete --id 7fa3c2d1 --note "done"

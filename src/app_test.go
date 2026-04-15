@@ -680,6 +680,54 @@ func TestEditThemeUpdatesIssue(t *testing.T) {
 	}
 }
 
+func TestAddThemeCreatesVaultThemeAndSelectsItInWorkbench(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	store := newTestStore(t)
+	app := NewApp(store, State{})
+	app.now = func() time.Time { return now }
+	app.view = viewWorkbench
+	app.workbenchNavCursor = 0
+
+	app.startAddTheme()
+	app.inputs[0].SetValue("Auth step-up")
+	app.inputs[1].SetValue("auth,otp")
+	app.inputs[2].SetValue("sources/documents/auth-deck.pptx")
+	app.inputs[3].SetValue("Theme scope")
+	app.submitModal()
+
+	themes, err := store.vault.LoadThemes()
+	if err != nil {
+		t.Fatalf("LoadThemes returned error: %v", err)
+	}
+	if len(themes) != 1 {
+		t.Fatalf("LoadThemes len = %d, want 1", len(themes))
+	}
+	if themes[0].Title != "Auth step-up" {
+		t.Fatalf("title = %q, want %q", themes[0].Title, "Auth step-up")
+	}
+	if !slices.Equal(themes[0].Tags, []string{"auth", "otp"}) {
+		t.Fatalf("tags = %#v", themes[0].Tags)
+	}
+	if !slices.Equal(themes[0].SourceRefs, []string{"sources/documents/auth-deck.pptx"}) {
+		t.Fatalf("source refs = %#v", themes[0].SourceRefs)
+	}
+	if themes[0].Body != "Theme scope" {
+		t.Fatalf("body = %q, want %q", themes[0].Body, "Theme scope")
+	}
+	if len(app.themes) != 1 || app.themes[0].ID != themes[0].ID {
+		t.Fatalf("app themes = %#v, want created theme %q", app.themes, themes[0].ID)
+	}
+	if app.mode != modeNormal {
+		t.Fatalf("mode = %v, want modeNormal", app.mode)
+	}
+	if app.focus != paneSidebar {
+		t.Fatalf("focus = %v, want paneSidebar", app.focus)
+	}
+	if selected := app.selectedTheme(); selected == nil || selected.ID != themes[0].ID {
+		t.Fatalf("selected theme = %#v, want %q", selected, themes[0].ID)
+	}
+}
+
 func TestConvertInboxIssueBlankThemeFallsBackToNoTheme(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewInboxItem(now, "Investigate OTP edge case")
@@ -925,6 +973,25 @@ func TestCommandPaletteCanOpenAddModal(t *testing.T) {
 	}
 	if len(updated.inputs) != 2 {
 		t.Fatalf("inputs = %d, want 2", len(updated.inputs))
+	}
+}
+
+func TestCommandPaletteCanOpenAddThemeModal(t *testing.T) {
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	app := NewApp(newTestStore(t), demoState(now))
+	app.now = func() time.Time { return now }
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	updated := model.(*App)
+	updated.inputs[0].SetValue("add theme")
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(*App)
+	if updated.mode != modeAddTheme {
+		t.Fatalf("mode = %v, want modeAddTheme", updated.mode)
+	}
+	if len(updated.inputs) != 4 {
+		t.Fatalf("inputs = %d, want 4", len(updated.inputs))
 	}
 }
 

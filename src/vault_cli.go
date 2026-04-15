@@ -201,7 +201,7 @@ func vaultAddHelp(args []string) commandHelp {
 		Usage: []string{
 			fmt.Sprintf("%s vault add <inbox|task|issue|theme|theme-context|source> [flags]", flagSetName(args)),
 		},
-			Description: "Create a new vault document or import a new source file. New inbox items, tasks, issues, and themes receive random 8-char hex IDs automatically.",
+		Description: "Create a new vault document or import a new source file. New inbox items, tasks, issues, and themes receive random 8-char hex IDs automatically.",
 		Commands: []helpCommand{
 			{Name: "inbox", Summary: "Capture a raw note before triage."},
 			{Name: "task", Summary: "Create a task document directly."},
@@ -370,7 +370,39 @@ func runVaultMove(args []string) int {
 }
 
 func runVaultUpdate(args []string) int {
-	if hasHelpFlag(args[3:]) {
+	if handled, exitCode := maybeHandleCommandHelp(args, 3, 4, vaultUpdateHelp(args)); handled {
+		return exitCode
+	}
+	switch args[3] {
+	case "item":
+		return runVaultUpdateItem(args)
+	case "theme":
+		return runVaultUpdateTheme(args)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown vault update target: %s\n", args[3])
+		return 1
+	}
+}
+
+func vaultUpdateHelp(args []string) commandHelp {
+	return commandHelp{
+		Usage: []string{
+			fmt.Sprintf("%s vault update <item|theme> [flags]", flagSetName(args)),
+		},
+		Description: "Edit item or theme metadata without changing lifecycle state.",
+		Commands: []helpCommand{
+			{Name: "item", Summary: "Update task or issue metadata such as title, theme, or refs."},
+			{Name: "theme", Summary: "Update a theme title, tags, body, or source refs."},
+		},
+		Examples: []string{
+			fmt.Sprintf("%s vault update item --id 7fa3c2d1 --title \"Clarify OTP retry rules\"", flagSetName(args)),
+			fmt.Sprintf("%s vault update theme --id 3b91e4aa --source-refs sources/documents/auth-deck.pptx", flagSetName(args)),
+		},
+	}
+}
+
+func runVaultUpdateItem(args []string) int {
+	if hasHelpFlag(args[4:]) {
 		printHelp(commandHelp{
 			Usage: []string{
 				fmt.Sprintf("%s vault update item --id ID [--title TEXT] [--theme THEME] [--refs a,b] [--clear-theme] [--data-dir DIR]", flagSetName(args)),
@@ -383,20 +415,6 @@ func runVaultUpdate(args []string) int {
 			},
 		})
 		return 0
-	}
-	if len(args) < 4 || strings.TrimSpace(args[3]) != "item" {
-		printHelp(commandHelp{
-			Usage: []string{
-				fmt.Sprintf("%s vault update item --id ID [--title TEXT] [--theme THEME] [--refs a,b] [--clear-theme] [--data-dir DIR]", flagSetName(args)),
-			},
-			Description: "Edit item metadata without changing its lifecycle state.",
-			Examples: []string{
-				fmt.Sprintf("%s vault update item --id 7fa3c2d1 --title \"Clarify OTP retry rules\"", flagSetName(args)),
-				fmt.Sprintf("%s vault update item --id 7fa3c2d1 --theme 3b91e4aa --refs knowledge/otp.md,themes/auth-step-up--3b91e4aa/context/constraints.md", flagSetName(args)),
-				fmt.Sprintf("%s vault update item --id 7fa3c2d1 --clear-theme", flagSetName(args)),
-			},
-		})
-		return 1
 	}
 	fs, dataDir, id := newItemFlagSet("vault update item")
 	title := fs.String("title", "", "updated title")
@@ -440,6 +458,81 @@ func runVaultUpdate(args []string) int {
 		return 1
 	}
 	return printJSON(item)
+}
+
+func runVaultUpdateTheme(args []string) int {
+	if hasHelpFlag(args[4:]) {
+		printHelp(commandHelp{
+			Usage: []string{
+				fmt.Sprintf("%s vault update theme --id ID [--title TEXT] [--tags a,b] [--source-refs a,b] [--body TEXT] [--data-dir DIR]", flagSetName(args)),
+			},
+			Description: "Edit theme metadata and keep theme context references consistent.",
+			Examples: []string{
+				fmt.Sprintf("%s vault update theme --id 3b91e4aa --title \"Auth step-up v2\"", flagSetName(args)),
+				fmt.Sprintf("%s vault update theme --id 3b91e4aa --tags auth,stepup --source-refs sources/documents/auth-deck.pptx", flagSetName(args)),
+				fmt.Sprintf("%s vault update theme --id 3b91e4aa --body \"Updated scope and constraints\"", flagSetName(args)),
+			},
+		})
+		return 0
+	}
+	fs, dataDir, id := newItemFlagSet("vault update theme")
+	title := fs.String("title", "", "updated theme title")
+	tags := fs.String("tags", "", "comma-separated tags")
+	sourceRefs := fs.String("source-refs", "", "comma-separated source refs")
+	body := fs.String("body", "", "updated theme body")
+	if err := fs.Parse(args[4:]); err != nil {
+		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
+		return 1
+	}
+	if err := fsValidation(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	root, err := filepath.Abs(strings.TrimSpace(*dataDir))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve data dir: %v\n", err)
+		return 1
+	}
+	themeID := strings.TrimSpace(*id)
+
+	vault := NewVault(root)
+	theme, err := readThemeDoc(vault.ThemeMetaPath(themeID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "theme not found: %s\n", themeID)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "load theme: %v\n", err)
+		return 1
+	}
+	if isFlagProvided(fs, "title") {
+		theme.Title = strings.TrimSpace(*title)
+	}
+	if isFlagProvided(fs, "tags") {
+		theme.Tags = splitCSV(*tags)
+	}
+	if isFlagProvided(fs, "source-refs") {
+		theme.SourceRefs = splitCSV(*sourceRefs)
+	}
+	if isFlagProvided(fs, "body") {
+		theme.Body = strings.TrimSpace(*body)
+	}
+	theme.Updated = dateKey(todayLocal())
+
+	contextDocs, err := vault.LoadThemeContextDocs(themeID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load theme context: %v\n", err)
+		return 1
+	}
+	if err := validateThemeContextRefs(theme.SourceRefs, contextDocs); err != nil {
+		fmt.Fprintf(os.Stderr, "update theme: %v\n", err)
+		return 1
+	}
+	if err := vault.SaveTheme(theme); err != nil {
+		fmt.Fprintf(os.Stderr, "save theme: %v\n", err)
+		return 1
+	}
+	return printJSON(theme)
 }
 
 func runVaultComplete(args []string) int {
@@ -1000,6 +1093,24 @@ func loadMutableItem(dataDir, id string) (string, time.Time, State, *Item, error
 		return "", time.Time{}, State{}, nil, err
 	}
 	return root, todayLocal(), state, item, nil
+}
+
+func validateThemeContextRefs(sourceRefs []string, docs []ThemeContextDoc) error {
+	if len(sourceRefs) == 0 {
+		return nil
+	}
+	allowed := map[string]struct{}{}
+	for _, ref := range sourceRefs {
+		allowed[ref] = struct{}{}
+	}
+	for _, doc := range docs {
+		for _, ref := range doc.SourceRefs {
+			if _, ok := allowed[ref]; !ok {
+				return fmt.Errorf("existing context %q uses source ref not declared on theme: %s", doc.Title, ref)
+			}
+		}
+	}
+	return nil
 }
 
 func isFlagProvided(fs *flag.FlagSet, name string) bool {

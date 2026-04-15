@@ -107,6 +107,28 @@ func TestRunVaultMoveHelpIncludesScheduledAndRecurringExamples(t *testing.T) {
 	}
 }
 
+func TestRunVaultUpdateHelpIncludesThemeCommand(t *testing.T) {
+	output := captureStdout(t, func() {
+		if code := runVaultCommand([]string{"workbench", "vault", "update", "--help"}); code != 0 {
+			t.Fatalf("runVaultCommand exit code = %d, want 0", code)
+		}
+	})
+
+	for _, want := range []string{
+		"Usage:",
+		"vault update <item|theme>",
+		"theme",
+		"vault update theme --id",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(strings.ToLower(output), "nix") {
+		t.Fatalf("update help unexpectedly mentions nix:\n%s", output)
+	}
+}
+
 func TestRunVaultAddCommandsCreateFiles(t *testing.T) {
 	root := t.TempDir()
 
@@ -453,6 +475,91 @@ func TestRunVaultMoveUpdateAndLifecycleCommands(t *testing.T) {
 	}
 	if !slices.Equal(got.Refs, []string{"knowledge/otp.md", "themes/auth-stepup/context/constraints.md"}) {
 		t.Fatalf("refs = %#v", got.Refs)
+	}
+}
+
+func TestRunVaultUpdateThemeCommand(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.SaveTheme(ThemeDoc{
+		ID:         "auth-stepup",
+		Title:      "Auth step-up",
+		Created:    "2026-04-13",
+		Updated:    "2026-04-13",
+		Tags:       []string{"auth"},
+		SourceRefs: []string{"sources/documents/auth-deck.pptx", "knowledge/auth-basics.md"},
+		Body:       "Initial scope",
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if err := vault.SaveThemeContextDoc("auth-stepup", "constraints", ThemeContextDoc{
+		Title:      "Constraints",
+		SourceRefs: []string{"sources/documents/auth-deck.pptx"},
+		Body:       "Existing context",
+	}); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+
+	if code := runVaultCommand([]string{
+		"workbench", "vault", "update", "theme",
+		"--data-dir", root,
+		"--id", "auth-stepup",
+		"--title", "Auth step-up v2",
+		"--tags", "auth,otp",
+		"--source-refs", "sources/documents/auth-deck.pptx",
+		"--body", "Updated scope",
+	}); code != 0 {
+		t.Fatalf("update theme exit code = %d, want 0", code)
+	}
+
+	theme, err := readThemeDoc(vault.ThemeMetaPath("auth-stepup"))
+	if err != nil {
+		t.Fatalf("readThemeDoc returned error: %v", err)
+	}
+	if theme.Title != "Auth step-up v2" {
+		t.Fatalf("title = %q, want %q", theme.Title, "Auth step-up v2")
+	}
+	if !slices.Equal(theme.Tags, []string{"auth", "otp"}) {
+		t.Fatalf("tags = %#v", theme.Tags)
+	}
+	if !slices.Equal(theme.SourceRefs, []string{"sources/documents/auth-deck.pptx"}) {
+		t.Fatalf("source_refs = %#v", theme.SourceRefs)
+	}
+	if theme.Body != "Updated scope" {
+		t.Fatalf("body = %q, want %q", theme.Body, "Updated scope")
+	}
+	if _, err := os.Stat(vault.ThemeContextPath("auth-stepup", "constraints")); err != nil {
+		t.Fatalf("expected context doc to remain available after rename: %v", err)
+	}
+}
+
+func TestRunVaultUpdateThemeRejectsRemovingReferencedSourceRef(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.SaveTheme(ThemeDoc{
+		ID:         "auth-stepup",
+		Title:      "Auth step-up",
+		Created:    "2026-04-13",
+		Updated:    "2026-04-13",
+		SourceRefs: []string{"sources/documents/auth-deck.pptx", "knowledge/auth-basics.md"},
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if err := vault.SaveThemeContextDoc("auth-stepup", "constraints", ThemeContextDoc{
+		Title:      "Constraints",
+		SourceRefs: []string{"knowledge/auth-basics.md"},
+		Body:       "Existing context",
+	}); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+
+	if code := runVaultCommand([]string{
+		"workbench", "vault", "update", "theme",
+		"--data-dir", root,
+		"--id", "auth-stepup",
+		"--source-refs", "sources/documents/auth-deck.pptx",
+	}); code == 0 {
+		t.Fatal("runVaultCommand accepted removing a source ref used by theme context")
 	}
 }
 

@@ -32,6 +32,7 @@ const (
 	modeCommandPalette
 	modeSearch
 	modeAdd
+	modeAddTheme
 	modeMove
 	modeSchedule
 	modeRecurring
@@ -1139,6 +1140,13 @@ func (a *App) renderModal(width, height int) string {
 	case modeAdd:
 		title = "Add Inbox Item"
 		body = append(body, "new tasks always enter Inbox")
+	case modeAddTheme:
+		title = "Add Theme"
+		body = append(body,
+			"title is required",
+			"tags and source refs are comma-separated",
+			"body is optional theme context",
+		)
 	case modeEditRefs:
 		title = "Edit Refs"
 		body = append(body, "comma-separated paths such as knowledge/foo.md")
@@ -1820,6 +1828,13 @@ func (a *App) paletteCommands() []paletteCommand {
 			a.startAdd()
 			return nil
 		}},
+		{title: "Add Theme", description: "Create a new theme in the vault.", aliases: []string{"new create theme"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.startAddTheme()
+			return nil
+		}},
 		{title: "Complete Item", description: "Mark the current item done.", aliases: []string{"done finish close"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
@@ -2026,6 +2041,25 @@ func (a *App) startAdd() {
 	a.focusInputs()
 }
 
+func (a *App) startAddTheme() {
+	fields := []struct {
+		placeholder string
+		value       string
+	}{
+		{"title", ""},
+		{"tags", ""},
+		{"source refs", ""},
+		{"body", ""},
+	}
+	a.inputs = make([]textinput.Model, 0, len(fields))
+	for _, field := range fields {
+		a.inputs = append(a.inputs, newInput(field.placeholder, field.value))
+	}
+	a.inputCursor = 0
+	a.mode = modeAddTheme
+	a.focusInputs()
+}
+
 func (a *App) startSingleInput(nextMode mode, placeholder, value string) {
 	a.inputs = []textinput.Model{newInput(placeholder, value)}
 	a.inputCursor = 0
@@ -2097,6 +2131,8 @@ func (a *App) submitModal() {
 		a.status = "Filter updated."
 	case modeAdd:
 		a.submitAdd()
+	case modeAddTheme:
+		a.submitAddTheme()
 	case modeEditRefs:
 		a.submitEditRefs()
 	case modeEditTheme:
@@ -2136,6 +2172,37 @@ func (a *App) submitAdd() {
 	a.state.AddItem(item)
 	a.save()
 	a.status = a.undoStatus("Added " + item.ID + " to Inbox.")
+}
+
+func (a *App) submitAddTheme() {
+	title := strings.TrimSpace(a.inputs[0].Value())
+	if title == "" {
+		a.status = "Title is required."
+		a.keepModalOpen = true
+		return
+	}
+
+	now := a.now()
+	theme := ThemeDoc{
+		ID:         newID(),
+		Title:      title,
+		Created:    dateKey(now),
+		Updated:    dateKey(now),
+		Tags:       splitCSV(a.inputs[1].Value()),
+		SourceRefs: splitCSV(a.inputs[2].Value()),
+		Body:       strings.TrimSpace(a.inputs[3].Value()),
+	}
+	if err := a.store.vault.SaveTheme(theme); err != nil {
+		a.status = "save failed: " + err.Error()
+		a.keepModalOpen = true
+		return
+	}
+	if err := a.reloadThemes(); err != nil {
+		a.status = "reload failed: " + err.Error()
+		return
+	}
+	a.selectWorkbenchTheme(theme.ID)
+	a.status = "Added theme " + theme.ID + "."
 }
 
 func (a *App) submitEditRefs() {
@@ -2654,23 +2721,30 @@ func (a *App) reloadFromStore(editErr error) {
 		a.status = "reload failed: " + err.Error()
 		return
 	}
-	loadThemes := a.loadThemes
-	if loadThemes == nil {
-		loadThemes = a.store.vault.LoadThemes
-	}
-	themes, err := loadThemes()
-	if err != nil {
+	if err := a.reloadThemes(); err != nil {
 		a.status = "reload failed: " + err.Error()
 		return
 	}
 	a.state = state
-	a.themes = themes
 	a.syncSelection()
 	if a.readOnly {
 		a.status = "Reloaded work from vault."
 		return
 	}
 	a.status = "Reloaded tasks from storage."
+}
+
+func (a *App) reloadThemes() error {
+	loadThemes := a.loadThemes
+	if loadThemes == nil {
+		loadThemes = a.store.vault.LoadThemes
+	}
+	themes, err := loadThemes()
+	if err != nil {
+		return err
+	}
+	a.themes = themes
+	return nil
 }
 
 func (a *App) prevSection() {
@@ -3114,6 +3188,24 @@ func (a *App) selectedTheme() *ThemeDoc {
 		}
 	}
 	return nil
+}
+
+func (a *App) selectWorkbenchTheme(themeID string) {
+	if a.view != viewWorkbench {
+		return
+	}
+	entries := a.workbenchEntries()
+	for i, entry := range entries {
+		if entry.kind == "theme" && entry.id == themeID {
+			a.focus = paneSidebar
+			a.workbenchNavCursor = i
+			a.workbenchIssueCursor = 0
+			a.workbenchIssueOffset = 0
+			a.detailOffset = 0
+			a.syncSelection()
+			return
+		}
+	}
 }
 
 func (a *App) detailLines(width int) []string {
