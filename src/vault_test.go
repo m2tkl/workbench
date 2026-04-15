@@ -367,6 +367,29 @@ func TestSaveUsesSluggedPaths(t *testing.T) {
 	}
 }
 
+func TestSaveUsesUnicodeSluggedPaths(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+
+	task := TaskDoc{
+		Metadata: Metadata{
+			ID:      "task-ja",
+			Title:   "認証 強化",
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNow,
+			Created: "2026-04-12",
+			Updated: "2026-04-12",
+		},
+	}
+	if err := vault.SaveTask(task); err != nil {
+		t.Fatalf("SaveTask returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(vault.TasksDir(), "認証-強化--task-ja", "task.md")); err != nil {
+		t.Fatalf("expected unicode slugged task path: %v", err)
+	}
+}
+
 func TestSaveMigratesLegacyPathsToSluggedPaths(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)

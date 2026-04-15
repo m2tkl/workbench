@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type Metadata struct {
@@ -1321,7 +1322,7 @@ func slugify(raw string) string {
 	lastHyphen := false
 	for _, r := range raw {
 		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+		case unicode.IsLetter(r), unicode.IsDigit(r):
 			b.WriteRune(r)
 			lastHyphen = false
 		default:
