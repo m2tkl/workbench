@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 const defaultSourceWorkbenchAddr = "127.0.0.1:8080"
@@ -162,10 +163,48 @@ type sourceWorkbenchServer struct {
 	tmpl  *template.Template
 }
 
+type sourceWorkbenchOption struct {
+	Value string
+	Label string
+}
+
+type sourceWorkbenchNavItem struct {
+	Label  string
+	Href   string
+	Active bool
+}
+
+type sourceWorkbenchStagedItem struct {
+	Name       string
+	ThemeLabel string
+	IssueLabel string
+}
+
+type sourceWorkbenchView string
+
+const (
+	sourceWorkbenchViewPaste  sourceWorkbenchView = "paste"
+	sourceWorkbenchViewUpload sourceWorkbenchView = "upload"
+	sourceWorkbenchViewLink   sourceWorkbenchView = "link"
+	sourceWorkbenchViewStaged sourceWorkbenchView = "staged"
+)
+
 type sourceWorkbenchPage struct {
-	StagedFiles []string
-	Status      string
-	Error       string
+	ActiveView      string
+	Nav             []sourceWorkbenchNavItem
+	StagedFiles     []string
+	StagedItems     []sourceWorkbenchStagedItem
+	SourceDocuments []sourceWorkbenchOption
+	Themes          []sourceWorkbenchOption
+	Issues          []sourceWorkbenchOption
+	ImportedCount   int
+	StagedCount     int
+	IsPasteView     bool
+	IsUploadView    bool
+	IsLinkView      bool
+	IsStagedView    bool
+	Status          string
+	Error           string
 }
 
 func newSourceWorkbenchServer(vault VaultFS) *sourceWorkbenchServer {
@@ -179,6 +218,8 @@ func (s *sourceWorkbenchServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/upload", s.handleUpload)
+	mux.HandleFunc("/paste", s.handlePaste)
+	mux.HandleFunc("/link", s.handleLink)
 	return mux
 }
 
@@ -187,15 +228,78 @@ func (s *sourceWorkbenchServer) handleIndex(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
+	activeView := normalizeSourceWorkbenchView(r.URL.Query().Get("view"))
 	stagedFiles, err := s.vault.ListStagedSourceFiles()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	sourceDocs, err := s.vault.LoadSourceDocuments()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	stagedSelections, err := s.vault.LoadStagedSourceSelections()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	themes, err := s.vault.LoadThemes()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	state, err := LoadVaultState(s.vault)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	page := sourceWorkbenchPage{
-		StagedFiles: stagedFiles,
-		Status:      strings.TrimSpace(r.URL.Query().Get("status")),
-		Error:       strings.TrimSpace(r.URL.Query().Get("error")),
+		ActiveView:      string(activeView),
+		Nav:             sourceWorkbenchNav(activeView, len(sourceDocs), len(stagedFiles)),
+		StagedFiles:     stagedFiles,
+		StagedItems:     make([]sourceWorkbenchStagedItem, 0, len(stagedFiles)),
+		SourceDocuments: make([]sourceWorkbenchOption, 0, len(sourceDocs)),
+		Themes:          make([]sourceWorkbenchOption, 0, len(themes)),
+		Issues:          []sourceWorkbenchOption{},
+		ImportedCount:   len(sourceDocs),
+		StagedCount:     len(stagedFiles),
+		IsPasteView:     activeView == sourceWorkbenchViewPaste,
+		IsUploadView:    activeView == sourceWorkbenchViewUpload,
+		IsLinkView:      activeView == sourceWorkbenchViewLink,
+		IsStagedView:    activeView == sourceWorkbenchViewStaged,
+		Status:          strings.TrimSpace(r.URL.Query().Get("status")),
+		Error:           strings.TrimSpace(r.URL.Query().Get("error")),
+	}
+	for _, doc := range sourceDocs {
+		ref := sourceDocumentRef(s.vault, doc.Path)
+		page.SourceDocuments = append(page.SourceDocuments, sourceWorkbenchOption{
+			Value: ref,
+			Label: fmt.Sprintf("%s (%s)", doc.Title, ref),
+		})
+	}
+	themeLabels := map[string]string{}
+	for _, theme := range themes {
+		label := fmt.Sprintf("%s (%s)", theme.Title, theme.ID)
+		page.Themes = append(page.Themes, sourceWorkbenchOption{Value: theme.ID, Label: label})
+		themeLabels[theme.ID] = label
+	}
+	issueLabels := map[string]string{}
+	for _, item := range state.Items {
+		if item.EntityType != entityIssue || item.Status != "open" {
+			continue
+		}
+		label := fmt.Sprintf("%s (%s)", item.Title, item.ID)
+		page.Issues = append(page.Issues, sourceWorkbenchOption{Value: item.ID, Label: label})
+		issueLabels[item.ID] = label
+	}
+	for _, stagedName := range stagedFiles {
+		item := sourceWorkbenchStagedItem{Name: stagedName}
+		if selection, ok := stagedSelections[stagedName]; ok {
+			item.ThemeLabel = sourceWorkbenchSelectionLabel(themeLabels, selection.ThemeID, "theme")
+			item.IssueLabel = sourceWorkbenchSelectionLabel(issueLabels, selection.IssueID, "issue")
+		}
+		page.StagedItems = append(page.StagedItems, item)
 	}
 	if err := s.tmpl.Execute(w, page); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -208,25 +312,251 @@ func (s *sourceWorkbenchServer) handleUpload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		s.redirectWithMessage(w, r, "", fmt.Sprintf("upload form parse failed: %v", err))
+		s.redirectWithMessage(w, r, sourceWorkbenchViewUpload, "", fmt.Sprintf("upload form parse failed: %v", err))
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		s.redirectWithMessage(w, r, "", "file is required")
+		s.redirectWithMessage(w, r, sourceWorkbenchViewUpload, "", "file is required")
 		return
 	}
 	defer file.Close()
-	stagedName, err := s.vault.StageSourceUpload(header.Filename, file)
-	if err != nil {
-		s.redirectWithMessage(w, r, "", err.Error())
+	themeID := strings.TrimSpace(r.FormValue("theme_id"))
+	issueID := strings.TrimSpace(r.FormValue("issue_id"))
+	if isMarkdownSourceFilename(header.Filename) {
+		raw, err := io.ReadAll(file)
+		if err != nil {
+			s.redirectWithMessage(w, r, sourceWorkbenchViewUpload, "", err.Error())
+			return
+		}
+		status, err := s.saveMarkdownSourceDocument(header.Filename, string(raw), themeID, issueID)
+		if err != nil {
+			s.redirectWithMessage(w, r, sourceWorkbenchViewUpload, "", err.Error())
+			return
+		}
+		s.redirectWithMessage(w, r, sourceWorkbenchViewUpload, status, "")
 		return
 	}
-	s.redirectWithMessage(w, r, fmt.Sprintf("staged %s", stagedName), "")
+	stagedName, err := s.vault.StageSourceUpload(header.Filename, file)
+	if err != nil {
+		s.redirectWithMessage(w, r, sourceWorkbenchViewUpload, "", err.Error())
+		return
+	}
+	if err := s.vault.SaveStagedSourceSelection(stagedName, themeID, issueID); err != nil {
+		s.redirectWithMessage(w, r, sourceWorkbenchViewUpload, "", err.Error())
+		return
+	}
+	s.redirectWithMessage(w, r, sourceWorkbenchViewUpload, stagedSelectionMessage(stagedName, themeID, issueID), "")
 }
 
-func (s *sourceWorkbenchServer) redirectWithMessage(w http.ResponseWriter, r *http.Request, status, errMsg string) {
+func (s *sourceWorkbenchServer) handlePaste(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.redirectWithMessage(w, r, sourceWorkbenchViewPaste, "", fmt.Sprintf("paste form parse failed: %v", err))
+		return
+	}
+	markdown := strings.TrimSpace(r.FormValue("markdown"))
+	if markdown == "" {
+		s.redirectWithMessage(w, r, sourceWorkbenchViewPaste, "", "markdown is required")
+		return
+	}
+	filename := markdownPasteFilename(r.FormValue("filename"))
+	themeID := strings.TrimSpace(r.FormValue("theme_id"))
+	issueID := strings.TrimSpace(r.FormValue("issue_id"))
+	status, err := s.saveMarkdownSourceDocument(filename, markdown, themeID, issueID)
+	if err != nil {
+		s.redirectWithMessage(w, r, sourceWorkbenchViewPaste, "", err.Error())
+		return
+	}
+	s.redirectWithMessage(w, r, sourceWorkbenchViewPaste, status, "")
+}
+
+func (s *sourceWorkbenchServer) handleLink(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.redirectWithMessage(w, r, sourceWorkbenchViewLink, "", fmt.Sprintf("link form parse failed: %v", err))
+		return
+	}
+	ref := strings.TrimSpace(r.FormValue("source_ref"))
+	if ref == "" {
+		s.redirectWithMessage(w, r, sourceWorkbenchViewLink, "", "source document is required")
+		return
+	}
+	themeID := strings.TrimSpace(r.FormValue("theme_id"))
+	issueID := strings.TrimSpace(r.FormValue("issue_id"))
+	if !hasSourceLinkTarget(themeID, issueID) {
+		s.redirectWithMessage(w, r, sourceWorkbenchViewLink, "", "choose a theme or issue")
+		return
+	}
+	if _, err := os.Stat(filepath.Join(s.vault.RootDir(), filepath.FromSlash(ref))); err != nil {
+		s.redirectWithMessage(w, r, sourceWorkbenchViewLink, "", fmt.Sprintf("source document not found: %s", ref))
+		return
+	}
+	if err := linkSourceRef(s.vault, ref, themeID, issueID, todayLocal()); err != nil {
+		s.redirectWithMessage(w, r, sourceWorkbenchViewLink, "", err.Error())
+		return
+	}
+	s.redirectWithMessage(w, r, sourceWorkbenchViewLink, fmt.Sprintf("linked %s to %s", ref, describeSourceLinkTargets(themeID, issueID)), "")
+}
+
+func markdownPasteFilename(raw string) string {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "pasted.md"
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext != ".md" && ext != ".markdown" {
+		name += ".md"
+	}
+	return name
+}
+
+func isMarkdownSourceFilename(name string) bool {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(name)))
+	return ext == ".md" || ext == ".markdown"
+}
+
+func hasSourceLinkTarget(themeID, issueID string) bool {
+	return strings.TrimSpace(themeID) != "" || strings.TrimSpace(issueID) != ""
+}
+
+func describeSourceLinkTargets(themeID, issueID string) string {
+	targets := []string{}
+	if themeID = strings.TrimSpace(themeID); themeID != "" {
+		targets = append(targets, fmt.Sprintf("theme %s", themeID))
+	}
+	if issueID = strings.TrimSpace(issueID); issueID != "" {
+		targets = append(targets, fmt.Sprintf("issue %s", issueID))
+	}
+	return strings.Join(targets, " and ")
+}
+
+func stagedSelectionMessage(stagedName, themeID, issueID string) string {
+	if strings.TrimSpace(themeID) == "" && strings.TrimSpace(issueID) == "" {
+		return fmt.Sprintf("staged %s", stagedName)
+	}
+	return fmt.Sprintf("staged %s and remembered %s", stagedName, describeSourceLinkTargets(themeID, issueID))
+}
+
+func savedSourceDocumentMessage(ref, themeID, issueID string) string {
+	if strings.TrimSpace(themeID) == "" && strings.TrimSpace(issueID) == "" {
+		return fmt.Sprintf("saved %s", ref)
+	}
+	return fmt.Sprintf("saved %s and linked %s", ref, describeSourceLinkTargets(themeID, issueID))
+}
+
+func (s *sourceWorkbenchServer) saveMarkdownSourceDocument(filename, markdown, themeID, issueID string) (string, error) {
+	doc, err := s.vault.SaveMarkdownSourceDocument(filename, markdown, todayLocal())
+	if err != nil {
+		return "", err
+	}
+	ref := sourceDocumentRef(s.vault, doc.Path)
+	if hasSourceLinkTarget(themeID, issueID) {
+		if err := linkSourceRef(s.vault, ref, themeID, issueID, todayLocal()); err != nil {
+			if removeErr := os.Remove(doc.Path); removeErr != nil && !os.IsNotExist(removeErr) {
+				return "", fmt.Errorf("%v (cleanup failed: %v)", err, removeErr)
+			}
+			return "", err
+		}
+	}
+	return savedSourceDocumentMessage(ref, themeID, issueID), nil
+}
+
+func sourceDocumentRef(vault VaultFS, path string) string {
+	rel, err := filepath.Rel(vault.RootDir(), path)
+	if err != nil {
+		return filepath.ToSlash(filepath.Join("sources", "documents", filepath.Base(path)))
+	}
+	return filepath.ToSlash(rel)
+}
+
+func linkSourceRef(vault VaultFS, ref, themeID, issueID string, now time.Time) error {
+	if now.IsZero() {
+		now = todayLocal()
+	}
+	if themeID != "" {
+		theme, err := readThemeDoc(vault.ThemeMetaPath(themeID))
+		if err != nil {
+			return err
+		}
+		theme.SourceRefs = normalizeStrings(append(theme.SourceRefs, ref))
+		theme.Updated = dateKey(now)
+		if err := vault.SaveTheme(theme); err != nil {
+			return err
+		}
+	}
+	if issueID != "" {
+		state, err := LoadVaultState(vault)
+		if err != nil {
+			return err
+		}
+		item, err := state.FindItem(issueID)
+		if err != nil {
+			return err
+		}
+		if item.EntityType != entityIssue {
+			return fmt.Errorf("item is not an issue: %s", issueID)
+		}
+		item.Refs = normalizeStrings(append(item.Refs, ref))
+		item.LastReviewedOn = dateKey(now)
+		item.touch(now)
+		if err := SaveVaultState(vault, state); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sourceWorkbenchSelectionLabel(labels map[string]string, id, kind string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	if label, ok := labels[id]; ok {
+		return label
+	}
+	return fmt.Sprintf("Missing %s (%s)", kind, id)
+}
+
+func normalizeSourceWorkbenchView(raw string) sourceWorkbenchView {
+	switch sourceWorkbenchView(strings.TrimSpace(raw)) {
+	case sourceWorkbenchViewUpload, sourceWorkbenchViewLink, sourceWorkbenchViewStaged:
+		return sourceWorkbenchView(strings.TrimSpace(raw))
+	default:
+		return sourceWorkbenchViewPaste
+	}
+}
+
+func sourceWorkbenchNav(active sourceWorkbenchView, importedCount, stagedCount int) []sourceWorkbenchNavItem {
+	items := []struct {
+		view  sourceWorkbenchView
+		label string
+	}{
+		{view: sourceWorkbenchViewPaste, label: "Quick Capture"},
+		{view: sourceWorkbenchViewUpload, label: "Upload File"},
+		{view: sourceWorkbenchViewLink, label: fmt.Sprintf("Link Source (%d)", importedCount)},
+		{view: sourceWorkbenchViewStaged, label: fmt.Sprintf("Staged Files (%d)", stagedCount)},
+	}
+	nav := make([]sourceWorkbenchNavItem, 0, len(items))
+	for _, item := range items {
+		nav = append(nav, sourceWorkbenchNavItem{
+			Label:  item.label,
+			Href:   "/?view=" + url.QueryEscape(string(item.view)),
+			Active: item.view == active,
+		})
+	}
+	return nav
+}
+
+func (s *sourceWorkbenchServer) redirectWithMessage(w http.ResponseWriter, r *http.Request, view sourceWorkbenchView, status, errMsg string) {
 	values := url.Values{}
+	values.Set("view", string(view))
 	if status != "" {
 		values.Set("status", status)
 	}
@@ -277,16 +607,53 @@ const sourceWorkbenchHTML = `<!doctype html>
       padding: 0;
       margin-bottom: 24px;
     }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 18px 16px;
+      background: #fff;
+    }
     .stack {
       display: grid;
       gap: 12px;
+    }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 18px;
+      padding: 0;
+      list-style: none;
+    }
+    .tabs a {
+      display: inline-block;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 0.92rem;
+      background: #fff;
+    }
+    .tabs a.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .stats {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 0.9rem;
     }
     label {
       display: block;
       font-size: 0.85rem;
       margin-bottom: 4px;
     }
-    select, input[type="file"], button {
+    select, input[type="file"], input[type="text"], textarea, button {
       width: 100%;
       border-radius: 6px;
       border: 1px solid var(--line);
@@ -294,6 +661,10 @@ const sourceWorkbenchHTML = `<!doctype html>
       font: inherit;
       background: #fff;
       color: var(--ink);
+    }
+    textarea {
+      min-height: 220px;
+      resize: vertical;
     }
     button {
       cursor: pointer;
@@ -353,41 +724,154 @@ const sourceWorkbenchHTML = `<!doctype html>
 <body>
   <main>
     <h1>Source Inbox</h1>
-    <p class="lead">Upload files into <code>sources/files/staged/</code>. Classify and extract them later.</p>
+    <p class="lead">One workflow at a time: quick capture, file upload, existing source linking, or staged review.</p>
     {{if .Status}}<div class="notice ok">{{.Status}}</div>{{end}}
     {{if .Error}}<div class="notice error">{{.Error}}</div>{{end}}
+    <div class="stats">
+      <div>Imported sources: <strong>{{.ImportedCount}}</strong></div>
+      <div>Staged files: <strong>{{.StagedCount}}</strong></div>
+    </div>
+    <ul class="tabs">
+      {{range .Nav}}
+      <li><a href="{{.Href}}"{{if .Active}} class="active"{{end}}>{{.Label}}</a></li>
+      {{end}}
+    </ul>
 
     <section class="section">
-      <h2>Upload</h2>
+      {{if .IsPasteView}}
+      <div class="panel">
+      <h2>Quick Capture</h2>
+      <p class="meta">Paste markdown notes directly. Pick a theme or issue now if you already know where this source belongs.</p>
+      <form method="post" action="/paste">
+        <div class="stack">
+          <div>
+            <label for="filename">Filename</label>
+            <input id="filename" type="text" name="filename" placeholder="pasted.md">
+          </div>
+          <div>
+            <label for="markdown">Markdown</label>
+            <textarea id="markdown" name="markdown" placeholder="# Notes&#10;&#10;Paste markdown here." required></textarea>
+          </div>
+          <div>
+            <label for="paste-theme">Theme</label>
+            <select id="paste-theme" name="theme_id">
+              <option value="">Leave unlinked</option>
+              {{range .Themes}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+            </select>
+          </div>
+          <div>
+            <label for="paste-issue">Issue</label>
+            <select id="paste-issue" name="issue_id">
+              <option value="">Leave unlinked</option>
+              {{range .Issues}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+            </select>
+          </div>
+          <div>
+            <button type="submit">Capture Markdown</button>
+          </div>
+        </div>
+        <p class="meta">If no filename is provided, Workbench uses <code>pasted.md</code>. Pasted Markdown is saved directly as a source document, and any selected theme or issue is linked immediately.</p>
+      </form>
+      </div>
+      {{else if .IsUploadView}}
+      <div class="panel">
+      <h2>Upload File</h2>
+      <p class="meta">Drop or pick a file to add it. Markdown files are saved directly as source documents; other files stay staged for later agent work.</p>
       <form method="post" action="/upload" enctype="multipart/form-data">
         <div class="stack">
           <div>
             <label for="file">File</label>
-            <input id="file" type="file" name="file" required>
+            <input id="file" type="file" name="file" accept=".md,.markdown,text/markdown,.txt,.text,.csv,.tsv,.docx,.pptx,.xlsx" required>
+          </div>
+          <div>
+            <label for="upload-theme">Theme</label>
+            <select id="upload-theme" name="theme_id">
+              <option value="">Leave unlinked</option>
+              {{range .Themes}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+            </select>
+          </div>
+          <div>
+            <label for="upload-issue">Issue</label>
+            <select id="upload-issue" name="issue_id">
+              <option value="">Leave unlinked</option>
+              {{range .Issues}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+            </select>
           </div>
           <div>
             <button type="submit">Stage Upload</button>
           </div>
         </div>
-        <p class="meta">Drop or pick a file. It will stay in <code>sources/files/staged/</code> until an agent or CLI flow processes it.</p>
+        <p class="meta">Supported file types include <code>.md</code>, <code>.markdown</code>, <code>.txt</code>, <code>.csv</code>, <code>.docx</code>, <code>.pptx</code>, and <code>.xlsx</code>.</p>
       </form>
-    </section>
-
-    <section class="section">
-      <h2>Staged Files</h2>
-      {{if .StagedFiles}}
+      </div>
+      {{else if .IsLinkView}}
+      <div class="panel">
+      <h2>Link Existing Source</h2>
+      <p class="meta">Use this when the source document already exists and you only need to associate it with a theme or issue.</p>
+      <form method="post" action="/link">
+        <div class="stack">
+          <div>
+            <label for="source-ref">Source document</label>
+            <select id="source-ref" name="source_ref" required>
+              <option value="">Choose a source document</option>
+              {{range .SourceDocuments}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+            </select>
+          </div>
+          <div>
+            <label for="link-theme">Theme</label>
+            <select id="link-theme" name="theme_id">
+              <option value="">Do not link to a theme</option>
+              {{range .Themes}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+            </select>
+          </div>
+          <div>
+            <label for="link-issue">Issue</label>
+            <select id="link-issue" name="issue_id">
+              <option value="">Do not link to an issue</option>
+              {{range .Issues}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+            </select>
+          </div>
+          <div>
+            <button type="submit">Link Source Document</button>
+          </div>
+        </div>
+      </form>
+      {{if .SourceDocuments}}
       <ul class="files">
-        {{range .StagedFiles}}
+        {{range .SourceDocuments}}
         <li>
           <div>
-            <div>{{.}}</div>
-            <div class="meta">Staged in <code>sources/files/staged/</code>. Extract this later with an agent or CLI flow.</div>
+            <div>{{.Label}}</div>
+            <div class="meta"><code>{{.Value}}</code></div>
+          </div>
+        </li>
+        {{end}}
+      </ul>
+      {{else}}
+      <p class="empty">No source documents yet.</p>
+      {{end}}
+      </div>
+      {{else if .IsStagedView}}
+      <div class="panel">
+      <h2>Staged Files</h2>
+      <p class="meta">Files here are waiting for later agent work or review.</p>
+      {{if .StagedItems}}
+      <ul class="files">
+        {{range .StagedItems}}
+        <li>
+          <div>
+            <div>{{.Name}}</div>
+            <div class="meta">Staged in <code>sources/files/staged/</code>. Extract this later with an agent.</div>
+            {{if .ThemeLabel}}<div class="meta">Theme: {{.ThemeLabel}}</div>{{end}}
+            {{if .IssueLabel}}<div class="meta">Issue: {{.IssueLabel}}</div>{{end}}
           </div>
         </li>
         {{end}}
       </ul>
       {{else}}
       <p class="empty">No staged files yet.</p>
+      {{end}}
+      </div>
       {{end}}
     </section>
   </main>

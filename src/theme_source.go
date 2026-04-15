@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -19,58 +20,15 @@ import (
 
 var genericSourceDocumentTitlePattern = regexp.MustCompile(`(?i)^slide\s+\d+$`)
 
-type SourceImportOptions struct {
-	Title string
-	Tags  []string
-	Links []string
-	Now   time.Time
+type StagedSourceSelection struct {
+	StagedName string `json:"staged_name"`
+	ThemeID    string `json:"theme_id,omitempty"`
+	IssueID    string `json:"issue_id,omitempty"`
 }
 
 type sourceDocumentConversion struct {
 	Body      string
 	Converter string
-}
-
-func (v VaultFS) ImportSourceDocument(sourcePath string, opts SourceImportOptions) (SourceDocument, error) {
-	if err := v.EnsureLayout(); err != nil {
-		return SourceDocument{}, err
-	}
-	now := opts.Now
-	if now.IsZero() {
-		now = time.Now()
-	}
-	sourcePath, err := filepath.Abs(sourcePath)
-	if err != nil {
-		return SourceDocument{}, err
-	}
-	info, err := os.Stat(sourcePath)
-	if err != nil {
-		return SourceDocument{}, err
-	}
-	if info.IsDir() {
-		return SourceDocument{}, fmt.Errorf("source path must be a file: %s", sourcePath)
-	}
-
-	stagedRawPath, err := copyFileUnique(sourcePath, v.SourceStagedDir())
-	if err != nil {
-		return SourceDocument{}, err
-	}
-	return v.importSourceDocumentFromStagedPath(stagedRawPath, filepath.Base(sourcePath), opts)
-}
-
-func (v VaultFS) ImportStagedSourceDocument(stagedName string, opts SourceImportOptions) (SourceDocument, error) {
-	stagedName = filepath.Base(strings.TrimSpace(stagedName))
-	if stagedName == "" || stagedName == "." {
-		return SourceDocument{}, fmt.Errorf("staged file is required")
-	}
-	stagedPath := filepath.Join(v.SourceStagedDir(), stagedName)
-	if _, err := os.Stat(stagedPath); err != nil {
-		if os.IsNotExist(err) {
-			return SourceDocument{}, fmt.Errorf("staged file not found: %s", stagedName)
-		}
-		return SourceDocument{}, err
-	}
-	return v.importSourceDocumentFromStagedPath(stagedPath, stagedName, opts)
 }
 
 func (v VaultFS) StageSourceUpload(filename string, content io.Reader) (string, error) {
@@ -117,44 +75,152 @@ func (v VaultFS) ListStagedSourceFiles() ([]string, error) {
 	return names, nil
 }
 
-func (v VaultFS) importSourceDocumentFromStagedPath(stagedRawPath, originalFilename string, opts SourceImportOptions) (SourceDocument, error) {
-	now := opts.Now
-	if now.IsZero() {
-		now = time.Now()
+func (v VaultFS) SaveMarkdownSourceDocument(filename, markdown string, now time.Time) (SourceDocument, error) {
+	filename = normalizeMarkdownSourceFilename(filename)
+	if err := v.EnsureLayout(); err != nil {
+		return SourceDocument{}, err
 	}
-	conversion, err := convertSourceDocument(stagedRawPath)
+	path, err := uniquePath(v.SourceDocumentsDir(), filename)
 	if err != nil {
 		return SourceDocument{}, err
 	}
-	convertedRawPath, err := moveFileUnique(stagedRawPath, v.SourceImportedDir())
-	if err != nil {
-		return SourceDocument{}, err
-	}
-
-	title := chooseSourceDocumentTitle(opts.Title, conversion.Body, originalFilename)
-	docPath, err := uniquePath(v.SourceDocumentsDir(), filepath.Base(originalFilename))
-	if err != nil {
-		return SourceDocument{}, err
-	}
-	relSourceFile, err := filepath.Rel(filepath.Dir(docPath), convertedRawPath)
-	if err != nil {
-		return SourceDocument{}, err
-	}
+	body := normalizeMarkdown(markdown)
 	doc := SourceDocument{
-		Path:       docPath,
-		Title:      title,
-		Attachment: filepath.ToSlash(relSourceFile),
-		Filename:   originalFilename,
-		ImportedAt: now.Format(time.RFC3339),
-		Converter:  conversion.Converter,
-		Tags:       normalizeStrings(opts.Tags),
-		Links:      normalizeStrings(opts.Links),
-		Body:       normalizeMarkdown(conversion.Body),
+		Path:       path,
+		Title:      sourceDocumentTitleFromMarkdown(body, filename),
+		Filename:   filename,
+		ImportedAt: now.UTC().Format(time.RFC3339),
+		Converter:  "markdown",
+		Body:       body,
 	}
-	if err := os.WriteFile(docPath, []byte(renderSourceDocument(doc)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(renderSourceDocument(doc)), 0o644); err != nil {
 		return SourceDocument{}, err
 	}
 	return doc, nil
+}
+
+func (v VaultFS) SaveStagedSourceSelection(stagedName, themeID, issueID string) error {
+	stagedName = filepath.Base(strings.TrimSpace(stagedName))
+	if stagedName == "" || stagedName == "." {
+		return fmt.Errorf("staged file is required")
+	}
+	stagedPath := filepath.Join(v.SourceStagedDir(), stagedName)
+	if _, err := os.Stat(stagedPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("staged file not found: %s", stagedName)
+		}
+		return err
+	}
+	themeID = strings.TrimSpace(themeID)
+	issueID = strings.TrimSpace(issueID)
+	if themeID == "" && issueID == "" {
+		return v.clearStagedSourceSelection(stagedName)
+	}
+	if err := os.MkdirAll(v.sourceStagedSelectionDir(), 0o755); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(StagedSourceSelection{
+		StagedName: stagedName,
+		ThemeID:    themeID,
+		IssueID:    issueID,
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(v.stagedSourceSelectionPath(stagedName), raw, 0o644)
+}
+
+func (v VaultFS) LoadStagedSourceSelections() (map[string]StagedSourceSelection, error) {
+	entries, err := readDirSorted(v.sourceStagedSelectionDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]StagedSourceSelection{}, nil
+		}
+		return nil, err
+	}
+	selections := map[string]StagedSourceSelection{}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(v.sourceStagedSelectionDir(), entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		var selection StagedSourceSelection
+		if err := json.Unmarshal(raw, &selection); err != nil {
+			return nil, err
+		}
+		selection.StagedName = filepath.Base(strings.TrimSpace(selection.StagedName))
+		selection.ThemeID = strings.TrimSpace(selection.ThemeID)
+		selection.IssueID = strings.TrimSpace(selection.IssueID)
+		if selection.StagedName == "" || selection.StagedName == "." {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(v.SourceStagedDir(), selection.StagedName)); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		selections[selection.StagedName] = selection
+	}
+	return selections, nil
+}
+
+func (v VaultFS) sourceStagedSelectionDir() string {
+	return filepath.Join(v.SourceStagedDir(), ".workbench")
+}
+
+func (v VaultFS) stagedSourceSelectionPath(stagedName string) string {
+	return filepath.Join(v.sourceStagedSelectionDir(), filepath.Base(stagedName)+".json")
+}
+
+func (v VaultFS) clearStagedSourceSelection(stagedName string) error {
+	if err := os.Remove(v.stagedSourceSelectionPath(stagedName)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func (v VaultFS) loadStagedSourceSelection(stagedName string) (StagedSourceSelection, error) {
+	raw, err := os.ReadFile(v.stagedSourceSelectionPath(stagedName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return StagedSourceSelection{}, nil
+		}
+		return StagedSourceSelection{}, err
+	}
+	var selection StagedSourceSelection
+	if err := json.Unmarshal(raw, &selection); err != nil {
+		return StagedSourceSelection{}, err
+	}
+	selection.StagedName = filepath.Base(strings.TrimSpace(selection.StagedName))
+	selection.ThemeID = strings.TrimSpace(selection.ThemeID)
+	selection.IssueID = strings.TrimSpace(selection.IssueID)
+	if selection.StagedName == "" || selection.StagedName == "." {
+		return StagedSourceSelection{}, nil
+	}
+	return selection, nil
+}
+
+func normalizeMarkdownSourceFilename(name string) string {
+	name = filepath.Base(strings.TrimSpace(name))
+	if name == "" || name == "." {
+		return "pasted.md"
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext != ".md" && ext != ".markdown" {
+		return name + ".md"
+	}
+	return name
+}
+
+func sourceDocumentTitleFromMarkdown(body, filename string) string {
+	if heading := stripMarkdownHeadingPrefix(firstMarkdownHeading(body)); heading != "" && !isGenericSourceDocumentTitle(heading) {
+		return heading
+	}
+	return displayTitleFromFilename(filename)
 }
 
 func convertSourceDocument(path string) (sourceDocumentConversion, error) {
@@ -746,29 +812,6 @@ func displayTitleFromFilename(name string) string {
 		return "Imported document"
 	}
 	return stem
-}
-
-func chooseSourceDocumentTitle(explicitTitle, body, originalFilename string) string {
-	if title := strings.TrimSpace(explicitTitle); title != "" {
-		return title
-	}
-	if heading := stripMarkdownHeadingPrefix(firstMarkdownHeading(body)); heading != "" && !isGenericSourceDocumentTitle(heading) {
-		return heading
-	}
-	for _, line := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
-		line = stripMarkdownHeadingPrefix(line)
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "|") || strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "_") {
-			continue
-		}
-		if isGenericSourceDocumentTitle(line) {
-			continue
-		}
-		return truncateRunes(line, 80)
-	}
-	return displayTitleFromFilename(originalFilename)
 }
 
 func stripMarkdownHeadingPrefix(value string) string {

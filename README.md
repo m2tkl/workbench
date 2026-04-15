@@ -80,7 +80,7 @@ For agent-style workflows, the vault CLI now supports intent-level state changes
 workbench vault list themes
 workbench vault get item --id 7fa3c2d1
 workbench vault update item --id 7fa3c2d1 --theme 3b91e4aa --refs knowledge/otp.md
-workbench vault update theme --id 3b91e4aa --source-refs sources/documents/auth-deck.pptx
+workbench vault update theme --id 3b91e4aa --source-refs sources/documents/auth-deck--4f8a1c2d.md
 workbench vault move --id 7fa3c2d1 --to next
 workbench vault move --id 7fa3c2d1 --to scheduled --day 2026-04-20
 workbench vault complete --id 7fa3c2d1 --note "done"
@@ -98,19 +98,17 @@ Active task state is stored in the configured data directory. A one-off override
 ./vault/themes/<title-slug>--<id>/theme.md
 ```
 
-Sources can also keep converted Markdown and raw attachments side by side:
+Sources can keep staged uploads and Markdown source documents side by side:
 
 ```text
-./vault/sources/documents/<original-filename>
+./vault/sources/documents/
 ./vault/sources/files/staged/
-./vault/sources/files/imported/
 ```
 
 Use top-level `sources/` as the collection root:
 
-- `sources/documents/`: extracted source documents, kept under the original filename
-- `sources/files/staged/`: uploaded files waiting for extract
-- `sources/files/imported/`: raw files linked from extracted entries
+- `sources/documents/`: source documents, typically created by an agent, stored as Markdown
+- `sources/files/staged/`: non-Markdown uploads waiting for extract
 
 Sources are independent from themes and can be classified later. Files under `sources/files/` stay out of Git. Documents in `sources/documents/` store Markdown content with frontmatter such as `attachment`, `filename`, `links`, `tags`, and `imported_at`.
 
@@ -119,22 +117,16 @@ Themes refer to the sources they need from `theme.md` via `source_refs`, and the
 You can also create a theme-local context document that cites a subset of the theme's `source_refs`:
 
 ```bash
-workbench vault add theme-context --theme 3b91e4aa --name constraints --title "Constraints" --source-refs sources/documents/auth-deck.pptx --body "Step-up flow constraints"
+workbench vault add theme-context --theme 3b91e4aa --name constraints --title "Constraints" --source-refs sources/documents/auth-deck--4f8a1c2d.md --body "Step-up flow constraints"
 ```
 
-You can import a local file into the global source collection with:
-
-```bash
-workbench vault add source --file ./brief.xlsx --links https://example.com/spec
-```
-
-Or start a small browser workbench for upload:
+Start a small browser workbench for upload:
 
 ```bash
 workbench web serve --addr 127.0.0.1:8080
 ```
 
-Open the shown URL and drop or pick a file to stage it into `sources/files/staged/`. Classify and extract it later with an agent or CLI flow.
+Open the shown URL and drop or pick a file to add it. Pasted Markdown text and uploaded Markdown files are saved directly into `sources/documents/`. If you already know the related theme or issue, select it in the form and Workbench will link the new source document immediately. Other file types still go to `sources/files/staged/` for later agent work. The page also includes a form to link existing source documents to themes and issues after an agent has produced them.
 
 In the TUI workbench, select a theme and press `D` to open a dialog with the source inbox URL. The web server stays up only while that dialog is open.
 

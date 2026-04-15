@@ -261,6 +261,30 @@ func (v VaultFS) LoadThemes() ([]ThemeDoc, error) {
 	return loadDirectoryItems(v.ThemesDir(), "theme.md", readThemeDoc)
 }
 
+func (v VaultFS) LoadSourceDocuments() ([]SourceDocument, error) {
+	entries, err := readDirSorted(v.SourceDocumentsDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	docs := []SourceDocument{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(v.SourceDocumentsDir(), entry.Name())
+		doc, err := readSourceDocument(path)
+		if err != nil {
+			return nil, err
+		}
+		doc.Path = path
+		docs = append(docs, doc)
+	}
+	return docs, nil
+}
+
 func (v VaultFS) LoadKnowledgeIndex() ([]KnowledgeDoc, error) {
 	docs := []KnowledgeDoc{}
 	if err := os.MkdirAll(v.KnowledgeDir(), 0o755); err != nil {
@@ -930,6 +954,34 @@ func readThemeContextDoc(path string) (ThemeContextDoc, error) {
 		Body:       body,
 	})
 	return doc, validateThemeContextDoc(doc)
+}
+
+func readSourceDocument(path string) (SourceDocument, error) {
+	fields, body, err := parseMetadataDoc(path)
+	if err != nil {
+		return SourceDocument{}, err
+	}
+	doc := SourceDocument{
+		Path:       path,
+		Title:      strings.TrimSpace(fields["title"]),
+		Attachment: strings.TrimSpace(fields["attachment"]),
+		Filename:   strings.TrimSpace(fields["filename"]),
+		ImportedAt: strings.TrimSpace(fields["imported_at"]),
+		Converter:  strings.TrimSpace(fields["converter"]),
+		Tags:       normalizeStrings(parseYAMLList(fields["_tags"])),
+		Links:      normalizeStrings(parseYAMLList(fields["_links"])),
+		Body:       normalizeMarkdown(body),
+	}
+	if doc.Title == "" {
+		doc.Title = stripMarkdownHeadingPrefix(firstMarkdownHeading(doc.Body))
+	}
+	if doc.Title == "" && doc.Filename != "" {
+		doc.Title = displayTitleFromFilename(doc.Filename)
+	}
+	if doc.Title == "" {
+		doc.Title = displayTitleFromFilename(filepath.Base(path))
+	}
+	return doc, nil
 }
 
 func readInboxItem(path string) (InboxItem, error) {

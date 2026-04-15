@@ -161,8 +161,6 @@ func runVaultAdd(args []string) int {
 		return runVaultAddTheme(args)
 	case "theme-context":
 		return runVaultAddThemeContext(args)
-	case "source":
-		return runVaultAddSource(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown vault add target: %s\n", args[3])
 		return 1
@@ -174,11 +172,11 @@ func vaultCommandHelp(args []string) commandHelp {
 		Usage: []string{
 			fmt.Sprintf("%s vault <command> [args]", flagSetName(args)),
 		},
-		Description: "Manage the vault that stores inbox captures, tasks, issues, themes, knowledge, and imported sources. Item and theme IDs are generated as random 8-char hex strings, while saved paths include a title slug plus that ID.",
+		Description: "Manage the vault that stores inbox captures, tasks, issues, themes, knowledge, and staged source files. Item and theme IDs are generated as random 8-char hex strings, while saved paths include a title slug plus that ID.",
 		Commands: []helpCommand{
 			{Name: "init", Summary: "Create the vault directory layout."},
 			{Name: "list", Summary: "Inspect inbox, tasks, issues, themes, or knowledge entries."},
-			{Name: "add", Summary: "Create inbox items, tasks, issues, themes, theme context, or source docs."},
+			{Name: "add", Summary: "Create inbox items, tasks, issues, themes, or theme context docs."},
 			{Name: "get", Summary: "Fetch a single item or theme by id."},
 			{Name: "move", Summary: "Move an item between inbox, working stages, scheduled, or recurring states."},
 			{Name: "update", Summary: "Edit item metadata such as title, refs, or theme."},
@@ -191,7 +189,6 @@ func vaultCommandHelp(args []string) commandHelp {
 			fmt.Sprintf("%s vault add inbox --title \"Investigate OTP edge case\"", flagSetName(args)),
 			fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to issue --theme 3b91e4aa --stage next", flagSetName(args)),
 			fmt.Sprintf("%s vault move --id 7fa3c2d1 --to scheduled --day 2026-04-20", flagSetName(args)),
-			fmt.Sprintf("%s vault add source --file ./docs/brief.txt --title \"OTP brief\"", flagSetName(args)),
 		},
 	}
 }
@@ -199,21 +196,19 @@ func vaultCommandHelp(args []string) commandHelp {
 func vaultAddHelp(args []string) commandHelp {
 	return commandHelp{
 		Usage: []string{
-			fmt.Sprintf("%s vault add <inbox|task|issue|theme|theme-context|source> [flags]", flagSetName(args)),
+			fmt.Sprintf("%s vault add <inbox|task|issue|theme|theme-context> [flags]", flagSetName(args)),
 		},
-		Description: "Create a new vault document or import a new source file. New inbox items, tasks, issues, and themes receive random 8-char hex IDs automatically.",
+		Description: "Create a new vault document. New inbox items, tasks, issues, and themes receive random 8-char hex IDs automatically.",
 		Commands: []helpCommand{
 			{Name: "inbox", Summary: "Capture a raw note before triage."},
 			{Name: "task", Summary: "Create a task document directly."},
 			{Name: "issue", Summary: "Create an issue document directly."},
 			{Name: "theme", Summary: "Create a theme and its context folder."},
 			{Name: "theme-context", Summary: "Add a markdown context doc under an existing theme."},
-			{Name: "source", Summary: "Import a source file into vault/sources/."},
 		},
 		Examples: []string{
 			fmt.Sprintf("%s vault add inbox --title \"Investigate retry rules\"", flagSetName(args)),
 			fmt.Sprintf("%s vault add issue --title \"OTP Tx design\" --theme 3b91e4aa --stage next", flagSetName(args)),
-			fmt.Sprintf("%s vault add source --file ./brief.txt --title \"Planning brief\"", flagSetName(args)),
 		},
 	}
 }
@@ -396,7 +391,7 @@ func vaultUpdateHelp(args []string) commandHelp {
 		},
 		Examples: []string{
 			fmt.Sprintf("%s vault update item --id 7fa3c2d1 --title \"Clarify OTP retry rules\"", flagSetName(args)),
-			fmt.Sprintf("%s vault update theme --id 3b91e4aa --source-refs sources/documents/auth-deck.pptx", flagSetName(args)),
+			fmt.Sprintf("%s vault update theme --id 3b91e4aa --source-refs sources/documents/auth-deck--4f8a1c2d.md", flagSetName(args)),
 		},
 	}
 }
@@ -469,7 +464,7 @@ func runVaultUpdateTheme(args []string) int {
 			Description: "Edit theme metadata and keep theme context references consistent.",
 			Examples: []string{
 				fmt.Sprintf("%s vault update theme --id 3b91e4aa --title \"Auth step-up v2\"", flagSetName(args)),
-				fmt.Sprintf("%s vault update theme --id 3b91e4aa --tags auth,stepup --source-refs sources/documents/auth-deck.pptx", flagSetName(args)),
+				fmt.Sprintf("%s vault update theme --id 3b91e4aa --tags auth,stepup --source-refs sources/documents/auth-deck--4f8a1c2d.md", flagSetName(args)),
 				fmt.Sprintf("%s vault update theme --id 3b91e4aa --body \"Updated scope and constraints\"", flagSetName(args)),
 			},
 		})
@@ -902,7 +897,7 @@ func runVaultAddTheme(args []string) int {
 			Description: "Create a theme that groups related issues and context.",
 			Examples: []string{
 				fmt.Sprintf("%s vault add theme --title \"Auth step-up\"", flagSetName(args)),
-				fmt.Sprintf("%s vault add theme --title \"Auth step-up\" --source-refs sources/documents/auth-deck.pptx", flagSetName(args)),
+				fmt.Sprintf("%s vault add theme --title \"Auth step-up\" --source-refs sources/documents/auth-deck--4f8a1c2d.md", flagSetName(args)),
 			},
 		})
 		return 0
@@ -947,7 +942,7 @@ func runVaultAddThemeContext(args []string) int {
 			Description: "Add a context markdown document under an existing theme.",
 			Examples: []string{
 				fmt.Sprintf("%s vault add theme-context --theme 3b91e4aa --name constraints --title \"Constraints\"", flagSetName(args)),
-				fmt.Sprintf("%s vault add theme-context --theme 3b91e4aa --name risks --title \"Risks\" --source-refs sources/documents/auth-deck.pptx", flagSetName(args)),
+				fmt.Sprintf("%s vault add theme-context --theme 3b91e4aa --name risks --title \"Risks\" --source-refs sources/documents/auth-deck--4f8a1c2d.md", flagSetName(args)),
 			},
 		})
 		return 0
@@ -986,59 +981,6 @@ func runVaultAddThemeContext(args []string) int {
 	}
 	loaded.Path = vault.ThemeContextPath(strings.TrimSpace(*themeID), strings.TrimSpace(*name))
 	return printJSON(loaded)
-}
-
-func runVaultAddSource(args []string) int {
-	if hasHelpFlag(args[4:]) {
-		printHelp(commandHelp{
-			Usage: []string{
-				fmt.Sprintf("%s vault add source --file PATH [--title TEXT] [--tags a,b] [--links a,b] [--data-dir DIR]", flagSetName(args)),
-			},
-			Description: "Import a source file into the vault and extract a markdown document from it.",
-			Examples: []string{
-				fmt.Sprintf("%s vault add source --file ./brief.txt", flagSetName(args)),
-				fmt.Sprintf("%s vault add source --file ./deck.pptx --title \"Planning deck\" --links https://example.com/spec", flagSetName(args)),
-			},
-		})
-		return 0
-	}
-	defaultPath, err := defaultStorePath()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
-		return 1
-	}
-	fs := flag.NewFlagSet("vault add source", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
-	filePath := fs.String("file", "", "path to the source file")
-	title := fs.String("title", "", "source title")
-	tags := fs.String("tags", "", "comma-separated tags")
-	links := fs.String("links", "", "comma-separated metadata links")
-	if err := fs.Parse(args[4:]); err != nil {
-		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
-		return 1
-	}
-	if strings.TrimSpace(*filePath) == "" {
-		fmt.Fprintln(os.Stderr, "file is required")
-		return 1
-	}
-	root, err := filepath.Abs(*dataDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "resolve data dir: %v\n", err)
-		return 1
-	}
-	vault := NewVault(root)
-	doc, err := vault.ImportSourceDocument(strings.TrimSpace(*filePath), SourceImportOptions{
-		Title: strings.TrimSpace(*title),
-		Tags:  splitCSV(*tags),
-		Links: splitCSV(*links),
-		Now:   todayLocal(),
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "import source document: %v\n", err)
-		return 1
-	}
-	return printJSON(doc)
 }
 
 func parseIDCommandArgs(name string, args []string) (string, string, error) {
