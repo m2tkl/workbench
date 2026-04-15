@@ -40,6 +40,7 @@ const (
 	modeOpenRef
 	modeEditRefs
 	modeEditTheme
+	modeEditSelectedTheme
 	modeConvertInboxIssue
 	modeSourceWorkbench
 )
@@ -1138,21 +1139,28 @@ func (a *App) renderModal(width, height int) string {
 	case modeSearch:
 		title = "Search"
 	case modeAdd:
-		title = "Add Inbox Item"
+		title = "Create Inbox Item"
 		body = append(body, "new tasks always enter Inbox")
 	case modeAddTheme:
-		title = "Add Theme"
+		title = "Create Theme"
 		body = append(body,
 			"title is required",
 			"tags and source refs are comma-separated",
 			"body is optional theme context",
 		)
 	case modeEditRefs:
-		title = "Edit Refs"
+		title = "Edit Item Refs"
 		body = append(body, "comma-separated paths such as knowledge/foo.md")
 	case modeEditTheme:
-		title = "Edit Theme"
+		title = "Set Issue Theme"
 		body = append(body, a.themeSearchHelpLines(true)...)
+	case modeEditSelectedTheme:
+		title = "Edit Theme Details"
+		body = append(body,
+			"title is required",
+			"tags and source refs are comma-separated",
+			"existing theme context refs must stay valid",
+		)
 	case modeConvertInboxIssue:
 		title = "Convert Inbox Item To Issue"
 		body = append(body, "choose a theme and initial stage for the issue")
@@ -1813,7 +1821,7 @@ func (a *App) paletteCommands() []paletteCommand {
 			a.status = "Opened Deferred."
 			return nil
 		}},
-		{title: "Toggle Plan/Action View", description: "Switch between workbench and execution.", aliases: []string{"toggle mode workbench execution plan action"}, run: func(a *App) tea.Cmd {
+		{title: "Switch Plan/Action View", description: "Switch between workbench and execution.", aliases: []string{"toggle plan action view toggle mode workbench execution"}, run: func(a *App) tea.Cmd {
 			a.toggleView()
 			return nil
 		}},
@@ -1821,42 +1829,42 @@ func (a *App) paletteCommands() []paletteCommand {
 			a.startSearch()
 			return nil
 		}},
-		{title: "Add Inbox Item", description: "Create a new inbox task.", aliases: []string{"new create capture"}, run: func(a *App) tea.Cmd {
+		{title: "Create Inbox Item", description: "Create a new inbox item.", aliases: []string{"add inbox item new create capture"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
 			a.startAdd()
 			return nil
 		}},
-		{title: "Add Theme", description: "Create a new theme in the vault.", aliases: []string{"new create theme"}, run: func(a *App) tea.Cmd {
+		{title: "Create Theme", description: "Create a new theme in the vault.", aliases: []string{"add theme new create theme"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
 			a.startAddTheme()
 			return nil
 		}},
-		{title: "Complete Item", description: "Mark the current item done.", aliases: []string{"done finish close"}, run: func(a *App) tea.Cmd {
+		{title: "Complete Selected Item", description: "Mark the current item done.", aliases: []string{"complete item done finish close"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
 			a.completeItem()
 			return nil
 		}},
-		{title: "Done For Today", description: "Hide the current Focus item until tomorrow.", aliases: []string{"snooze today"}, run: func(a *App) tea.Cmd {
+		{title: "Mark Done For Today", description: "Hide the current Focus item until tomorrow.", aliases: []string{"done for today snooze today"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
 			a.markDoneForToday()
 			return nil
 		}},
-		{title: "Reopen Item", description: "Restore a completed or done-for-day item.", aliases: []string{"restore undo close"}, run: func(a *App) tea.Cmd {
+		{title: "Reopen Selected Item", description: "Restore a completed or done-for-day item.", aliases: []string{"reopen item restore undo close"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
 			a.reopenItem()
 			return nil
 		}},
-		{title: "Move To Now", description: "Move the current item or selection to Now.", aliases: []string{"focus stage now"}, run: func(a *App) tea.Cmd {
+		{title: "Move Selected Item To Now", description: "Move the current item or selection to Now.", aliases: []string{"move to now focus stage now"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
@@ -1864,7 +1872,7 @@ func (a *App) paletteCommands() []paletteCommand {
 			a.applyMoveChoice()
 			return nil
 		}},
-		{title: "Move To Next", description: "Move the current item or selection to Next.", aliases: []string{"stage next"}, run: func(a *App) tea.Cmd {
+		{title: "Move Selected Item To Next", description: "Move the current item or selection to Next.", aliases: []string{"move to next stage next"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
@@ -1872,7 +1880,7 @@ func (a *App) paletteCommands() []paletteCommand {
 			a.applyMoveChoice()
 			return nil
 		}},
-		{title: "Move To Later", description: "Move the current item or selection to Later.", aliases: []string{"review stage later"}, run: func(a *App) tea.Cmd {
+		{title: "Move Selected Item To Later", description: "Move the current item or selection to Later.", aliases: []string{"move to later review stage later"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
@@ -1880,7 +1888,7 @@ func (a *App) paletteCommands() []paletteCommand {
 			a.applyMoveChoice()
 			return nil
 		}},
-		{title: "Schedule Item", description: "Set a scheduled date for the current item or selection.", aliases: []string{"date defer"}, run: func(a *App) tea.Cmd {
+		{title: "Schedule Selected Item", description: "Set a scheduled date for the current item or selection.", aliases: []string{"schedule item date defer"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
@@ -1888,7 +1896,7 @@ func (a *App) paletteCommands() []paletteCommand {
 			a.applyMoveChoice()
 			return nil
 		}},
-		{title: "Make Recurring", description: "Turn the current item or selection into recurring work.", aliases: []string{"repeat recurring cadence"}, run: func(a *App) tea.Cmd {
+		{title: "Make Selected Item Recurring", description: "Turn the current item or selection into recurring work.", aliases: []string{"make recurring repeat recurring cadence"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
@@ -1896,37 +1904,44 @@ func (a *App) paletteCommands() []paletteCommand {
 			a.applyMoveChoice()
 			return nil
 		}},
-		{title: "Open Refs", description: "Browse refs on the selected item.", aliases: []string{"references links"}, run: func(a *App) tea.Cmd {
+		{title: "Open Item Refs", description: "Browse refs on the selected item.", aliases: []string{"open refs references links"}, run: func(a *App) tea.Cmd {
 			a.startOpenRefs()
 			return nil
 		}},
-		{title: "Edit Refs", description: "Edit refs on the selected item.", aliases: []string{"references links"}, run: func(a *App) tea.Cmd {
+		{title: "Edit Item Refs", description: "Edit refs on the selected item.", aliases: []string{"edit refs references links"}, run: func(a *App) tea.Cmd {
 			a.startEditRefs()
 			return nil
 		}},
-		{title: "Edit Theme", description: "Change the selected issue theme.", aliases: []string{"issue theme"}, run: func(a *App) tea.Cmd {
+		{title: "Set Issue Theme", description: "Change which theme is assigned to the selected issue.", aliases: []string{"edit issue theme set issue theme edit theme"}, run: func(a *App) tea.Cmd {
 			a.startEditTheme()
 			return nil
 		}},
-		{title: "Convert Inbox Item To Issue", description: "Turn the current inbox item into an issue.", aliases: []string{"inbox issue"}, run: func(a *App) tea.Cmd {
+		{title: "Edit Theme Details", description: "Update the selected theme title, tags, source refs, or body.", aliases: []string{"edit selected theme update theme theme details theme title tags source refs body"}, run: func(a *App) tea.Cmd {
+			if a.ensureMutable("Vault mode is read-only for now.") {
+				return nil
+			}
+			a.startEditSelectedTheme()
+			return nil
+		}},
+		{title: "Convert Inbox Item To Issue", description: "Turn the current inbox item into an issue.", aliases: []string{"inbox issue convert inbox issue"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
 			a.startConvertInboxSelectionToIssue()
 			return nil
 		}},
-		{title: "Convert Inbox Item To Task", description: "Turn the current inbox item into a task.", aliases: []string{"inbox task"}, run: func(a *App) tea.Cmd {
+		{title: "Convert Inbox Item To Task", description: "Turn the current inbox item into a task.", aliases: []string{"inbox task convert inbox task"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
 			a.convertInboxSelectionToTask()
 			return nil
 		}},
-		{title: "Open Source Inbox", description: "Show the upload dialog for source files.", aliases: []string{"sources upload"}, run: func(a *App) tea.Cmd {
+		{title: "Open Theme Source Inbox", description: "Show the upload dialog for source files on the selected theme.", aliases: []string{"open source inbox sources upload"}, run: func(a *App) tea.Cmd {
 			a.openSourceInboxDialog()
 			return nil
 		}},
-		{title: "Save", description: "Write the current state to storage.", aliases: []string{"persist write"}, run: func(a *App) tea.Cmd {
+		{title: "Save Changes", description: "Write the current state to storage.", aliases: []string{"save persist write"}, run: func(a *App) tea.Cmd {
 			if a.ensureMutable("Vault mode is read-only for now.") {
 				return nil
 			}
@@ -1936,7 +1951,7 @@ func (a *App) paletteCommands() []paletteCommand {
 			}
 			return nil
 		}},
-		{title: "Help", description: "Open the shortcut reference.", aliases: []string{"shortcuts"}, run: func(a *App) tea.Cmd {
+		{title: "Open Help", description: "Open the shortcut reference.", aliases: []string{"help shortcuts"}, run: func(a *App) tea.Cmd {
 			a.mode = modeHelp
 			return nil
 		}},
@@ -1986,6 +2001,30 @@ func (a *App) startEditTheme() {
 		return
 	}
 	a.startSingleInput(modeEditTheme, "theme id or title", item.Theme)
+}
+
+func (a *App) startEditSelectedTheme() {
+	theme := a.selectedTheme()
+	if theme == nil {
+		a.status = "Select a theme to edit."
+		return
+	}
+	fields := []struct {
+		placeholder string
+		value       string
+	}{
+		{"title", theme.Title},
+		{"tags", strings.Join(theme.Tags, ",")},
+		{"source refs", strings.Join(theme.SourceRefs, ",")},
+		{"body", theme.Body},
+	}
+	a.inputs = make([]textinput.Model, 0, len(fields))
+	for _, field := range fields {
+		a.inputs = append(a.inputs, newInput(field.placeholder, field.value))
+	}
+	a.inputCursor = 0
+	a.mode = modeEditSelectedTheme
+	a.focusInputs()
 }
 
 func (a *App) startConvertInboxSelectionToIssue() {
@@ -2137,6 +2176,8 @@ func (a *App) submitModal() {
 		a.submitEditRefs()
 	case modeEditTheme:
 		a.submitEditTheme()
+	case modeEditSelectedTheme:
+		a.submitEditSelectedTheme()
 	case modeConvertInboxIssue:
 		a.submitConvertInboxIssue()
 	case modeSchedule:
@@ -2203,6 +2244,49 @@ func (a *App) submitAddTheme() {
 	}
 	a.selectWorkbenchTheme(theme.ID)
 	a.status = "Added theme " + theme.ID + "."
+}
+
+func (a *App) submitEditSelectedTheme() {
+	selected := a.selectedTheme()
+	if selected == nil {
+		a.status = "Select a theme to edit."
+		return
+	}
+	title := strings.TrimSpace(a.inputs[0].Value())
+	if title == "" {
+		a.status = "Title is required."
+		a.keepModalOpen = true
+		return
+	}
+	theme := *selected
+	theme.Title = title
+	theme.Tags = splitCSV(a.inputs[1].Value())
+	theme.SourceRefs = splitCSV(a.inputs[2].Value())
+	theme.Body = strings.TrimSpace(a.inputs[3].Value())
+	theme.Updated = dateKey(a.now())
+
+	contextDocs, err := a.store.vault.LoadThemeContextDocs(theme.ID)
+	if err != nil {
+		a.status = "load theme context: " + err.Error()
+		a.keepModalOpen = true
+		return
+	}
+	if err := validateThemeContextRefs(theme.SourceRefs, contextDocs); err != nil {
+		a.status = "update theme: " + err.Error()
+		a.keepModalOpen = true
+		return
+	}
+	if err := a.store.vault.SaveTheme(theme); err != nil {
+		a.status = "save failed: " + err.Error()
+		a.keepModalOpen = true
+		return
+	}
+	if err := a.reloadThemes(); err != nil {
+		a.status = "reload failed: " + err.Error()
+		return
+	}
+	a.selectWorkbenchTheme(theme.ID)
+	a.status = "Updated theme " + theme.ID + "."
 }
 
 func (a *App) submitEditRefs() {

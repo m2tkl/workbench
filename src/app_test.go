@@ -728,6 +728,113 @@ func TestAddThemeCreatesVaultThemeAndSelectsItInWorkbench(t *testing.T) {
 	}
 }
 
+func TestEditSelectedThemeUpdatesVaultTheme(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	store := newTestStore(t)
+	if err := store.vault.SaveTheme(ThemeDoc{
+		ID:         "auth-stepup",
+		Title:      "Auth step-up",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-12",
+		Tags:       []string{"auth"},
+		SourceRefs: []string{"sources/documents/auth-deck.pptx"},
+		Body:       "Initial scope",
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+
+	app := NewApp(store, State{})
+	app.now = func() time.Time { return now }
+	app.view = viewWorkbench
+	app.themes = []ThemeDoc{{
+		ID:         "auth-stepup",
+		Title:      "Auth step-up",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-12",
+		Tags:       []string{"auth"},
+		SourceRefs: []string{"sources/documents/auth-deck.pptx"},
+		Body:       "Initial scope",
+	}}
+	app.workbenchNavCursor = len(app.workbenchEntries()) - 1
+
+	app.startEditSelectedTheme()
+	app.inputs[0].SetValue("Auth step-up v2")
+	app.inputs[1].SetValue("auth,otp")
+	app.inputs[2].SetValue("sources/documents/auth-deck.pptx,knowledge/auth-basics.md")
+	app.inputs[3].SetValue("Updated scope")
+	app.submitModal()
+
+	themes, err := store.vault.LoadThemes()
+	if err != nil {
+		t.Fatalf("LoadThemes returned error: %v", err)
+	}
+	if len(themes) != 1 {
+		t.Fatalf("LoadThemes len = %d, want 1", len(themes))
+	}
+	if themes[0].Title != "Auth step-up v2" {
+		t.Fatalf("title = %q, want %q", themes[0].Title, "Auth step-up v2")
+	}
+	if !slices.Equal(themes[0].Tags, []string{"auth", "otp"}) {
+		t.Fatalf("tags = %#v", themes[0].Tags)
+	}
+	if !slices.Equal(themes[0].SourceRefs, []string{"knowledge/auth-basics.md", "sources/documents/auth-deck.pptx"}) {
+		t.Fatalf("source refs = %#v", themes[0].SourceRefs)
+	}
+	if themes[0].Body != "Updated scope" {
+		t.Fatalf("body = %q, want %q", themes[0].Body, "Updated scope")
+	}
+	if app.mode != modeNormal {
+		t.Fatalf("mode = %v, want modeNormal", app.mode)
+	}
+	if selected := app.selectedTheme(); selected == nil || selected.ID != "auth-stepup" || selected.Title != "Auth step-up v2" {
+		t.Fatalf("selected theme = %#v", selected)
+	}
+}
+
+func TestEditSelectedThemeRejectsRemovingReferencedSourceRef(t *testing.T) {
+	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
+	store := newTestStore(t)
+	if err := store.vault.SaveTheme(ThemeDoc{
+		ID:         "auth-stepup",
+		Title:      "Auth step-up",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-12",
+		SourceRefs: []string{"sources/documents/auth-deck.pptx", "knowledge/auth-basics.md"},
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if err := store.vault.SaveThemeContextDoc("auth-stepup", "constraints", ThemeContextDoc{
+		Title:      "Constraints",
+		SourceRefs: []string{"knowledge/auth-basics.md"},
+		Body:       "Context body",
+	}); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+
+	app := NewApp(store, State{})
+	app.now = func() time.Time { return now }
+	app.view = viewWorkbench
+	app.themes = []ThemeDoc{{
+		ID:         "auth-stepup",
+		Title:      "Auth step-up",
+		Created:    "2026-04-12",
+		Updated:    "2026-04-12",
+		SourceRefs: []string{"sources/documents/auth-deck.pptx", "knowledge/auth-basics.md"},
+	}}
+	app.workbenchNavCursor = len(app.workbenchEntries()) - 1
+
+	app.startEditSelectedTheme()
+	app.inputs[2].SetValue("sources/documents/auth-deck.pptx")
+	app.submitModal()
+
+	if app.mode != modeEditSelectedTheme {
+		t.Fatalf("mode = %v, want modeEditSelectedTheme", app.mode)
+	}
+	if app.status != `update theme: existing context "Constraints" uses source ref not declared on theme: knowledge/auth-basics.md` {
+		t.Fatalf("status = %q", app.status)
+	}
+}
+
 func TestConvertInboxIssueBlankThemeFallsBackToNoTheme(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewInboxItem(now, "Investigate OTP edge case")
@@ -995,6 +1102,26 @@ func TestCommandPaletteCanOpenAddThemeModal(t *testing.T) {
 	}
 }
 
+func TestCommandPaletteCanOpenEditSelectedThemeModal(t *testing.T) {
+	app := NewApp(newTestStore(t), State{})
+	app.view = viewWorkbench
+	app.themes = []ThemeDoc{{ID: "auth-stepup", Title: "Auth step-up"}}
+	app.workbenchNavCursor = len(app.workbenchEntries()) - 1
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	updated := model.(*App)
+	updated.inputs[0].SetValue("edit selected theme")
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(*App)
+	if updated.mode != modeEditSelectedTheme {
+		t.Fatalf("mode = %v, want modeEditSelectedTheme", updated.mode)
+	}
+	if len(updated.inputs) != 4 {
+		t.Fatalf("inputs = %d, want 4", len(updated.inputs))
+	}
+}
+
 func TestCommandPaletteFuzzyMatchFindsAbbreviations(t *testing.T) {
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
 	app := NewApp(newTestStore(t), demoState(now))
@@ -1044,7 +1171,7 @@ func TestFuzzyHighlightIndexesSupportsSubsequence(t *testing.T) {
 }
 
 func TestPaletteDescriptionHighlightTurnsOffWhenTitleAlreadyMatches(t *testing.T) {
-	if shouldHighlightPaletteDescription("Move To Next", "move") {
+	if shouldHighlightPaletteDescription("Move Selected Item To Next", "move") {
 		t.Fatal("expected description highlight to be suppressed when title already matches strongly")
 	}
 	if !shouldHighlightPaletteDescription("Help", "move") {
