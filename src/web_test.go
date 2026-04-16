@@ -564,14 +564,23 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if !strings.Contains(body, "Investigate OTP copy") || !strings.Contains(body, `action="/work-items/issue-1/save?memo=notes%2Fnewer.md`) {
 		t.Fatalf("expected workspace header and save action: %s", body)
 	}
-	if !strings.Contains(body, `id="work-item-editor"`) || !strings.Contains(body, `Cmd+S / Ctrl+S`) {
-		t.Fatalf("expected editor shortcut hints in workspace: %s", body)
+	if !strings.Contains(body, `class="workspace-main"`) || strings.Contains(body, `class="panel workspace-main"`) || !strings.Contains(body, `id="work-item-editor"`) || !strings.Contains(body, `id="toggle-preview-mode"`) || !strings.Contains(body, `>Preview</button>`) || !strings.Contains(body, `>Save</button>`) {
+		t.Fatalf("expected simplified editor controls in workspace: %s", body)
 	}
-	if !strings.Contains(body, "Main Document Preview") || !strings.Contains(body, `id="main-preview"`) {
-		t.Fatalf("expected main document preview in workspace: %s", body)
+	if strings.Contains(body, "Human-editable") || strings.Contains(body, "Agent Memos") || strings.Contains(body, "Main Document") || strings.Contains(body, "Source Documents") || strings.Contains(body, "Work item workspace") {
+		t.Fatalf("expected workspace copy to stay minimal: %s", body)
 	}
-	if !strings.Contains(body, `id="editor-feedback"`) {
-		t.Fatalf("expected editor feedback area in workspace: %s", body)
+	if !strings.Contains(body, `class="section-label">Issue`) || !strings.Contains(body, `class="section-label">Memos`) || !strings.Contains(body, `class="section-label">Resources`) {
+		t.Fatalf("expected subtle workspace labels: %s", body)
+	}
+	if strings.Contains(body, `class="notice ok">saved work item document`) || strings.Contains(body, `class="notice error"`) {
+		t.Fatalf("expected workspace to avoid persistent top notice: %s", body)
+	}
+	if !strings.Contains(body, `id="main-preview"`) {
+		t.Fatalf("expected main preview surface in workspace: %s", body)
+	}
+	if !strings.Contains(body, `class="editor-footer"`) || !strings.Contains(body, `id="editor-feedback"`) {
+		t.Fatalf("expected inline editor feedback area in workspace: %s", body)
 	}
 	if !strings.Contains(body, `id="agent-pane"`) || !strings.Contains(body, `/work-items/issue-1/agent-pane?memo=notes%2Fnewer.md`) {
 		t.Fatalf("expected auto-refresh agent pane wiring in workspace: %s", body)
@@ -579,7 +588,7 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if !strings.Contains(body, `/work-items/issue-1/preview`) || !strings.Contains(body, `/work-items/issue-1/assets`) {
 		t.Fatalf("expected preview and asset upload wiring in workspace: %s", body)
 	}
-	if !strings.Contains(body, `form.addEventListener("submit", async (event) =>`) || !strings.Contains(body, `fetch(form.action`) || !strings.Contains(body, `showSavedFeedback`) || !strings.Contains(body, `form.requestSubmit`) || !strings.Contains(body, `window.setInterval(refreshAgentPane, 5000)`) || !strings.Contains(body, `textarea.addEventListener("paste"`) || !strings.Contains(body, `navigator.clipboard.read`) || !strings.Contains(body, `clipboard.files`) || !strings.Contains(body, `data:image/`) {
+	if !strings.Contains(body, `--content-inset: 16px`) || !strings.Contains(body, `padding-top: var(--content-inset)`) || !strings.Contains(body, `padding: 0 var(--content-inset) 12px`) || !strings.Contains(body, `padding: 10px var(--content-inset)`) || !strings.Contains(body, `class="editor-footer"`) || !strings.Contains(body, `display: inline-flex;`) || !strings.Contains(body, `border-bottom: 1px solid var(--line)`) || !strings.Contains(body, `overflow: hidden`) || !strings.Contains(body, `border: 0;`) || !strings.Contains(body, `min-height: calc(100vh - 220px)`) || !strings.Contains(body, `resize: none`) || !strings.Contains(body, `class="workspace-main"`) || !strings.Contains(body, `data-mode="editor"`) || !strings.Contains(body, `const saveDocument = async (options = {}) =>`) || !strings.Contains(body, `!event.shiftKey && String(event.key).toLowerCase() === "s"`) || !strings.Contains(body, `void saveDocument();`) || !strings.Contains(body, `openPreview`) || !strings.Contains(body, `event.shiftKey && String(event.key).toLowerCase() === "s"`) || !strings.Contains(body, `void saveDocument({ openPreview: true })`) || !strings.Contains(body, `event.key !== "Escape"`) || !strings.Contains(body, `setPreviewMode(previewMode() === "preview" ? "editor" : "preview")`) || !strings.Contains(body, `preview.addEventListener("dblclick", async (event) =>`) || !strings.Contains(body, `focusEditorAt(offset)`) || !strings.Contains(body, `window.setInterval(refreshAgentPane, 5000)`) || !strings.Contains(body, `textarea.addEventListener("paste"`) || !strings.Contains(body, `navigator.clipboard.read`) || !strings.Contains(body, `clipboard.files`) || !strings.Contains(body, `data:image/`) {
 		t.Fatalf("expected workspace scripts for save shortcut and polling: %s", body)
 	}
 	if !strings.Contains(body, "# Issue\n\nhuman notes") {
@@ -842,7 +851,7 @@ func TestWorkItemWorkspaceSavesTaskMainDocument(t *testing.T) {
 	if res.Code != http.StatusSeeOther {
 		t.Fatalf("save status = %d, want %d", res.Code, http.StatusSeeOther)
 	}
-	if location := res.Header().Get("Location"); !strings.Contains(location, "/work-items/task-1?status=saved+work+item+document") {
+	if location := res.Header().Get("Location"); location != "/work-items/task-1" {
 		t.Fatalf("save redirect location = %q", location)
 	}
 	task, err := readTaskDoc(vault.TaskMetaPath("task-1"))

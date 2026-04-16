@@ -254,8 +254,6 @@ type workItemWorkspacePage struct {
 	SaveAction          string
 	PreviewAction       string
 	AssetUploadAction   string
-	StatusMessage       string
-	ErrorMessage        string
 	IsMemoRecent        bool
 	IsMemoTree          bool
 	MemoRecentHref      string
@@ -441,8 +439,6 @@ func (s *sourceWorkbenchServer) handleWorkItemShow(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	page.StatusMessage = strings.TrimSpace(r.URL.Query().Get("status"))
-	page.ErrorMessage = strings.TrimSpace(r.URL.Query().Get("error"))
 	agentPaneHTML, err := s.renderWorkItemAgentPane(page)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -539,7 +535,7 @@ func (s *sourceWorkbenchServer) handleWorkItemSave(w http.ResponseWriter, r *htt
 			respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: fmt.Sprintf("workspace form parse failed: %v", err)})
 			return
 		}
-		s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey, "", fmt.Sprintf("workspace form parse failed: %v", err))
+		s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey)
 		return
 	}
 	body := r.FormValue("body")
@@ -553,14 +549,14 @@ func (s *sourceWorkbenchServer) handleWorkItemSave(w http.ResponseWriter, r *htt
 			respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: err.Error()})
 			return
 		}
-		s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey, "", err.Error())
+		s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey)
 		return
 	}
 	if isFetchRequest(r) {
 		respondJSON(w, http.StatusOK, workItemSaveResponse{Status: "saved work item document"})
 		return
 	}
-	s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey, "saved work item document", "")
+	s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey)
 }
 
 func (s *sourceWorkbenchServer) handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -823,8 +819,8 @@ func (s *sourceWorkbenchServer) redirectWithMessage(w http.ResponseWriter, r *ht
 	http.Redirect(w, r, "/?"+values.Encode(), http.StatusSeeOther)
 }
 
-func (s *sourceWorkbenchServer) redirectToWorkItem(w http.ResponseWriter, r *http.Request, id string, memoMode workItemMemoMode, memoKey, sourceKey, status, errMsg string) {
-	http.Redirect(w, r, buildWorkItemWorkspaceHref(id, memoMode, memoKey, sourceKey, status, errMsg), http.StatusSeeOther)
+func (s *sourceWorkbenchServer) redirectToWorkItem(w http.ResponseWriter, r *http.Request, id string, memoMode workItemMemoMode, memoKey, sourceKey string) {
+	http.Redirect(w, r, buildWorkItemWorkspaceHref(id, memoMode, memoKey, sourceKey), http.StatusSeeOther)
 }
 
 func (s *sourceWorkbenchServer) loadWorkItemWorkspaceForRequest(w http.ResponseWriter, r *http.Request, id string) (workItemWorkspacePage, bool) {
@@ -875,8 +871,8 @@ func (s *sourceWorkbenchServer) loadWorkItemWorkspace(id string, memoMode workIt
 		AssetUploadAction:   buildWorkItemAssetUploadHref(item.ID),
 		IsMemoRecent:        memoMode == workItemMemoModeRecent,
 		IsMemoTree:          memoMode == workItemMemoModeTree,
-		MemoRecentHref:      buildWorkItemWorkspaceHref(item.ID, workItemMemoModeRecent, selectedMemoDoc.Key, selectedSourceDoc.Key, "", ""),
-		MemoTreeHref:        buildWorkItemWorkspaceHref(item.ID, workItemMemoModeTree, selectedMemoDoc.Key, selectedSourceDoc.Key, "", ""),
+		MemoRecentHref:      buildWorkItemWorkspaceHref(item.ID, workItemMemoModeRecent, selectedMemoDoc.Key, selectedSourceDoc.Key),
+		MemoTreeHref:        buildWorkItemWorkspaceHref(item.ID, workItemMemoModeTree, selectedMemoDoc.Key, selectedSourceDoc.Key),
 		SelectedMemoBody:    selectedMemoDoc.Body,
 		SelectedMemoLabel:   selectedMemoDoc.Label,
 		SelectedSourceBody:  selectedSourceDoc.Body,
@@ -886,11 +882,11 @@ func (s *sourceWorkbenchServer) loadWorkItemWorkspace(id string, memoMode workIt
 	}
 	for i := range memos {
 		memos[i].Active = memos[i].Key == selectedMemoDoc.Key
-		memos[i].Href = buildWorkItemWorkspaceHref(item.ID, memoMode, memos[i].Key, selectedSourceDoc.Key, "", "")
+		memos[i].Href = buildWorkItemWorkspaceHref(item.ID, memoMode, memos[i].Key, selectedSourceDoc.Key)
 	}
 	for i := range sources {
 		sources[i].Active = sources[i].Key == selectedSourceDoc.Key
-		sources[i].Href = buildWorkItemWorkspaceHref(item.ID, memoMode, selectedMemoDoc.Key, sources[i].Key, "", "")
+		sources[i].Href = buildWorkItemWorkspaceHref(item.ID, memoMode, selectedMemoDoc.Key, sources[i].Key)
 	}
 	page.Memos = memos
 	page.Sources = sources
@@ -1336,7 +1332,7 @@ func extensionForImageContentType(contentType string) string {
 	}
 }
 
-func buildWorkItemWorkspaceHref(id string, memoMode workItemMemoMode, memoKey, sourceKey, status, errMsg string) string {
+func buildWorkItemWorkspaceHref(id string, memoMode workItemMemoMode, memoKey, sourceKey string) string {
 	values := url.Values{}
 	if memoMode != workItemMemoModeRecent {
 		values.Set("memo_view", string(memoMode))
@@ -1346,12 +1342,6 @@ func buildWorkItemWorkspaceHref(id string, memoMode workItemMemoMode, memoKey, s
 	}
 	if strings.TrimSpace(sourceKey) != "" {
 		values.Set("source", filepath.ToSlash(strings.TrimSpace(sourceKey)))
-	}
-	if strings.TrimSpace(status) != "" {
-		values.Set("status", strings.TrimSpace(status))
-	}
-	if strings.TrimSpace(errMsg) != "" {
-		values.Set("error", strings.TrimSpace(errMsg))
 	}
 	path := "/work-items/" + url.PathEscape(strings.TrimSpace(id))
 	if len(values) == 0 {
@@ -1379,6 +1369,7 @@ const sourceWorkbenchHTML = `<!doctype html>
       --line: #dddddd;
       --accent: #111111;
       --error: #b00020;
+      --content-inset: 16px;
     }
     * { box-sizing: border-box; }
     body {
@@ -1691,6 +1682,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       --line: #dddddd;
       --accent: #111111;
       --error: #b00020;
+      --content-inset: 16px;
     }
     * { box-sizing: border-box; }
     body {
@@ -1727,8 +1719,9 @@ const workItemWorkspaceHTML = `<!doctype html>
       display: grid;
       gap: 18px;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      align-items: start;
+      align-items: stretch;
       margin-top: 20px;
+      min-height: calc(100vh - 220px);
     }
     .agent-pane {
       display: grid;
@@ -1748,14 +1741,52 @@ const workItemWorkspaceHTML = `<!doctype html>
       gap: 12px;
       align-items: center;
       margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
     }
     .stack {
       display: grid;
       gap: 12px;
     }
     .editor-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      flex: 1;
+      min-height: 0;
+    }
+    .workspace-main {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      overflow: hidden;
+      padding-top: var(--content-inset);
+    }
+    .workspace-main form {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+    .editor-only {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+      padding-bottom: 16px;
+    }
+    .editor-stack[data-mode="editor"] .preview-panel,
+    .editor-stack[data-mode="preview"] .editor-only {
+      display: none;
+    }
+    .editor-stack[data-mode="preview"] .preview-panel {
       display: grid;
       gap: 16px;
+    }
+    .editor-stack[data-mode="preview"] .preview-surface {
+      min-height: 520px;
     }
     .stats {
       display: flex;
@@ -1818,19 +1849,32 @@ const workItemWorkspaceHTML = `<!doctype html>
       color: var(--ink);
     }
     textarea {
-      min-height: 480px;
-      resize: vertical;
+      min-height: 0;
+      flex: 1;
+      resize: none;
+      border: 0;
+      border-radius: 0;
+      padding: 10px var(--content-inset);
     }
     .preview-panel {
       border-top: 1px solid var(--line);
       padding-top: 16px;
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+    }
+    .editor-stack[data-mode="preview"] .preview-panel {
+      border-top: 0;
+      padding-top: 0;
     }
     .preview-surface {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 14px;
-      min-height: 160px;
-      background: #fff;
+      border: 0;
+      border-radius: 0;
+      padding: 10px var(--content-inset);
+      min-height: 0;
+      flex: 1;
+      background: transparent;
       overflow: auto;
     }
     .preview-surface img {
@@ -1852,6 +1896,43 @@ const workItemWorkspaceHTML = `<!doctype html>
       border-color: var(--accent);
       color: #fff;
     }
+    .mode-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      padding: 0 var(--content-inset) 12px;
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .mode-toggle {
+      width: auto;
+      min-width: 0;
+      margin-left: auto;
+      padding: 6px 10px;
+      font-size: 0.86rem;
+      background: #fff;
+      color: var(--ink);
+      border-color: var(--line);
+    }
+    .save-button {
+      width: auto;
+      min-width: 0;
+      padding: 8px 12px;
+      margin: 0;
+    }
+    .section-label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .workspace-title {
+      padding-left: var(--content-inset);
+    }
     pre.viewer {
       margin: 0;
       white-space: pre-wrap;
@@ -1870,64 +1951,65 @@ const workItemWorkspaceHTML = `<!doctype html>
     }
     .editor-feedback {
       display: none;
-      padding: 10px 12px;
+      padding: 8px 10px;
       border-radius: 6px;
-      font-size: 0.9rem;
+      font-size: 0.84rem;
+      width: auto;
+      max-width: min(480px, 100%);
     }
     .editor-feedback.error {
-      display: block;
+      display: inline-flex;
       color: var(--error);
       background: #fff7f8;
     }
     .editor-feedback.success {
-      display: block;
+      display: inline-flex;
       color: #0f6b46;
       background: #f2fbf6;
+    }
+    .editor-footer {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 var(--content-inset);
+      flex-wrap: wrap;
     }
     @media (max-width: 980px) {
       .workspace {
         grid-template-columns: 1fr;
+        min-height: 0;
       }
       textarea {
+        min-height: 320px;
+      }
+      .preview-surface {
         min-height: 320px;
       }
     }
   </style>
 </head>
-<body>
+  <body>
   <main>
-    <h1>{{.Title}}</h1>
-    <p class="lead">Work item workspace for human editing, agent memos, and referenced source documents.</p>
-    <div class="stats">
-      <div>ID: <strong>{{.ID}}</strong></div>
-      <div>Type: <strong>{{.EntityType}}</strong></div>
-      <div>Status: <strong>{{.Status}}</strong></div>
-      {{if .Stage}}<div>Stage: <strong>{{.Stage}}</strong></div>{{end}}
-      <div>Refs: <strong>{{len .Refs}}</strong></div>
-      <div>Updated: <strong>{{.Updated}}</strong></div>
-    </div>
-    {{if .StatusMessage}}<div class="notice ok">{{.StatusMessage}}</div>{{end}}
-    {{if .ErrorMessage}}<div class="notice error">{{.ErrorMessage}}</div>{{end}}
+    <h1 class="workspace-title">{{.Title}}</h1>
 
     <div class="workspace">
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Main Document</h2>
-          <div class="meta">Human-editable · Cmd+S / Ctrl+S</div>
+      <section class="workspace-main">
+        <div class="mode-actions">
+          <div class="section-label">{{if eq .EntityType "issue"}}Issue{{else if eq .EntityType "task"}}Task{{else}}{{.EntityType}}{{end}}</div>
+          <button id="toggle-preview-mode" class="mode-toggle" type="button" aria-pressed="false">Preview</button>
         </div>
         <form id="work-item-editor" method="post" action="{{.SaveAction}}" data-preview-url="{{.PreviewAction}}" data-asset-upload-url="{{.AssetUploadAction}}">
-          <div class="editor-stack">
-            <textarea id="work-item-body" name="body" placeholder="# Notes">{{.MainBody}}</textarea>
-            <div class="hint">Save with the button or keyboard shortcut. Paste images into the editor to store them under <code>assets/</code> and insert Markdown automatically.</div>
-            <div id="editor-feedback" class="editor-feedback" role="status" aria-live="polite"></div>
-            <div class="preview-panel stack">
-              <div class="panel-head">
-                <h3>Main Document Preview</h3>
-                <div class="meta">Live preview</div>
+          <div class="editor-stack" data-mode="editor">
+            <div class="editor-only stack">
+              <textarea id="work-item-body" name="body" placeholder="# Notes">{{.MainBody}}</textarea>
+              <div class="editor-footer">
+                <button class="save-button" type="submit">Save</button>
+                <div id="editor-feedback" class="editor-feedback" role="status" aria-live="polite"></div>
               </div>
-              <div id="main-preview" class="preview-surface">{{.MainPreviewHTML}}</div>
             </div>
-            <button type="submit">Save Document</button>
+            <div class="preview-panel stack">
+              <div id="main-preview" class="preview-surface" tabindex="0">{{.MainPreviewHTML}}</div>
+            </div>
           </div>
         </form>
       </section>
@@ -1938,9 +2020,11 @@ const workItemWorkspaceHTML = `<!doctype html>
   <script>
     (() => {
       const form = document.getElementById("work-item-editor");
+      const editorStack = form ? form.querySelector(".editor-stack") : null;
       const textarea = document.getElementById("work-item-body");
       const preview = document.getElementById("main-preview");
       const feedback = document.getElementById("editor-feedback");
+      const togglePreviewButton = document.getElementById("toggle-preview-mode");
       const previewAction = form ? form.dataset.previewUrl : "";
       const assetUploadAction = form ? form.dataset.assetUploadUrl : "";
       let saveTimer = null;
@@ -1958,41 +2042,134 @@ const workItemWorkspaceHTML = `<!doctype html>
         }
         saveTimer = window.setTimeout(() => setFeedback("", ""), 1500);
       };
+      const saveDocument = async (options = {}) => {
+        if (!form) {
+          return false;
+        }
+        setFeedback("", "");
+        try {
+          const response = await fetch(form.action, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+              "X-Requested-With": "fetch"
+            },
+            body: new URLSearchParams(new FormData(form)).toString()
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload && payload.error ? payload.error : "save failed");
+          }
+          showSavedFeedback(payload && payload.status ? payload.status : "saved work item document");
+          if (options.openPreview) {
+            await setPreviewMode("preview");
+          }
+          return true;
+        } catch (error) {
+          setFeedback(error && error.message ? error.message : "save failed", "error");
+          return false;
+        }
+      };
+      const previewMode = () => editorStack ? editorStack.dataset.mode || "editor" : "editor";
+      const setPreviewMode = async (mode, options = {}) => {
+        if (!editorStack) {
+          return;
+        }
+        editorStack.dataset.mode = mode === "preview" ? "preview" : "editor";
+        if (togglePreviewButton) {
+          const previewActive = editorStack.dataset.mode === "preview";
+          togglePreviewButton.textContent = previewActive ? "Edit" : "Preview";
+          togglePreviewButton.setAttribute("aria-pressed", previewActive ? "true" : "false");
+        }
+        if (editorStack.dataset.mode === "preview") {
+          await refreshPreview();
+          if (!options.skipFocus && preview) {
+            preview.focus();
+          }
+          return;
+        }
+        if (!options.skipFocus && textarea) {
+          textarea.focus();
+        }
+      };
+      const normalizedSearchIndex = (value) => {
+        const text = String(value || "");
+        const chars = [];
+        const offsets = [];
+        let spaced = false;
+        for (let i = 0; i < text.length; i += 1) {
+          const ch = text[i];
+          if (/\s/.test(ch)) {
+            if (!chars.length || spaced) {
+              continue;
+            }
+            chars.push(" ");
+            offsets.push(i);
+            spaced = true;
+            continue;
+          }
+          chars.push(ch.toLowerCase());
+          offsets.push(i);
+          spaced = false;
+        }
+        while (chars.length && chars[chars.length - 1] === " ") {
+          chars.pop();
+          offsets.pop();
+        }
+        return { text: chars.join(""), offsets };
+      };
+      const findTextOffset = (value) => {
+        if (!textarea) {
+          return -1;
+        }
+        const needle = normalizedSearchIndex(value).text;
+        if (!needle) {
+          return -1;
+        }
+        const haystack = normalizedSearchIndex(textarea.value);
+        const index = haystack.text.indexOf(needle);
+        if (index < 0 || index >= haystack.offsets.length) {
+          return -1;
+        }
+        return haystack.offsets[index];
+      };
+      const focusEditorAt = async (offset) => {
+        await setPreviewMode("editor", { skipFocus: true });
+        if (!textarea) {
+          return;
+        }
+        const caret = Math.max(0, offset);
+        textarea.focus();
+        textarea.selectionStart = caret;
+        textarea.selectionEnd = caret;
+        const lineHeight = parseFloat(window.getComputedStyle(textarea).lineHeight) || 20;
+        const lines = textarea.value.slice(0, caret).split("\n").length - 1;
+        textarea.scrollTop = Math.max(0, (lines - 2) * lineHeight);
+      };
       if (form) {
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
-          setFeedback("", "");
-          try {
-            const response = await fetch(form.action, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-                "X-Requested-With": "fetch"
-              },
-              body: new URLSearchParams(new FormData(form)).toString()
-            });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok) {
-              throw new Error(payload && payload.error ? payload.error : "save failed");
-            }
-            showSavedFeedback(payload && payload.status ? payload.status : "saved work item document");
-          } catch (error) {
-            setFeedback(error && error.message ? error.message : "save failed", "error");
-          }
+          await saveDocument();
         });
         document.addEventListener("keydown", (event) => {
-          if (!(event.metaKey || event.ctrlKey)) {
+          if ((event.metaKey || event.ctrlKey) && !event.shiftKey && String(event.key).toLowerCase() === "s") {
+            event.preventDefault();
+            void saveDocument();
             return;
           }
-          if (String(event.key).toLowerCase() !== "s") {
+          if ((event.metaKey || event.ctrlKey) && event.shiftKey && String(event.key).toLowerCase() === "s") {
+            event.preventDefault();
+            void saveDocument({ openPreview: true });
+            return;
+          }
+          if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+            return;
+          }
+          if (event.key !== "Escape") {
             return;
           }
           event.preventDefault();
-          if (typeof form.requestSubmit === "function") {
-            form.requestSubmit();
-            return;
-          }
-          form.dispatchEvent(new Event("submit", { cancelable: true }));
+          setPreviewMode(previewMode() === "preview" ? "editor" : "preview");
         });
       }
 
@@ -2023,6 +2200,30 @@ const workItemWorkspaceHTML = `<!doctype html>
         }
         previewTimer = window.setTimeout(refreshPreview, 200);
       };
+      if (togglePreviewButton) {
+        togglePreviewButton.addEventListener("click", () => {
+          setPreviewMode(previewMode() === "preview" ? "editor" : "preview");
+        });
+      }
+      if (preview) {
+        preview.addEventListener("dblclick", async (event) => {
+          const selection = window.getSelection ? String(window.getSelection() || "") : "";
+          const block = event.target && event.target.closest ? event.target.closest("p, li, h1, h2, h3, h4, h5, h6, blockquote, pre, td, th") : null;
+          const candidates = [
+            selection,
+            block ? block.textContent : "",
+            event.target && event.target.textContent ? event.target.textContent : ""
+          ];
+          for (const candidate of candidates) {
+            const offset = findTextOffset(candidate);
+            if (offset >= 0) {
+              await focusEditorAt(offset);
+              return;
+            }
+          }
+          await focusEditorAt(textarea ? textarea.selectionStart || 0 : 0);
+        });
+      }
       if (textarea) {
         textarea.addEventListener("input", queuePreviewRefresh);
         const fileNameForBlob = (blob) => {
@@ -2175,7 +2376,7 @@ const workItemWorkspaceHTML = `<!doctype html>
 const workItemAgentPaneHTML = `
 <section class="panel">
   <div class="panel-head">
-    <h2>Agent Memos</h2>
+    <div class="section-label">Memos</div>
     <ul class="tabs">
       <li><a href="{{.MemoRecentHref}}"{{if .IsMemoRecent}} class="active"{{end}}>Recent</a></li>
       <li><a href="{{.MemoTreeHref}}"{{if .IsMemoTree}} class="active"{{end}}>Tree</a></li>
@@ -2205,8 +2406,7 @@ const workItemAgentPaneHTML = `
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Source Documents</h2>
-    <div class="meta">From work item refs only</div>
+    <div class="section-label">Resources</div>
   </div>
   {{if .Sources}}
   <ul class="list">
