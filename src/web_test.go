@@ -579,7 +579,7 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if !strings.Contains(body, `/work-items/issue-1/preview`) || !strings.Contains(body, `/work-items/issue-1/assets`) {
 		t.Fatalf("expected preview and asset upload wiring in workspace: %s", body)
 	}
-	if !strings.Contains(body, `form.requestSubmit`) || !strings.Contains(body, `window.setInterval(refreshAgentPane, 5000)`) || !strings.Contains(body, `textarea.addEventListener("paste"`) || !strings.Contains(body, `navigator.clipboard.read`) || !strings.Contains(body, `clipboard.files`) || !strings.Contains(body, `data:image/`) {
+	if !strings.Contains(body, `form.addEventListener("submit", async (event) =>`) || !strings.Contains(body, `fetch(form.action`) || !strings.Contains(body, `showSavedFeedback`) || !strings.Contains(body, `form.requestSubmit`) || !strings.Contains(body, `window.setInterval(refreshAgentPane, 5000)`) || !strings.Contains(body, `textarea.addEventListener("paste"`) || !strings.Contains(body, `navigator.clipboard.read`) || !strings.Contains(body, `clipboard.files`) || !strings.Contains(body, `data:image/`) {
 		t.Fatalf("expected workspace scripts for save shortcut and polling: %s", body)
 	}
 	if !strings.Contains(body, "# Issue\n\nhuman notes") {
@@ -850,6 +850,59 @@ func TestWorkItemWorkspaceSavesTaskMainDocument(t *testing.T) {
 		t.Fatalf("readTaskDoc returned error: %v", err)
 	}
 	if task.Body != "# Task\n\nafter" {
+		t.Fatalf("task body = %q, want updated markdown", task.Body)
+	}
+}
+
+func TestWorkItemWorkspaceFetchSaveReturnsJSONWithoutRedirect(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	if err := vault.SaveTask(TaskDoc{
+		Metadata: Metadata{
+			ID:      "task-1",
+			Title:   "Write rollout notes",
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNow,
+			Created: "2025-01-01",
+			Updated: "2025-01-02",
+		},
+		Body: "# Task\n\nbefore",
+	}); err != nil {
+		t.Fatalf("SaveTask returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	form := url.Values{"body": []string{"# Task\n\nafter fetch save"}}
+	req := httptest.NewRequest(http.MethodPost, "/work-items/task-1/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Requested-With", "fetch")
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("fetch save status = %d, want %d", res.Code, http.StatusOK)
+	}
+	if location := res.Header().Get("Location"); location != "" {
+		t.Fatalf("fetch save redirect location = %q, want empty", location)
+	}
+	if got := res.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Fatalf("fetch save content type = %q, want application/json", got)
+	}
+	var payload workItemSaveResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Status != "saved work item document" {
+		t.Fatalf("payload.Status = %q, want saved message", payload.Status)
+	}
+	task, err := readTaskDoc(vault.TaskMetaPath("task-1"))
+	if err != nil {
+		t.Fatalf("readTaskDoc returned error: %v", err)
+	}
+	if task.Body != "# Task\n\nafter fetch save" {
 		t.Fatalf("task body = %q, want updated markdown", task.Body)
 	}
 }

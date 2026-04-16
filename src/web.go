@@ -276,6 +276,11 @@ type workItemAssetUploadResponse struct {
 	Path     string `json:"path"`
 }
 
+type workItemSaveResponse struct {
+	Status string `json:"status,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
 type workItemRequestState struct {
 	MemoMode  workItemMemoMode
 	MemoKey   string
@@ -530,6 +535,10 @@ func (s *sourceWorkbenchServer) handleWorkItemAsset(w http.ResponseWriter, r *ht
 func (s *sourceWorkbenchServer) handleWorkItemSave(w http.ResponseWriter, r *http.Request, id string) {
 	if err := r.ParseForm(); err != nil {
 		state := workItemRequestStateFromRequest(r)
+		if isFetchRequest(r) {
+			respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: fmt.Sprintf("workspace form parse failed: %v", err)})
+			return
+		}
 		s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey, "", fmt.Sprintf("workspace form parse failed: %v", err))
 		return
 	}
@@ -540,7 +549,15 @@ func (s *sourceWorkbenchServer) handleWorkItemSave(w http.ResponseWriter, r *htt
 			http.NotFound(w, r)
 			return
 		}
+		if isFetchRequest(r) {
+			respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: err.Error()})
+			return
+		}
 		s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey, "", err.Error())
+		return
+	}
+	if isFetchRequest(r) {
+		respondJSON(w, http.StatusOK, workItemSaveResponse{Status: "saved work item document"})
 		return
 	}
 	s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey, "saved work item document", "")
@@ -918,6 +935,16 @@ func respondWorkItemLoadError(w http.ResponseWriter, r *http.Request, err error)
 		return
 	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func isFetchRequest(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Requested-With")), "fetch")
+}
+
+func respondJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func (s *sourceWorkbenchServer) renderWorkItemAgentPane(page workItemWorkspacePage) (template.HTML, error) {
@@ -1852,6 +1879,11 @@ const workItemWorkspaceHTML = `<!doctype html>
       color: var(--error);
       background: #fff7f8;
     }
+    .editor-feedback.success {
+      display: block;
+      color: #0f6b46;
+      background: #f2fbf6;
+    }
     @media (max-width: 980px) {
       .workspace {
         grid-template-columns: 1fr;
@@ -1911,14 +1943,43 @@ const workItemWorkspaceHTML = `<!doctype html>
       const feedback = document.getElementById("editor-feedback");
       const previewAction = form ? form.dataset.previewUrl : "";
       const assetUploadAction = form ? form.dataset.assetUploadUrl : "";
-      const setFeedback = (message) => {
+      let saveTimer = null;
+      const setFeedback = (message, tone) => {
         if (!feedback) {
           return;
         }
         feedback.textContent = message || "";
-        feedback.className = message ? "editor-feedback error" : "editor-feedback";
+        feedback.className = message ? "editor-feedback " + (tone || "error") : "editor-feedback";
+      };
+      const showSavedFeedback = (message) => {
+        setFeedback(message || "saved work item document", "success");
+        if (saveTimer) {
+          window.clearTimeout(saveTimer);
+        }
+        saveTimer = window.setTimeout(() => setFeedback("", ""), 1500);
       };
       if (form) {
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          setFeedback("", "");
+          try {
+            const response = await fetch(form.action, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                "X-Requested-With": "fetch"
+              },
+              body: new URLSearchParams(new FormData(form)).toString()
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+              throw new Error(payload && payload.error ? payload.error : "save failed");
+            }
+            showSavedFeedback(payload && payload.status ? payload.status : "saved work item document");
+          } catch (error) {
+            setFeedback(error && error.message ? error.message : "save failed", "error");
+          }
+        });
         document.addEventListener("keydown", (event) => {
           if (!(event.metaKey || event.ctrlKey)) {
             return;
@@ -1931,7 +1992,7 @@ const workItemWorkspaceHTML = `<!doctype html>
             form.requestSubmit();
             return;
           }
-          form.submit();
+          form.dispatchEvent(new Event("submit", { cancelable: true }));
         });
       }
 
