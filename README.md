@@ -123,7 +123,7 @@ Start a small browser workbench for upload:
 workbench web serve --addr 127.0.0.1:8080
 ```
 
-Open the shown URL and drop or pick a file to add it. Pasted Markdown text and uploaded Markdown files are saved directly into `sources/documents/`. If you already know the related theme or work item, select it in the form and Workbench will link the new source document immediately. Other file types still go to `sources/files/staged/` for later agent work. The page also includes a form to link existing source documents to themes and work items after an agent has produced them.
+Open the shown URL to land on the browser workbench. The source inbox now lives under `/sources`, where you can drop or pick a file to add it. Pasted Markdown text and uploaded Markdown files are saved directly into `sources/documents/`. If you already know the related theme or work item, select it in the form and Workbench will link the new source document immediately. Other file types still go to `sources/files/staged/` for later agent work. The page also includes a form to link existing source documents to themes and work items after an agent has produced them.
 
 In the TUI workbench, select a theme and press `D` to open a dialog with the source inbox URL. The web server stays up only while that dialog is open.
 

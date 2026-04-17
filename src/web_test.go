@@ -365,7 +365,7 @@ func TestSourceWorkbenchIndexShowsStagedFiles(t *testing.T) {
 	}
 
 	server := newSourceWorkbenchServer(vault)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sources", nil)
 	res := httptest.NewRecorder()
 	server.routes().ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -381,7 +381,7 @@ func TestSourceWorkbenchIndexShowsStagedFiles(t *testing.T) {
 	if !strings.Contains(body, "Capture Markdown") || !strings.Contains(body, "pasted.md") {
 		t.Fatalf("expected quick capture controls in body: %s", body)
 	}
-	if !strings.Contains(body, `href="/?view=upload"`) || !strings.Contains(body, `href="/?view=link"`) || !strings.Contains(body, `href="/?view=staged"`) {
+	if !strings.Contains(body, `href="/sources?view=upload"`) || !strings.Contains(body, `href="/sources?view=link"`) || !strings.Contains(body, `href="/sources?view=staged"`) {
 		t.Fatalf("expected workflow navigation in body: %s", body)
 	}
 	if strings.Contains(body, `action="/upload"`) || strings.Contains(body, `action="/link"`) {
@@ -407,7 +407,7 @@ func TestSourceWorkbenchIndexCanSwitchToLinkView(t *testing.T) {
 	}
 
 	server := newSourceWorkbenchServer(vault)
-	req := httptest.NewRequest(http.MethodGet, "/?view=link", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sources?view=link", nil)
 	res := httptest.NewRecorder()
 	server.routes().ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -443,7 +443,7 @@ func TestSourceWorkbenchIndexCanSwitchToStagedView(t *testing.T) {
 	}
 
 	server := newSourceWorkbenchServer(vault)
-	req := httptest.NewRequest(http.MethodGet, "/?view=staged", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sources?view=staged", nil)
 	res := httptest.NewRecorder()
 	server.routes().ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -564,8 +564,11 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if !strings.Contains(body, "Investigate OTP copy") || !strings.Contains(body, `action="/work-items/issue-1/save?memo=generated%2Fnotes%2Fnewer.md`) {
 		t.Fatalf("expected workspace header and save action: %s", body)
 	}
-	if !strings.Contains(body, `class="workspace-main"`) || strings.Contains(body, `class="panel workspace-main"`) || !strings.Contains(body, `id="work-item-editor"`) || !strings.Contains(body, `id="toggle-preview-mode"`) || !strings.Contains(body, `>Preview</button>`) || !strings.Contains(body, `>Save</button>`) {
+	if !strings.Contains(body, `class="workspace-main"`) || strings.Contains(body, `class="panel workspace-main"`) || !strings.Contains(body, `id="work-item-editor"`) || !strings.Contains(body, `id="toggle-preview-mode"`) || !strings.Contains(body, `>Preview</button>`) || !strings.Contains(body, `>+ Save</button>`) {
 		t.Fatalf("expected simplified editor controls in workspace: %s", body)
+	}
+	if !strings.Contains(body, `id="open-capture"`) || !strings.Contains(body, "Capture to Inbox") {
+		t.Fatalf("expected workspace capture UI in body: %s", body)
 	}
 	if strings.Contains(body, "Human-editable") || strings.Contains(body, "Agent Memos") || strings.Contains(body, "Main Document") || strings.Contains(body, "Source Documents") || strings.Contains(body, "Work item workspace") {
 		t.Fatalf("expected workspace copy to stay minimal: %s", body)
@@ -967,6 +970,171 @@ func TestWorkItemWorkspaceUsesWorkItemRefsOnly(t *testing.T) {
 	}
 }
 
+func TestWorkbenchIndexShowsSidebarAndMainView(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	seedWorkbenchItems(t, vault)
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("index status = %d, want %d", res.Code, http.StatusOK)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "Workbench") || !strings.Contains(body, `action="/workbench/add"`) {
+		t.Fatalf("expected workbench page in body: %s", body)
+	}
+	if !strings.Contains(body, `id="open-capture"`) || !strings.Contains(body, "Capture to Inbox") {
+		t.Fatalf("expected global capture UI in body: %s", body)
+	}
+	if !strings.Contains(body, `href="/sources?view=paste"`) {
+		t.Fatalf("expected sources navigation in body: %s", body)
+	}
+	for _, want := range []string{"Action", "Themes", `href="/?nav=auth-stepup"`, "Focus item", `/work-items/focus-1`, "No Theme"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %q in workbench body: %s", want, body)
+		}
+	}
+	if !strings.Contains(body, `<a href="/" class="active"><span>Now</span>`) {
+		t.Fatalf("expected Now nav to be active on root view: %s", body)
+	}
+	if strings.Contains(body, "Inbox item") || strings.Contains(body, "Next item") {
+		t.Fatalf("expected root view to focus on the selected nav entry, got: %s", body)
+	}
+	if strings.Contains(body, "Source Inbox") {
+		t.Fatalf("expected root page to be workbench, got: %s", body)
+	}
+	if strings.Contains(body, "Filter") || strings.Contains(body, "A TUI-like browser layout") {
+		t.Fatalf("expected workbench to avoid local filter and explainer copy: %s", body)
+	}
+	if !strings.Contains(body, "&gt; Open details") {
+		t.Fatalf("expected clearer open-details action: %s", body)
+	}
+}
+
+func TestWorkbenchIndexCanOpenThemeView(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	seedWorkbenchItems(t, vault)
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodGet, "/?nav=auth-stepup", nil)
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("theme index status = %d, want %d", res.Code, http.StatusOK)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "Auth Step-Up") || !strings.Contains(body, "Theme item") {
+		t.Fatalf("expected theme-scoped main view in body: %s", body)
+	}
+	if strings.Contains(body, "Focus item") {
+		t.Fatalf("expected theme view to replace action list content: %s", body)
+	}
+}
+
+func TestWorkbenchActionsAddMoveAndLifecycle(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	seedWorkbenchItems(t, vault)
+
+	server := newSourceWorkbenchServer(vault)
+
+	form := url.Values{"title": []string{"Captured from web"}}
+	req := httptest.NewRequest(http.MethodPost, "/workbench/add", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("add status = %d, want %d", res.Code, http.StatusSeeOther)
+	}
+	state, err := LoadVaultState(vault)
+	if err != nil {
+		t.Fatalf("LoadVaultState returned error: %v", err)
+	}
+	var added *Item
+	for i := range state.Items {
+		if state.Items[i].Title == "Captured from web" {
+			added = &state.Items[i]
+			break
+		}
+	}
+	if added == nil || added.Triage != TriageInbox {
+		t.Fatalf("expected added inbox item, got %#v", added)
+	}
+
+	form = url.Values{"to": []string{"next"}}
+	req = httptest.NewRequest(http.MethodPost, "/workbench/items/inbox-1/move", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res = httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("move status = %d, want %d", res.Code, http.StatusSeeOther)
+	}
+	state, err = LoadVaultState(vault)
+	if err != nil {
+		t.Fatalf("LoadVaultState returned error: %v", err)
+	}
+	moved, err := state.FindItem("inbox-1")
+	if err != nil || moved.Triage != TriageStock || moved.Stage != StageNext {
+		t.Fatalf("expected moved next item, got item=%#v err=%v", moved, err)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/workbench/items/focus-1/done-for-day", strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res = httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("done-for-day status = %d, want %d", res.Code, http.StatusSeeOther)
+	}
+	state, _ = LoadVaultState(vault)
+	focus, _ := state.FindItem("focus-1")
+	if focus.DoneForDayOn == "" {
+		t.Fatalf("expected focus item to be done for day: %#v", focus)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/workbench/items/focus-1/reopen", strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res = httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	state, _ = LoadVaultState(vault)
+	focus, _ = state.FindItem("focus-1")
+	if focus.DoneForDayOn != "" {
+		t.Fatalf("expected focus item restored for today: %#v", focus)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/workbench/items/focus-1/complete", strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res = httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	state, _ = LoadVaultState(vault)
+	focus, _ = state.FindItem("focus-1")
+	if focus.Status != "done" {
+		t.Fatalf("expected focus item complete: %#v", focus)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/workbench/items/focus-1/reopen", strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res = httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	state, _ = LoadVaultState(vault)
+	focus, _ = state.FindItem("focus-1")
+	if focus.Status != "open" {
+		t.Fatalf("expected focus item reopened: %#v", focus)
+	}
+}
+
 func seedSourceWorkbenchThemeAndIssue(t *testing.T, vault VaultFS) {
 	t.Helper()
 	if err := vault.SaveTheme(ThemeDoc{
@@ -984,6 +1152,43 @@ func seedSourceWorkbenchThemeAndIssue(t *testing.T, vault VaultFS) {
 		},
 	}
 	state.Items[0].ID = "issue-1"
+	if err := SaveVaultState(vault, state); err != nil {
+		t.Fatalf("SaveVaultState returned error: %v", err)
+	}
+}
+
+func seedWorkbenchItems(t *testing.T, vault VaultFS) {
+	t.Helper()
+	if err := vault.SaveTheme(ThemeDoc{
+		ID:      "auth-stepup",
+		Title:   "Auth Step-Up",
+		Created: "2025-01-01",
+		Updated: "2025-01-01",
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	now := time.Now()
+	inbox := NewInboxItem(now, "Inbox item")
+	inbox.ID = "inbox-1"
+	focus := NewStockItem(now, "Focus item", StageNow)
+	focus.ID = "focus-1"
+	next := NewStockItem(now, "Next item", StageNext)
+	next.ID = "next-1"
+	later := NewStockItem(now, "Later item", StageLater)
+	later.ID = "later-1"
+	deferred := NewScheduledItem(now, "Deferred item", now.AddDate(0, 0, 7).Format("2006-01-02"))
+	deferred.ID = "deferred-1"
+	doneToday := NewStockItem(now, "Done today item", StageNow)
+	doneToday.ID = "done-today-1"
+	doneToday.MarkDoneForDay(now, "")
+	completed := NewStockItem(now, "Completed item", StageNext)
+	completed.ID = "complete-1"
+	completed.Complete(now, "")
+	themed := NewStockItem(now, "Theme item", StageNext)
+	themed.ID = "theme-1"
+	themed.Theme = "auth-stepup"
+	state := State{Items: []Item{inbox, focus, next, later, deferred, doneToday, completed, themed}}
+	state.Sort()
 	if err := SaveVaultState(vault, state); err != nil {
 		t.Fatalf("SaveVaultState returned error: %v", err)
 	}

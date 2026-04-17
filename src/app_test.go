@@ -1673,7 +1673,7 @@ func TestShiftDShowsSourceInboxDialog(t *testing.T) {
 	if updated.mode != modeSourceWorkbench {
 		t.Fatalf("mode = %v, want modeSourceWorkbench", updated.mode)
 	}
-	if updated.sourceWorkbenchDialogURL != "http://127.0.0.1:18080/" {
+	if updated.sourceWorkbenchDialogURL != "http://127.0.0.1:18080/sources" {
 		t.Fatalf("dialog url = %q", updated.sourceWorkbenchDialogURL)
 	}
 

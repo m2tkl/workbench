@@ -80,7 +80,7 @@ func runWebServe(args []string) int {
 		fmt.Fprintf(os.Stderr, "serve web ui: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "web source inbox listening on %s\n", baseURL)
+	fmt.Fprintf(os.Stdout, "web ui listening on %s\n", baseURL)
 	if err := runtime.Wait(); err != nil {
 		fmt.Fprintf(os.Stderr, "serve web ui: %v\n", err)
 		return 1
@@ -169,10 +169,11 @@ func buildSourceWorkbenchURL(baseURL string) string {
 	if baseURL == "" {
 		baseURL = "http://" + defaultSourceWorkbenchAddr
 	}
-	return baseURL + "/"
+	return baseURL + "/sources"
 }
 
 type sourceWorkbenchServer struct {
+	workbenchTmpl *template.Template
 	vault         VaultFS
 	sourceTmpl    *template.Template
 	workspaceTmpl *template.Template
@@ -206,6 +207,10 @@ const (
 )
 
 type sourceWorkbenchPage struct {
+	WorkbenchHref   string
+	SourcesHref     string
+	CaptureAction   string
+	CaptureReturn   string
 	ActiveView      string
 	Nav             []sourceWorkbenchNavItem
 	StagedFiles     []string
@@ -221,6 +226,60 @@ type sourceWorkbenchPage struct {
 	IsStagedView    bool
 	Status          string
 	Error           string
+}
+
+type webWorkbenchPage struct {
+	WorkbenchHref string
+	SourcesHref   string
+	AddAction     string
+	Query         string
+	Nav           string
+	Status        string
+	Error         string
+	CaptureAction string
+	CaptureReturn string
+	NavGroups     []webWorkbenchNavGroup
+	CurrentTitle  string
+	CurrentCount  int
+	Items         []webWorkbenchItem
+}
+
+type webWorkbenchNavGroup struct {
+	Label   string
+	Entries []webWorkbenchNavEntry
+}
+
+type webWorkbenchNavEntry struct {
+	Key    string
+	Title  string
+	Href   string
+	Count  int
+	Active bool
+}
+
+type webWorkbenchItem struct {
+	ID                   string
+	Title                string
+	Theme                string
+	Summary              string
+	WorkspaceHref        string
+	MoveAction           string
+	DoneForDayAction     string
+	CompleteAction       string
+	ReopenAction         string
+	MoveOptions          []webWorkbenchMoveOption
+	CanMove              bool
+	CanDoneForDay        bool
+	CanComplete          bool
+	CanReopen            bool
+	CanReopenComplete    bool
+	CanReopenDoneForDay  bool
+}
+
+type webWorkbenchMoveOption struct {
+	Value    string
+	Label    string
+	Selected bool
 }
 
 type workItemMemoMode string
@@ -244,6 +303,10 @@ type workItemWorkspaceFile struct {
 type workItemWorkspacePage struct {
 	ID                  string
 	Title               string
+	WorkbenchHref       string
+	SourcesHref         string
+	CaptureAction       string
+	CaptureReturn       string
 	EntityType          string
 	Status              string
 	Stage               string
@@ -287,6 +350,7 @@ type workItemRequestState struct {
 
 func newSourceWorkbenchServer(vault VaultFS) *sourceWorkbenchServer {
 	return &sourceWorkbenchServer{
+		workbenchTmpl: template.Must(template.New("web-workbench").Parse(workbenchHTML)),
 		vault:         vault,
 		sourceTmpl:    template.Must(template.New("source-workbench").Parse(sourceWorkbenchHTML)),
 		workspaceTmpl: template.Must(template.New("work-item-workspace").Parse(workItemWorkspaceHTML)),
@@ -296,16 +360,39 @@ func newSourceWorkbenchServer(vault VaultFS) *sourceWorkbenchServer {
 
 func (s *sourceWorkbenchServer) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/", s.handleWorkbenchIndex)
+	mux.HandleFunc("/sources", s.handleSourceIndex)
 	mux.HandleFunc("/upload", s.handleUpload)
 	mux.HandleFunc("/paste", s.handlePaste)
 	mux.HandleFunc("/link", s.handleLink)
+	mux.HandleFunc("/workbench/add", s.handleWorkbenchAdd)
+	mux.HandleFunc("/workbench/items/", s.handleWorkbenchItemAction)
 	mux.HandleFunc("/work-items/", s.handleWorkItem)
 	return mux
 }
 
-func (s *sourceWorkbenchServer) handleIndex(w http.ResponseWriter, r *http.Request) {
+func (s *sourceWorkbenchServer) handleWorkbenchIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	page, err := s.loadWorkbenchPage(
+		strings.TrimSpace(r.URL.Query().Get("nav")),
+		strings.TrimSpace(r.URL.Query().Get("q")),
+		strings.TrimSpace(r.URL.Query().Get("status")),
+		strings.TrimSpace(r.URL.Query().Get("error")),
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.workbenchTmpl.Execute(w, page); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (s *sourceWorkbenchServer) handleSourceIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/sources" {
 		http.NotFound(w, r)
 		return
 	}
@@ -336,6 +423,10 @@ func (s *sourceWorkbenchServer) handleIndex(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	page := sourceWorkbenchPage{
+		WorkbenchHref:   buildWorkbenchHref("", "", "", ""),
+		SourcesHref:     buildSourceWorkbenchHref(activeView, "", ""),
+		CaptureAction:   "/workbench/add",
+		CaptureReturn:   buildSourceWorkbenchHref(activeView, "", ""),
 		ActiveView:      string(activeView),
 		Nav:             sourceWorkbenchNav(activeView, len(sourceDocs), len(stagedFiles)),
 		StagedFiles:     stagedFiles,
@@ -385,6 +476,332 @@ func (s *sourceWorkbenchServer) handleIndex(w http.ResponseWriter, r *http.Reque
 	if err := s.sourceTmpl.Execute(w, page); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, query, status, errMsg string) (webWorkbenchPage, error) {
+	state, err := LoadVaultState(s.vault)
+	if err != nil {
+		return webWorkbenchPage{}, err
+	}
+	themes, err := s.vault.LoadThemes()
+	if err != nil {
+		return webWorkbenchPage{}, err
+	}
+	app := &App{
+		state:  state,
+		filter: strings.TrimSpace(query),
+		now:    time.Now,
+	}
+	selectedNav = normalizeWorkbenchNav(selectedNav, themes)
+	items := workbenchItemsForNav(app, selectedNav)
+	currentTitle := workbenchTitleForNav(selectedNav, themes)
+	page := webWorkbenchPage{
+		WorkbenchHref: buildWorkbenchHref(selectedNav, "", "", ""),
+		SourcesHref:   buildSourceWorkbenchHref(sourceWorkbenchViewPaste, "", ""),
+		AddAction:     "/workbench/add",
+		Query:         strings.TrimSpace(query),
+		Nav:           selectedNav,
+		Status:        strings.TrimSpace(status),
+		Error:         strings.TrimSpace(errMsg),
+		CaptureAction: "/workbench/add",
+		CaptureReturn: buildWorkbenchHref(selectedNav, query, "", ""),
+		NavGroups:     buildWorkbenchNavGroups(app, themes, selectedNav),
+		CurrentTitle:  currentTitle,
+		CurrentCount:  len(items),
+		Items:         make([]webWorkbenchItem, 0, len(items)),
+	}
+	now := time.Now()
+	for _, ref := range items {
+		page.Items = append(page.Items, webWorkbenchItemFromItem(ref.item, now))
+	}
+	return page, nil
+}
+
+func webWorkbenchItemFromItem(item Item, now time.Time) webWorkbenchItem {
+	moveOptions := []webWorkbenchMoveOption{
+		{Value: "inbox", Label: "Inbox", Selected: item.Triage == TriageInbox},
+		{Value: "now", Label: "Focus", Selected: item.Triage == TriageStock && item.Stage == StageNow},
+		{Value: "next", Label: "Next", Selected: item.Triage == TriageStock && item.Stage == StageNext},
+		{Value: "later", Label: "Later", Selected: item.Triage == TriageStock && item.Stage == StageLater},
+	}
+	summaryParts := []string{item.ID}
+	switch {
+	case item.Status == "done":
+		summaryParts = append(summaryParts, "complete")
+	case item.IsClosedForToday(now):
+		summaryParts = append(summaryParts, "done for day")
+	case item.Triage == TriageInbox:
+		summaryParts = append(summaryParts, "inbox")
+	case item.Triage == TriageStock && item.Stage != "":
+		summaryParts = append(summaryParts, string(item.Stage))
+	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled && item.ScheduledFor != "":
+		summaryParts = append(summaryParts, "scheduled "+item.ScheduledFor)
+	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring:
+		summaryParts = append(summaryParts, "recurring")
+	}
+	if item.Theme != "" {
+		summaryParts = append(summaryParts, "theme:"+item.Theme)
+	}
+	return webWorkbenchItem{
+		ID:                  item.ID,
+		Title:               item.Title,
+		Theme:               item.Theme,
+		Summary:             strings.Join(summaryParts, " · "),
+		WorkspaceHref:       buildWorkItemWorkspaceHref(item.ID, workItemMemoModeRecent, "", ""),
+		MoveAction:          "/workbench/items/" + url.PathEscape(item.ID) + "/move",
+		DoneForDayAction:    "/workbench/items/" + url.PathEscape(item.ID) + "/done-for-day",
+		CompleteAction:      "/workbench/items/" + url.PathEscape(item.ID) + "/complete",
+		ReopenAction:        "/workbench/items/" + url.PathEscape(item.ID) + "/reopen",
+		MoveOptions:         moveOptions,
+		CanMove:             item.Status == "open",
+		CanDoneForDay:       item.IsVisibleToday(now),
+		CanComplete:         item.Status == "open",
+		CanReopen:           item.Status == "done" || item.IsClosedForToday(now),
+		CanReopenComplete:   item.Status == "done",
+		CanReopenDoneForDay: item.IsClosedForToday(now),
+	}
+}
+
+func normalizeWorkbenchNav(selected string, themes []ThemeDoc) string {
+	selected = strings.TrimSpace(selected)
+	if selected == "" {
+		return "__now__"
+	}
+	switch selected {
+	case "__inbox__", "__now__", "__next__", "__later__", "__deferred__", "__done_today__", "__complete__", "__unthemed__":
+		return selected
+	}
+	for _, theme := range themes {
+		if theme.ID == selected {
+			return selected
+		}
+	}
+	return "__now__"
+}
+
+func buildWorkbenchNavGroups(app *App, themes []ThemeDoc, selectedNav string) []webWorkbenchNavGroup {
+	actionEntries := []webWorkbenchNavEntry{
+		{Key: "__inbox__", Title: "Inbox", Count: len(app.itemsForSection(sectionInbox)), Active: selectedNav == "__inbox__"},
+		{Key: "__now__", Title: "Now", Count: len(app.itemsForSection(sectionToday)), Active: selectedNav == "__now__"},
+		{Key: "__next__", Title: "Next", Count: len(app.itemsForSection(sectionNext)), Active: selectedNav == "__next__"},
+		{Key: "__later__", Title: "Later", Count: len(app.itemsForSection(sectionReview)), Active: selectedNav == "__later__"},
+		{Key: "__deferred__", Title: "Deferred", Count: len(app.itemsForSection(sectionDeferred)), Active: selectedNav == "__deferred__"},
+		{Key: "__done_today__", Title: "Done for Day", Count: len(app.itemsForSection(sectionDoneToday)), Active: selectedNav == "__done_today__"},
+		{Key: "__complete__", Title: "Complete", Count: len(app.itemsForSection(sectionCompleted)), Active: selectedNav == "__complete__"},
+	}
+	for i := range actionEntries {
+		actionEntries[i].Href = buildWorkbenchHref(actionEntries[i].Key, app.filter, "", "")
+	}
+	openItems := filteredOpenWorkbenchItems(app)
+	themeEntries := []webWorkbenchNavEntry{{
+		Key:    "__unthemed__",
+		Title:  "No Theme",
+		Count:  countThemeItems(openItems, ""),
+		Active: selectedNav == "__unthemed__",
+		Href:   buildWorkbenchHref("__unthemed__", app.filter, "", ""),
+	}}
+	for _, theme := range themes {
+		themeEntries = append(themeEntries, webWorkbenchNavEntry{
+			Key:    theme.ID,
+			Title:  theme.Title,
+			Count:  countThemeItems(openItems, theme.ID),
+			Active: selectedNav == theme.ID,
+			Href:   buildWorkbenchHref(theme.ID, app.filter, "", ""),
+		})
+	}
+	return []webWorkbenchNavGroup{
+		{Label: "Action", Entries: actionEntries},
+		{Label: "Themes", Entries: themeEntries},
+	}
+}
+
+func filteredOpenWorkbenchItems(app *App) []Item {
+	out := []Item{}
+	for _, item := range app.state.Items {
+		if item.Status != "open" || !app.matchesFilter(item) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func countThemeItems(items []Item, themeID string) int {
+	count := 0
+	for _, item := range items {
+		if strings.TrimSpace(item.Theme) == strings.TrimSpace(themeID) {
+			count++
+		}
+	}
+	return count
+}
+
+func workbenchItemsForNav(app *App, selectedNav string) []itemRef {
+	switch selectedNav {
+	case "__inbox__":
+		return app.itemsForSection(sectionInbox)
+	case "__now__":
+		return app.itemsForSection(sectionToday)
+	case "__next__":
+		return app.itemsForSection(sectionNext)
+	case "__later__":
+		return app.itemsForSection(sectionReview)
+	case "__deferred__":
+		return app.itemsForSection(sectionDeferred)
+	case "__done_today__":
+		return app.itemsForSection(sectionDoneToday)
+	case "__complete__":
+		return app.itemsForSection(sectionCompleted)
+	case "__unthemed__":
+		return filterWorkbenchItemsByTheme(app, "")
+	default:
+		return filterWorkbenchItemsByTheme(app, selectedNav)
+	}
+}
+
+func filterWorkbenchItemsByTheme(app *App, themeID string) []itemRef {
+	out := []itemRef{}
+	for idx, item := range app.state.Items {
+		if item.Status != "open" || !app.matchesFilter(item) {
+			continue
+		}
+		if strings.TrimSpace(item.Theme) != strings.TrimSpace(themeID) {
+			continue
+		}
+		out = append(out, itemRef{index: idx, item: item})
+	}
+	return out
+}
+
+func workbenchTitleForNav(selectedNav string, themes []ThemeDoc) string {
+	switch selectedNav {
+	case "__inbox__":
+		return "Inbox"
+	case "__now__":
+		return "Now"
+	case "__next__":
+		return "Next"
+	case "__later__":
+		return "Later"
+	case "__deferred__":
+		return "Deferred"
+	case "__done_today__":
+		return "Done for Day"
+	case "__complete__":
+		return "Complete"
+	case "__unthemed__":
+		return "No Theme"
+	}
+	for _, theme := range themes {
+		if theme.ID == selectedNav {
+			return theme.Title
+		}
+	}
+	return "Now"
+}
+
+func (s *sourceWorkbenchServer) handleWorkbenchAdd(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, fmt.Sprintf("add form parse failed: %v", err), http.StatusBadRequest)
+		return
+	}
+	title := strings.TrimSpace(r.FormValue("title"))
+	query := strings.TrimSpace(r.FormValue("q"))
+	if title == "" {
+		http.Redirect(w, r, buildWorkbenchHref(strings.TrimSpace(r.FormValue("nav")), query, "", "title is required"), http.StatusSeeOther)
+		return
+	}
+	state, err := LoadVaultState(s.vault)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	state.AddItem(NewInboxItem(time.Now(), title))
+	state.Sort()
+	if err := SaveVaultState(s.vault, state); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, captureReturnHref(strings.TrimSpace(r.FormValue("return_to")), strings.TrimSpace(r.FormValue("nav")), query), http.StatusSeeOther)
+}
+
+func (s *sourceWorkbenchServer) handleWorkbenchItemAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/workbench/items/"), "/")
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+	id, action, ok := strings.Cut(path, "/")
+	if !ok || strings.TrimSpace(id) == "" || strings.TrimSpace(action) == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, fmt.Sprintf("action form parse failed: %v", err), http.StatusBadRequest)
+		return
+	}
+	query := strings.TrimSpace(r.FormValue("q"))
+	nav := strings.TrimSpace(r.FormValue("nav"))
+	state, err := LoadVaultState(s.vault)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	item, err := state.FindItem(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	now := time.Now()
+	switch action {
+	case "move":
+		switch strings.TrimSpace(r.FormValue("to")) {
+		case "inbox":
+			item.MoveTo(now, TriageInbox, "", "")
+		case "now":
+			applyMoveOption(item, now, moveToNow)
+		case "next":
+			applyMoveOption(item, now, moveToNext)
+		case "later":
+			applyMoveOption(item, now, moveToLater)
+		default:
+			http.Redirect(w, r, buildWorkbenchHref(nav, query, "", "unknown move target"), http.StatusSeeOther)
+			return
+		}
+	case "done-for-day":
+		if !item.IsVisibleToday(now) {
+			http.Redirect(w, r, buildWorkbenchHref(nav, query, "", "done for day only works on focus items"), http.StatusSeeOther)
+			return
+		}
+		item.MarkDoneForDay(now, "")
+	case "complete":
+		item.Complete(now, "")
+	case "reopen":
+		switch {
+		case item.Status == "done":
+			item.ReopenComplete(now)
+		case item.IsClosedForToday(now):
+			item.ReopenForToday(now)
+		default:
+			http.Redirect(w, r, buildWorkbenchHref(nav, query, "", "item is not reopenable"), http.StatusSeeOther)
+			return
+		}
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	state.Sort()
+	if err := SaveVaultState(s.vault, state); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, buildWorkbenchHref(nav, query, "updated work item", ""), http.StatusSeeOther)
 }
 
 func (s *sourceWorkbenchServer) handleWorkItem(w http.ResponseWriter, r *http.Request) {
@@ -797,7 +1214,7 @@ func sourceWorkbenchNav(active sourceWorkbenchView, importedCount, stagedCount i
 	for _, item := range items {
 		nav = append(nav, sourceWorkbenchNavItem{
 			Label:  item.label,
-			Href:   "/?view=" + url.QueryEscape(string(item.view)),
+			Href:   buildSourceWorkbenchHref(item.view, "", ""),
 			Active: item.view == active,
 		})
 	}
@@ -805,19 +1222,58 @@ func sourceWorkbenchNav(active sourceWorkbenchView, importedCount, stagedCount i
 }
 
 func (s *sourceWorkbenchServer) redirectWithMessage(w http.ResponseWriter, r *http.Request, view sourceWorkbenchView, status, errMsg string) {
-	values := url.Values{}
-	values.Set("view", string(view))
-	if status != "" {
-		values.Set("status", status)
-	}
-	if errMsg != "" {
-		values.Set("error", errMsg)
-	}
-	http.Redirect(w, r, "/?"+values.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, buildSourceWorkbenchHref(view, status, errMsg), http.StatusSeeOther)
 }
 
 func (s *sourceWorkbenchServer) redirectToWorkItem(w http.ResponseWriter, r *http.Request, id string, memoMode workItemMemoMode, memoKey, sourceKey string) {
 	http.Redirect(w, r, buildWorkItemWorkspaceHref(id, memoMode, memoKey, sourceKey), http.StatusSeeOther)
+}
+
+func buildWorkbenchHref(nav, query, status, errMsg string) string {
+	values := url.Values{}
+	if strings.TrimSpace(nav) != "" && strings.TrimSpace(nav) != "__now__" {
+		values.Set("nav", strings.TrimSpace(nav))
+	}
+	if strings.TrimSpace(query) != "" {
+		values.Set("q", strings.TrimSpace(query))
+	}
+	if strings.TrimSpace(status) != "" {
+		values.Set("status", strings.TrimSpace(status))
+	}
+	if strings.TrimSpace(errMsg) != "" {
+		values.Set("error", strings.TrimSpace(errMsg))
+	}
+	if encoded := values.Encode(); encoded != "" {
+		return "/?" + encoded
+	}
+	return "/"
+}
+
+func buildSourceWorkbenchHref(view sourceWorkbenchView, status, errMsg string) string {
+	values := url.Values{}
+	values.Set("view", string(view))
+	if strings.TrimSpace(status) != "" {
+		values.Set("status", strings.TrimSpace(status))
+	}
+	if strings.TrimSpace(errMsg) != "" {
+		values.Set("error", strings.TrimSpace(errMsg))
+	}
+	return "/sources?" + values.Encode()
+}
+
+func captureReturnHref(raw, nav, query string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return buildWorkbenchHref(nav, query, "added work item", "")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return buildWorkbenchHref(nav, query, "added work item", "")
+	}
+	if parsed.IsAbs() || parsed.Host != "" || !strings.HasPrefix(parsed.Path, "/") || strings.HasPrefix(raw, "//") {
+		return buildWorkbenchHref(nav, query, "added work item", "")
+	}
+	return parsed.RequestURI()
 }
 
 func (s *sourceWorkbenchServer) loadWorkItemWorkspaceForRequest(w http.ResponseWriter, r *http.Request, id string) (workItemWorkspacePage, bool) {
@@ -856,6 +1312,10 @@ func (s *sourceWorkbenchServer) loadWorkItemWorkspace(id string, memoMode workIt
 	page := workItemWorkspacePage{
 		ID:                  item.ID,
 		Title:               item.Title,
+		WorkbenchHref:       buildWorkbenchHref("", "", "", ""),
+		SourcesHref:         buildSourceWorkbenchHref(sourceWorkbenchViewPaste, "", ""),
+		CaptureAction:       "/workbench/add",
+		CaptureReturn:       buildWorkItemWorkspaceHref(item.ID, memoMode, selectedMemoDoc.Key, selectedSourceDoc.Key),
 		EntityType:          item.EntityType,
 		Status:              item.Status,
 		Stage:               string(item.Stage),
@@ -1350,6 +1810,393 @@ func isSourceDocumentRef(ref string) bool {
 	return strings.HasPrefix(ref, "sources/documents/") && strings.HasSuffix(ref, ".md")
 }
 
+const workbenchHTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workbench</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --ink: #111111;
+      --muted: #666666;
+      --line: #dddddd;
+      --accent: #111111;
+      --error: #b00020;
+      --panel: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    main {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px 16px 48px;
+    }
+    a { color: inherit; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .topbar nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .topbar a {
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 0.92rem;
+      background: #fff;
+    }
+    .topbar a.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    h1, h2, h3 {
+      margin: 0;
+      font-weight: 600;
+    }
+    h1 {
+      margin-bottom: 6px;
+      font-size: 1.4rem;
+    }
+    .meta, .empty, .count {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .notice {
+      padding: 10px 12px;
+      border-radius: 4px;
+      margin: 0 0 12px;
+      font-size: 0.92rem;
+    }
+    .notice.ok { background: #f6f6f6; }
+    .notice.error { color: var(--error); background: #fff7f8; }
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+      margin-top: 20px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 16px;
+    }
+    .sidebar {
+      position: sticky;
+      top: 16px;
+      display: grid;
+      gap: 16px;
+    }
+    .nav-group + .nav-group {
+      border-top: 1px solid var(--line);
+      padding-top: 16px;
+    }
+    .nav-group h2 {
+      font-size: 0.92rem;
+      margin-bottom: 10px;
+      color: var(--muted);
+    }
+    .nav-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 4px;
+    }
+    .nav-list a {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      padding: 8px 10px;
+      border-radius: 8px;
+      text-decoration: none;
+    }
+    .nav-list a.active {
+      background: var(--accent);
+      color: #fff;
+    }
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+    .toolbar-button, .link-button, button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font: inherit;
+      font-size: 0.85rem;
+      text-decoration: none;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+    }
+    form.inline {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    input[type="text"], select {
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      padding: 9px 12px;
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
+    }
+    input[type="text"] { width: 100%; }
+    .content {
+      display: grid;
+      gap: 16px;
+    }
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+    }
+    .items {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 12px;
+    }
+    .item {
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+    .item:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+    .item-title {
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .actions form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin: 0;
+    }
+    .actions select {
+      width: auto;
+      min-width: 110px;
+    }
+    dialog.capture-modal {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0;
+      max-width: min(520px, calc(100vw - 24px));
+      width: 100%;
+    }
+    dialog.capture-modal::backdrop {
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .capture-card {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    .capture-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+    .capture-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+    @media (max-width: 920px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        position: static;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="topbar">
+      <nav>
+        <a href="{{.WorkbenchHref}}" class="active">Workbench</a>
+        <a href="{{.SourcesHref}}">Sources</a>
+      </nav>
+      <button id="open-capture" class="toolbar-button" type="button">+ Capture</button>
+    </div>
+    <h1>Workbench</h1>
+    {{if .Status}}<div class="notice ok">{{.Status}}</div>{{end}}
+    {{if .Error}}<div class="notice error">{{.Error}}</div>{{end}}
+
+    <div class="layout">
+      <aside class="panel sidebar">
+        {{range .NavGroups}}
+        <section class="nav-group">
+          <h2>{{.Label}}</h2>
+          <ul class="nav-list">
+            {{range .Entries}}
+            <li><a href="{{.Href}}"{{if .Active}} class="active"{{end}}><span>{{.Title}}</span><span class="count">{{.Count}}</span></a></li>
+            {{end}}
+          </ul>
+        </section>
+        {{end}}
+      </aside>
+
+      <section class="content">
+        <section class="panel">
+          <div class="header-row">
+            <h2>{{.CurrentTitle}}</h2>
+            <div class="count">{{.CurrentCount}}</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          {{if .Items}}
+          <ul class="items">
+            {{range .Items}}
+            <li class="item">
+              <a class="item-title" href="{{.WorkspaceHref}}">{{.Title}}</a>
+              <div class="meta">{{.Summary}}</div>
+              <div class="actions">
+                <a class="link-button" href="{{.WorkspaceHref}}">&gt; Open details</a>
+                {{if .CanMove}}
+                <form method="post" action="{{.MoveAction}}">
+                  <input type="hidden" name="q" value="{{$.Query}}">
+                  <input type="hidden" name="nav" value="{{$.Nav}}">
+                  <select name="to">
+                    {{range .MoveOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+                  </select>
+                  <button type="submit">&rarr; Move</button>
+                </form>
+                {{end}}
+                {{if .CanDoneForDay}}
+                <form method="post" action="{{.DoneForDayAction}}">
+                  <input type="hidden" name="q" value="{{$.Query}}">
+                  <input type="hidden" name="nav" value="{{$.Nav}}">
+                  <button type="submit">~ Today</button>
+                </form>
+                {{end}}
+                {{if .CanComplete}}
+                <form method="post" action="{{.CompleteAction}}">
+                  <input type="hidden" name="q" value="{{$.Query}}">
+                  <input type="hidden" name="nav" value="{{$.Nav}}">
+                  <button type="submit">x Done</button>
+                </form>
+                {{end}}
+                {{if .CanReopen}}
+                <form method="post" action="{{.ReopenAction}}">
+                  <input type="hidden" name="q" value="{{$.Query}}">
+                  <input type="hidden" name="nav" value="{{$.Nav}}">
+                  <button type="submit">{{if .CanReopenComplete}}&lt; Reopen{{else if .CanReopenDoneForDay}}&lt; Restore{{else}}&lt; Reopen{{end}}</button>
+                </form>
+                {{end}}
+              </div>
+            </li>
+            {{end}}
+          </ul>
+          {{else}}
+          <div class="empty">No items.</div>
+          {{end}}
+        </section>
+      </section>
+    </div>
+    <dialog id="capture-modal" class="capture-modal">
+      <div class="capture-card">
+        <div class="capture-head">
+          <strong>Capture to Inbox</strong>
+          <button id="close-capture" type="button">Close</button>
+        </div>
+        <form method="post" action="{{.CaptureAction}}" class="stack">
+          <input type="hidden" name="nav" value="{{.Nav}}">
+          <input type="hidden" name="q" value="{{.Query}}">
+          <input type="hidden" name="return_to" value="{{.CaptureReturn}}">
+          <input id="capture-title" type="text" name="title" placeholder="Capture a work item" required>
+          <div class="capture-actions">
+            <button type="submit">+ Add to Inbox</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
+  </main>
+  <script>
+    (() => {
+      const dialog = document.getElementById("capture-modal");
+      const openButton = document.getElementById("open-capture");
+      const closeButton = document.getElementById("close-capture");
+      const titleInput = document.getElementById("capture-title");
+      const openCapture = () => {
+        if (!dialog || typeof dialog.showModal !== "function") {
+          return;
+        }
+        dialog.showModal();
+        window.setTimeout(() => {
+          if (titleInput) {
+            titleInput.focus();
+          }
+        }, 0);
+      };
+      const closeCapture = () => {
+        if (dialog && dialog.open) {
+          dialog.close();
+        }
+      };
+      if (openButton) {
+        openButton.addEventListener("click", openCapture);
+      }
+      if (closeButton) {
+        closeButton.addEventListener("click", closeCapture);
+      }
+      document.addEventListener("keydown", (event) => {
+        const tag = event.target && event.target.tagName ? String(event.target.tagName).toLowerCase() : "";
+        const editable = tag === "input" || tag === "textarea" || tag === "select" || event.target && event.target.isContentEditable;
+        if (!editable && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && String(event.key).toLowerCase() === "a") {
+          event.preventDefault();
+          openCapture();
+          return;
+        }
+        if (event.key === "Escape" && dialog && dialog.open) {
+          closeCapture();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>`
+
 const sourceWorkbenchHTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -1421,6 +2268,51 @@ const sourceWorkbenchHTML = `<!doctype html>
       background: #fff;
     }
     .tabs a.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .topbar nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .topbar a {
+      display: inline-block;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 0.92rem;
+      background: #fff;
+    }
+    .topbar button,
+    .tabs a,
+    .mode-toggle,
+    .save-button,
+    button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      padding: 6px 10px;
+      font: inherit;
+      font-size: 0.85rem;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .topbar a.active {
       background: var(--accent);
       border-color: var(--accent);
       color: #fff;
@@ -1508,6 +2400,12 @@ const sourceWorkbenchHTML = `<!doctype html>
 </head>
 <body>
   <main>
+    <div class="topbar">
+      <nav>
+        <a href="{{.WorkbenchHref}}">Workbench</a>
+        <a href="{{.SourcesHref}}" class="active">Sources</a>
+      </nav>
+    </div>
     <h1>Source Inbox</h1>
     <p class="lead">One workflow at a time: quick capture, file upload, existing source linking, or staged review.</p>
     {{if .Status}}<div class="notice ok">{{.Status}}</div>{{end}}
@@ -1691,6 +2589,28 @@ const workItemWorkspaceHTML = `<!doctype html>
       margin: 0 auto;
       padding: 24px 16px 48px;
     }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .topbar nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .topbar a {
+      display: inline-block;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 0.92rem;
+      background: #fff;
+    }
     h1, h2, h3 {
       margin: 0;
       font-weight: 600;
@@ -1834,7 +2754,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       margin-top: 4px;
       font-size: 0.84rem;
     }
-    textarea, button {
+    textarea {
       width: 100%;
       border-radius: 6px;
       border: 1px solid var(--line);
@@ -1885,12 +2805,6 @@ const workItemWorkspaceHTML = `<!doctype html>
     .preview-surface code {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
-    button {
-      cursor: pointer;
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
     .mode-actions {
       display: flex;
       align-items: center;
@@ -1906,17 +2820,38 @@ const workItemWorkspaceHTML = `<!doctype html>
       width: auto;
       min-width: 0;
       margin-left: auto;
-      padding: 6px 10px;
-      font-size: 0.86rem;
-      background: #fff;
-      color: var(--ink);
-      border-color: var(--line);
     }
     .save-button {
       width: auto;
       min-width: 0;
-      padding: 8px 12px;
       margin: 0;
+    }
+    dialog.capture-modal {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0;
+      max-width: min(520px, calc(100vw - 24px));
+      width: 100%;
+    }
+    dialog.capture-modal::backdrop {
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .capture-card {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    .capture-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+    .capture-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
     }
     .section-label {
       color: var(--muted);
@@ -1985,6 +2920,13 @@ const workItemWorkspaceHTML = `<!doctype html>
 </head>
   <body>
   <main>
+    <div class="topbar">
+      <nav>
+        <a href="{{.WorkbenchHref}}">Workbench</a>
+        <a href="{{.SourcesHref}}">Sources</a>
+      </nav>
+      <button id="open-capture" type="button">+ Capture</button>
+    </div>
     <h1 class="workspace-title">{{.Title}}</h1>
 
     <div class="workspace">
@@ -1998,7 +2940,7 @@ const workItemWorkspaceHTML = `<!doctype html>
             <div class="editor-only stack">
               <textarea id="work-item-body" name="body" placeholder="# Notes">{{.MainBody}}</textarea>
               <div class="editor-footer">
-                <button class="save-button" type="submit">Save</button>
+                <button class="save-button" type="submit">+ Save</button>
                 <div id="editor-feedback" class="editor-feedback" role="status" aria-live="polite"></div>
               </div>
             </div>
@@ -2011,6 +2953,21 @@ const workItemWorkspaceHTML = `<!doctype html>
 
       <aside id="agent-pane" class="agent-pane" data-refresh-url="{{.AgentRefreshHref}}">{{.AgentPaneHTML}}</aside>
     </div>
+    <dialog id="capture-modal" class="capture-modal">
+      <div class="capture-card">
+        <div class="capture-head">
+          <strong>Capture to Inbox</strong>
+          <button id="close-capture" type="button">Close</button>
+        </div>
+        <form method="post" action="{{.CaptureAction}}" class="stack">
+          <input type="hidden" name="return_to" value="{{.CaptureReturn}}">
+          <input id="capture-title" type="text" name="title" placeholder="Capture a work item" required>
+          <div class="capture-actions">
+            <button type="submit">+ Add to Inbox</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
   </main>
   <script>
     (() => {
@@ -2020,9 +2977,29 @@ const workItemWorkspaceHTML = `<!doctype html>
       const preview = document.getElementById("main-preview");
       const feedback = document.getElementById("editor-feedback");
       const togglePreviewButton = document.getElementById("toggle-preview-mode");
+      const captureDialog = document.getElementById("capture-modal");
+      const openCaptureButton = document.getElementById("open-capture");
+      const closeCaptureButton = document.getElementById("close-capture");
+      const captureTitleInput = document.getElementById("capture-title");
       const previewAction = form ? form.dataset.previewUrl : "";
       const assetUploadAction = form ? form.dataset.assetUploadUrl : "";
       let saveTimer = null;
+      const openCapture = () => {
+        if (!captureDialog || typeof captureDialog.showModal !== "function") {
+          return;
+        }
+        captureDialog.showModal();
+        window.setTimeout(() => {
+          if (captureTitleInput) {
+            captureTitleInput.focus();
+          }
+        }, 0);
+      };
+      const closeCapture = () => {
+        if (captureDialog && captureDialog.open) {
+          captureDialog.close();
+        }
+      };
       const setFeedback = (message, tone) => {
         if (!feedback) {
           return;
@@ -2147,6 +3124,8 @@ const workItemWorkspaceHTML = `<!doctype html>
           await saveDocument();
         });
         document.addEventListener("keydown", (event) => {
+          const tag = event.target && event.target.tagName ? String(event.target.tagName).toLowerCase() : "";
+          const editable = tag === "input" || tag === "textarea" || tag === "select" || event.target && event.target.isContentEditable;
           if ((event.metaKey || event.ctrlKey) && !event.shiftKey && String(event.key).toLowerCase() === "s") {
             event.preventDefault();
             void saveDocument();
@@ -2160,12 +3139,27 @@ const workItemWorkspaceHTML = `<!doctype html>
           if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
             return;
           }
+          if (!editable && String(event.key).toLowerCase() === "a") {
+            event.preventDefault();
+            openCapture();
+            return;
+          }
           if (event.key !== "Escape") {
+            return;
+          }
+          if (captureDialog && captureDialog.open) {
+            closeCapture();
             return;
           }
           event.preventDefault();
           setPreviewMode(previewMode() === "preview" ? "editor" : "preview");
         });
+      }
+      if (openCaptureButton) {
+        openCaptureButton.addEventListener("click", openCapture);
+      }
+      if (closeCaptureButton) {
+        closeCaptureButton.addEventListener("click", closeCapture);
       }
 
       let previewTimer = null;
