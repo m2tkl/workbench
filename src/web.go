@@ -1963,6 +1963,7 @@ const workbenchHTML = `<!doctype html>
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--ink);
+      overflow: hidden;
     }
     .shell-header {
       width: 100%;
@@ -1974,7 +1975,7 @@ const workbenchHTML = `<!doctype html>
       min-height: 0;
       display: flex;
       flex-direction: column;
-      padding: 12px 16px 48px;
+      padding: 12px 16px;
       overflow: hidden;
     }
     a { color: inherit; }
@@ -2077,14 +2078,13 @@ const workbenchHTML = `<!doctype html>
       padding: 16px;
     }
     .sidebar {
-      position: sticky;
-      top: 16px;
+      position: relative;
       display: flex;
       flex-direction: column;
       gap: 0;
       padding: 0;
       min-height: 0;
-      height: calc(100dvh - 104px);
+      height: 100%;
       overflow: hidden;
     }
     .sidebar-toolbar {
@@ -2153,6 +2153,9 @@ const workbenchHTML = `<!doctype html>
       box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
     }
     .content-panel {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
       padding: 0;
       overflow: hidden;
     }
@@ -2174,7 +2177,10 @@ const workbenchHTML = `<!doctype html>
       color: var(--muted);
     }
     .content-panel-body {
+      flex: 1 1 auto;
+      min-height: 0;
       padding: 16px;
+      overflow: auto;
     }
     .sidebar-toggle {
       width: 32px;
@@ -2182,6 +2188,8 @@ const workbenchHTML = `<!doctype html>
       height: 32px;
       padding: 0;
       flex: 0 0 32px;
+      font-size: 14px;
+      line-height: 1;
     }
     .nav-group h2 {
       font-size: 0.92rem;
@@ -2243,7 +2251,9 @@ const workbenchHTML = `<!doctype html>
     }
     input[type="text"] { width: 100%; }
     .content {
-      display: grid;
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
       gap: 16px;
       min-height: 0;
     }
@@ -2639,7 +2649,7 @@ const sourceWorkbenchHTML = `<!doctype html>
       width: 100%;
       flex: 1 1 auto;
       min-height: 0;
-      padding: 12px 16px 48px;
+      padding: 12px 16px;
     }
     h1 {
       margin: 0 0 6px;
@@ -3148,7 +3158,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       min-height: 0;
       display: flex;
       flex-direction: column;
-      padding: 12px 16px 48px;
+      padding: 12px 16px;
       overflow: hidden;
     }
     .topbar {
@@ -3348,6 +3358,8 @@ const workItemWorkspaceHTML = `<!doctype html>
       height: 32px;
       padding: 0;
       flex: 0 0 32px;
+      font-size: 14px;
+      line-height: 1;
     }
     .stack {
       display: grid;
