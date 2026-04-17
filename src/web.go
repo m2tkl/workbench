@@ -21,8 +21,10 @@ import (
 	"time"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	htmlrender "github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark/text"
 )
 
 const defaultSourceWorkbenchAddr = "127.0.0.1:8080"
@@ -1494,11 +1496,32 @@ func (s *sourceWorkbenchServer) renderWorkItemAgentPane(page workItemWorkspacePa
 
 func renderWorkItemMarkdownPreview(item Item, markdown string) (template.HTML, error) {
 	markdown = rewriteWorkItemAssetMarkdown(item.ID, markdown)
+	source := []byte(markdown)
+	doc := workspaceMarkdownRenderer.Parser().Parse(text.NewReader(source))
+	annotateMarkdownSourceOffsets(doc)
 	var b bytes.Buffer
-	if err := workspaceMarkdownRenderer.Convert([]byte(markdown), &b); err != nil {
+	if err := workspaceMarkdownRenderer.Renderer().Render(&b, source, doc); err != nil {
 		return "", err
 	}
 	return template.HTML(b.String()), nil
+}
+
+func annotateMarkdownSourceOffsets(node ast.Node) {
+	if node == nil {
+		return
+	}
+	if node.Type() == ast.TypeBlock {
+		lines := node.Lines()
+		if lines != nil && lines.Len() > 0 {
+		start := lines.At(0).Start
+		end := lines.At(lines.Len() - 1).Stop
+		node.SetAttributeString("data-source-start", fmt.Sprintf("%d", start))
+		node.SetAttributeString("data-source-end", fmt.Sprintf("%d", end))
+		}
+	}
+	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
+		annotateMarkdownSourceOffsets(child)
+	}
 }
 
 func rewriteWorkItemAssetMarkdown(id, markdown string) string {
@@ -1927,11 +1950,14 @@ const workbenchHTML = `<!doctype html>
       --accent: #111111;
       --error: #b00020;
       --panel: #ffffff;
+      --sidebar-expanded-width: 300px;
+      --pane-header-height: 53px;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100dvh;
+      height: 100dvh;
       display: flex;
       flex-direction: column;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -1940,7 +1966,7 @@ const workbenchHTML = `<!doctype html>
     }
     .shell-header {
       width: 100%;
-      padding: 24px 16px 0;
+      padding: 28px 16px 8px;
     }
     main {
       width: 100%;
@@ -1949,6 +1975,7 @@ const workbenchHTML = `<!doctype html>
       display: flex;
       flex-direction: column;
       padding: 12px 16px 48px;
+      overflow: hidden;
     }
     a { color: inherit; }
     .topbar {
@@ -1959,7 +1986,7 @@ const workbenchHTML = `<!doctype html>
       flex-wrap: wrap;
     }
     .title-row {
-      margin-top: 8px;
+      margin-top: 14px;
     }
     .shell-title {
       margin: 0;
@@ -2033,7 +2060,7 @@ const workbenchHTML = `<!doctype html>
     .notice.error { color: var(--error); background: #fff7f8; }
     .layout {
       display: grid;
-      grid-template-columns: 280px minmax(0, 1fr);
+      grid-template-columns: var(--sidebar-expanded-width) minmax(0, 1fr);
       gap: 18px;
       align-items: stretch;
       margin-top: 0;
@@ -2065,6 +2092,8 @@ const workbenchHTML = `<!doctype html>
       justify-content: flex-start;
       align-items: center;
       gap: 10px;
+      min-height: var(--pane-header-height);
+      box-sizing: border-box;
       padding: 10px;
       border-bottom: 1px solid var(--line);
       background: var(--panel);
@@ -2119,9 +2148,33 @@ const workbenchHTML = `<!doctype html>
       border-bottom: 0;
     }
     .layout[data-sidebar-collapsed="true"][data-sidebar-hovered="true"] .sidebar {
-      width: min(280px, calc(100vw - 32px));
+      width: min(var(--sidebar-expanded-width), calc(100vw - 32px));
       z-index: 3;
       box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+    }
+    .content-panel {
+      padding: 0;
+      overflow: hidden;
+    }
+    .pane-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      min-height: var(--pane-header-height);
+      box-sizing: border-box;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .pane-header .section-label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .content-panel-body {
+      padding: 16px;
     }
     .sidebar-toggle {
       width: 32px;
@@ -2315,7 +2368,7 @@ const workbenchHTML = `<!doctype html>
     }
     @media (max-width: 920px) {
       .layout {
-        grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+        grid-template-columns: minmax(220px, var(--sidebar-expanded-width)) minmax(0, 1fr);
       }
     }
   </style>
@@ -2362,7 +2415,12 @@ const workbenchHTML = `<!doctype html>
       </aside>
 
       <section class="content">
-        <section class="panel">
+        <section class="panel content-panel">
+          <div class="pane-header">
+            <div class="section-label">{{.CurrentTitle}}</div>
+            <div class="count">{{.CurrentCount}} item{{if ne .CurrentCount 1}}s{{end}}</div>
+          </div>
+          <div class="content-panel-body">
           {{if .Items}}
           <div class="action-table-wrap">
             <table class="action-table">
@@ -2429,6 +2487,7 @@ const workbenchHTML = `<!doctype html>
           {{else}}
           <div class="empty">No items.</div>
           {{end}}
+          </div>
         </section>
       </section>
     </div>
@@ -2557,20 +2616,24 @@ const sourceWorkbenchHTML = `<!doctype html>
       --accent: #111111;
       --error: #b00020;
       --content-inset: 16px;
+      --sidebar-expanded-width: 300px;
+      --pane-header-height: 53px;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100dvh;
+      height: 100dvh;
       display: flex;
       flex-direction: column;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--ink);
+      overflow: hidden;
     }
     .shell-header {
       width: 100%;
-      padding: 24px 16px 0;
+      padding: 28px 16px 8px;
     }
     main {
       width: 100%;
@@ -2633,7 +2696,7 @@ const sourceWorkbenchHTML = `<!doctype html>
       flex-wrap: wrap;
     }
     .title-row {
-      margin-top: 8px;
+      margin-top: 14px;
     }
     .shell-title {
       margin: 0;
@@ -3060,20 +3123,24 @@ const workItemWorkspaceHTML = `<!doctype html>
       --accent: #111111;
       --error: #b00020;
       --content-inset: 16px;
+      --sidebar-expanded-width: 300px;
+      --pane-header-height: 53px;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100dvh;
+      height: 100dvh;
       display: flex;
       flex-direction: column;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--ink);
+      overflow: hidden;
     }
     .shell-header {
       width: 100%;
-      padding: 24px 16px 0;
+      padding: 28px 16px 8px;
     }
     main {
       width: 100%;
@@ -3082,6 +3149,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       display: flex;
       flex-direction: column;
       padding: 12px 16px 48px;
+      overflow: hidden;
     }
     .topbar {
       display: flex;
@@ -3091,7 +3159,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       flex-wrap: wrap;
     }
     .title-row {
-      margin-top: 8px;
+      margin-top: 14px;
     }
     .shell-title {
       margin: 0;
@@ -3167,11 +3235,13 @@ const workItemWorkspaceHTML = `<!doctype html>
     .workspace {
       display: grid;
       gap: 18px;
-      grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+      grid-template-columns: var(--sidebar-expanded-width) minmax(0, 1fr);
       align-items: stretch;
       margin-top: 0;
       flex: 1 1 auto;
       min-height: 0;
+      height: 100%;
+      overflow: hidden;
     }
     .workspace[data-sidebar-collapsed="true"] {
       grid-template-columns: 52px minmax(0, 1fr);
@@ -3192,6 +3262,8 @@ const workItemWorkspaceHTML = `<!doctype html>
       justify-content: flex-start;
       align-items: center;
       gap: 10px;
+      min-height: var(--pane-header-height);
+      box-sizing: border-box;
       padding: 10px;
       border-bottom: 1px solid var(--line);
       position: sticky;
@@ -3298,19 +3370,18 @@ const workItemWorkspaceHTML = `<!doctype html>
       border-radius: 10px;
       background: #fff;
       overflow: hidden;
-      padding-top: var(--content-inset);
     }
     .workspace-main form {
       display: flex;
       flex: 1;
       min-height: 0;
+      overflow: hidden;
     }
     .editor-only {
       display: flex;
       flex: 1;
       min-height: 0;
       flex-direction: column;
-      padding-bottom: 16px;
     }
     .editor-stack[data-mode="editor"] .preview-panel,
     .editor-stack[data-mode="preview"] .editor-only {
@@ -3321,6 +3392,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       flex: 1;
       min-height: 0;
       flex-direction: column;
+      overflow: hidden;
     }
     .editor-stack[data-mode="preview"] .preview-panel {
       display: flex;
@@ -3411,28 +3483,28 @@ const workItemWorkspaceHTML = `<!doctype html>
       border-bottom: 0;
     }
     .workspace[data-sidebar-collapsed="true"][data-sidebar-hovered="true"] .agent-pane {
-      width: min(320px, calc(100vw - 32px));
+      width: min(var(--sidebar-expanded-width), calc(100vw - 32px));
       z-index: 3;
       box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
     }
     textarea {
       width: 100%;
-      border-radius: 6px;
-      border: 1px solid var(--line);
-      padding: 10px 12px;
-      font: inherit;
-      background: #fff;
-      color: var(--ink);
-    }
-    textarea {
       min-height: 0;
       flex: 1;
       resize: none;
       border: 0;
       border-radius: 0;
       padding: 10px var(--content-inset);
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
     }
     .preview-panel {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+      overflow: hidden;
       border-top: 1px solid var(--line);
       padding-top: 16px;
     }
@@ -3446,6 +3518,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       padding: 10px var(--content-inset);
       min-height: 0;
       flex: 1;
+      height: 100%;
       background: transparent;
       overflow: auto;
     }
@@ -3466,18 +3539,52 @@ const workItemWorkspaceHTML = `<!doctype html>
       display: flex;
       align-items: center;
       gap: 10px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       justify-content: space-between;
-      padding: 0 var(--content-inset) 12px;
-      margin-bottom: 12px;
-      padding-bottom: 12px;
+      min-height: var(--pane-header-height);
+      box-sizing: border-box;
+      padding: 10px var(--content-inset);
+      margin-bottom: 0;
       border-bottom: 1px solid var(--line);
     }
+    .mode-toggle-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
     .mode-toggle {
-      margin-left: auto;
+      margin-left: 0;
+      border: 0;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      background: #fff;
+      color: var(--ink);
+    }
+    .mode-toggle:last-child {
+      border-right: 0;
+    }
+    .mode-toggle[aria-pressed="true"] {
+      background: var(--accent);
+      color: #fff;
     }
     .save-button {
       margin: 0;
+    }
+    #work-item-save-button[hidden] {
+      display: none;
+    }
+    .mode-actions-right {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-left: auto;
+      min-width: 0;
+      flex-wrap: wrap;
     }
     dialog.capture-modal {
       border: 1px solid var(--line);
@@ -3550,13 +3657,6 @@ const workItemWorkspaceHTML = `<!doctype html>
       color: #0f6b46;
       background: #f2fbf6;
     }
-    .editor-footer {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 0 var(--content-inset);
-      flex-wrap: wrap;
-    }
     @media (max-width: 720px) {
       textarea {
         min-height: 320px;
@@ -3596,16 +3696,19 @@ const workItemWorkspaceHTML = `<!doctype html>
       <section class="workspace-main">
         <div class="mode-actions">
           <div class="section-label">Main</div>
-          <button id="toggle-preview-mode" class="mode-toggle" type="button" aria-pressed="false">Preview</button>
+          <div class="mode-actions-right">
+            <div id="editor-feedback" class="editor-feedback" role="status" aria-live="polite"></div>
+            <button id="work-item-save-button" class="save-button" type="submit" form="work-item-editor">Save</button>
+            <div class="mode-toggle-group" role="group" aria-label="Editor mode">
+              <button id="toggle-edit-mode" class="mode-toggle" type="button" aria-pressed="true">Edit</button>
+              <button id="toggle-preview-mode" class="mode-toggle" type="button" aria-pressed="false">Preview</button>
+            </div>
+          </div>
         </div>
         <form id="work-item-editor" method="post" action="{{.SaveAction}}" data-preview-url="{{.PreviewAction}}" data-asset-upload-url="{{.AssetUploadAction}}">
           <div class="editor-stack" data-mode="editor">
             <div class="editor-only stack">
               <textarea id="work-item-body" name="body" placeholder="# Notes">{{.MainBody}}</textarea>
-              <div class="editor-footer">
-                <button class="save-button" type="submit">+ Save</button>
-                <div id="editor-feedback" class="editor-feedback" role="status" aria-live="polite"></div>
-              </div>
             </div>
             <div class="preview-panel stack">
               <div id="main-preview" class="preview-surface" tabindex="0">{{.MainPreviewHTML}}</div>
@@ -3637,7 +3740,9 @@ const workItemWorkspaceHTML = `<!doctype html>
       const textarea = document.getElementById("work-item-body");
       const preview = document.getElementById("main-preview");
       const feedback = document.getElementById("editor-feedback");
+      const toggleEditButton = document.getElementById("toggle-edit-mode");
       const togglePreviewButton = document.getElementById("toggle-preview-mode");
+      const saveButton = document.getElementById("work-item-save-button");
       const workspace = document.querySelector(".workspace");
       const toggleSidebarButton = document.getElementById("toggle-sidebar");
       const agentPane = document.getElementById("agent-pane");
@@ -3679,6 +3784,21 @@ const workItemWorkspaceHTML = `<!doctype html>
           window.clearTimeout(saveTimer);
         }
         saveTimer = window.setTimeout(() => setFeedback("", ""), 1500);
+      };
+      const syncPreviewViewportHeight = () => {
+        if (!preview || !form) {
+          return;
+        }
+        if (previewMode() !== "preview") {
+          preview.style.height = "";
+          preview.style.maxHeight = "";
+          return;
+        }
+        const rect = preview.getBoundingClientRect();
+        const rootRect = form.getBoundingClientRect();
+        const available = Math.max(160, Math.floor(rootRect.bottom - rect.top));
+        preview.style.height = available + "px";
+        preview.style.maxHeight = available + "px";
       };
       const sidebarCollapsed = () => workspace && workspace.dataset.sidebarCollapsed === "true";
       const syncSidebarState = () => {
@@ -3743,18 +3863,24 @@ const workItemWorkspaceHTML = `<!doctype html>
           return;
         }
         editorStack.dataset.mode = mode === "preview" ? "preview" : "editor";
-        if (togglePreviewButton) {
+        if (saveButton) {
+          saveButton.hidden = editorStack.dataset.mode === "preview";
+          saveButton.setAttribute("aria-hidden", saveButton.hidden ? "true" : "false");
+        }
+        if (toggleEditButton && togglePreviewButton) {
           const previewActive = editorStack.dataset.mode === "preview";
-          togglePreviewButton.textContent = previewActive ? "Edit" : "Preview";
+          toggleEditButton.setAttribute("aria-pressed", previewActive ? "false" : "true");
           togglePreviewButton.setAttribute("aria-pressed", previewActive ? "true" : "false");
         }
         if (editorStack.dataset.mode === "preview") {
           await refreshPreview();
+          window.requestAnimationFrame(syncPreviewViewportHeight);
           if (!options.skipFocus && preview) {
             preview.focus();
           }
           return;
         }
+        syncPreviewViewportHeight();
         if (!options.skipFocus && textarea) {
           textarea.focus();
         }
@@ -3783,22 +3909,81 @@ const workItemWorkspaceHTML = `<!doctype html>
           chars.pop();
           offsets.pop();
         }
-        return { text: chars.join(""), offsets };
+        return { text: chars.join(""), offsets, sourceLength: text.length };
       };
-      const findTextOffset = (value) => {
+      const sourceOffsetFromNormalizedIndex = (index, normalized) => {
+        if (!normalized) {
+          return -1;
+        }
+        if (index <= 0) {
+          return 0;
+        }
+        if (index >= normalized.offsets.length) {
+          return normalized.sourceLength;
+        }
+        return normalized.offsets[index];
+      };
+      const resolveTextOffset = (value, haystackValue, baseOffset, relativeIndex = 0) => {
+        const needle = normalizedSearchIndex(value);
+        if (!needle.text) {
+          return -1;
+        }
+        const haystack = normalizedSearchIndex(haystackValue);
+        const index = haystack.text.indexOf(needle.text);
+        if (index < 0) {
+          return -1;
+        }
+        const clamped = Math.max(0, Math.min(relativeIndex, needle.text.length));
+        return baseOffset + sourceOffsetFromNormalizedIndex(index + clamped, haystack);
+      };
+      const findTextOffset = (value, relativeIndex = 0) => {
         if (!textarea) {
           return -1;
         }
-        const needle = normalizedSearchIndex(value).text;
-        if (!needle) {
+        return resolveTextOffset(value, textarea.value, 0, relativeIndex);
+      };
+      const caretPointFromEvent = (event) => {
+        if (document.caretPositionFromPoint) {
+          const position = document.caretPositionFromPoint(event.clientX, event.clientY);
+          if (position) {
+            return { node: position.offsetNode, offset: position.offset };
+          }
+        }
+        if (document.caretRangeFromPoint) {
+          const range = document.caretRangeFromPoint(event.clientX, event.clientY);
+          if (range) {
+            return { node: range.startContainer, offset: range.startOffset };
+          }
+        }
+        return null;
+      };
+      const blockTextOffsetFromEvent = (block, event) => {
+        if (!block) {
           return -1;
         }
-        const haystack = normalizedSearchIndex(textarea.value);
-        const index = haystack.text.indexOf(needle);
-        if (index < 0 || index >= haystack.offsets.length) {
+        const caretPoint = caretPointFromEvent(event);
+        if (!caretPoint || !caretPoint.node || !block.contains(caretPoint.node)) {
           return -1;
         }
-        return haystack.offsets[index];
+        const range = document.createRange();
+        range.selectNodeContents(block);
+        try {
+          range.setEnd(caretPoint.node, caretPoint.offset);
+        } catch (_) {
+          return -1;
+        }
+        return normalizedSearchIndex(range.toString()).text.length;
+      };
+      const blockSourceRange = (block) => {
+        if (!block || !block.dataset) {
+          return null;
+        }
+        const start = Number.parseInt(block.dataset.sourceStart || "", 10);
+        const end = Number.parseInt(block.dataset.sourceEnd || "", 10);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+          return null;
+        }
+        return { start, end };
       };
       const focusEditorAt = async (offset) => {
         await setPreviewMode("editor", { skipFocus: true });
@@ -3875,6 +4060,7 @@ const workItemWorkspaceHTML = `<!doctype html>
             return;
           }
           preview.innerHTML = await response.text();
+          window.requestAnimationFrame(syncPreviewViewportHeight);
         } catch (_) {
         }
       };
@@ -3884,9 +4070,18 @@ const workItemWorkspaceHTML = `<!doctype html>
         }
         previewTimer = window.setTimeout(refreshPreview, 200);
       };
+      if (toggleEditButton) {
+        toggleEditButton.addEventListener("click", () => {
+          if (previewMode() !== "editor") {
+            setPreviewMode("editor");
+          }
+        });
+      }
       if (togglePreviewButton) {
         togglePreviewButton.addEventListener("click", () => {
-          setPreviewMode(previewMode() === "preview" ? "editor" : "preview");
+          if (previewMode() !== "preview") {
+            setPreviewMode("preview");
+          }
         });
       }
       if (toggleSidebarButton) {
@@ -3904,15 +4099,25 @@ const workItemWorkspaceHTML = `<!doctype html>
       }
       syncSidebarState();
       if (preview) {
+        window.addEventListener("resize", syncPreviewViewportHeight);
         preview.addEventListener("dblclick", async (event) => {
+          const block = event.target && event.target.closest ? event.target.closest("[data-source-start]") : null;
+          if (block) {
+            const sourceRange = blockSourceRange(block);
+            const offset = sourceRange && textarea
+              ? resolveTextOffset(block.textContent, textarea.value.slice(sourceRange.start, sourceRange.end), sourceRange.start, blockTextOffsetFromEvent(block, event))
+              : findTextOffset(block.textContent, blockTextOffsetFromEvent(block, event));
+            if (offset >= 0) {
+              await focusEditorAt(offset);
+              return;
+            }
+          }
           const selection = window.getSelection ? String(window.getSelection() || "") : "";
-          const block = event.target && event.target.closest ? event.target.closest("p, li, h1, h2, h3, h4, h5, h6, blockquote, pre, td, th") : null;
-          const candidates = [
+          const fallbackCandidates = [
             selection,
-            block ? block.textContent : "",
             event.target && event.target.textContent ? event.target.textContent : ""
           ];
-          for (const candidate of candidates) {
+          for (const candidate of fallbackCandidates) {
             const offset = findTextOffset(candidate);
             if (offset >= 0) {
               await focusEditorAt(offset);
@@ -4077,10 +4282,7 @@ const workItemAgentPaneHTML = `
   </div>
   <ul class="tree-list">
     <li>
-      <div class="active-item">
-        <div>{{.Title}}</div>
-        <div class="tree-meta">main document</div>
-      </div>
+      <div class="active-item">{{.Title}}</div>
     </li>
   </ul>
 </section>
