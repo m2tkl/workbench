@@ -9,12 +9,12 @@ func TestSpecializedItemConstructorsProduceValidWorkflowState(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 
 	stock := NewStockItem(now, "Ship release", StageNext)
-	if stock.EntityType != entityTask || stock.Triage != TriageStock || stock.Stage != StageNext || stock.DeferredKind != "" {
+	if stock.EntityType != entityWork || stock.Triage != TriageStock || stock.Stage != StageNext || stock.DeferredKind != "" {
 		t.Fatalf("NewStockItem = %#v", stock)
 	}
 
 	scheduled := NewScheduledItem(now, "Pay rent", "2026-04-15")
-	if scheduled.EntityType != entityTask || scheduled.Triage != TriageDeferred || scheduled.DeferredKind != DeferredKindScheduled {
+	if scheduled.EntityType != entityWork || scheduled.Triage != TriageDeferred || scheduled.DeferredKind != DeferredKindScheduled {
 		t.Fatalf("NewScheduledItem = %#v", scheduled)
 	}
 	if scheduled.ScheduledFor != "2026-04-15" {
@@ -22,7 +22,7 @@ func TestSpecializedItemConstructorsProduceValidWorkflowState(t *testing.T) {
 	}
 
 	recurring := NewIssueRecurringItem(now, "Review backups", 7, "2026-04-12")
-	if recurring.EntityType != entityIssue || recurring.Triage != TriageDeferred || recurring.DeferredKind != DeferredKindRecurring {
+	if recurring.EntityType != entityWork || recurring.Triage != TriageDeferred || recurring.DeferredKind != DeferredKindRecurring {
 		t.Fatalf("NewIssueRecurringItem = %#v", recurring)
 	}
 	if recurring.RecurringEveryDays != 7 || recurring.RecurringAnchor != "2026-04-12" {

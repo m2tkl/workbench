@@ -80,12 +80,12 @@ type State struct {
 	Items []Item `json:"items"`
 }
 
-func newBaseItem(now time.Time, title, entityType string) Item {
+func newBaseItem(now time.Time, title string) Item {
 	ts := now.Format(time.RFC3339)
 	return Item{
 		ID:             newID(),
 		Title:          strings.TrimSpace(title),
-		EntityType:     entityType,
+		EntityType:     entityWork,
 		Status:         "open",
 		CreatedAt:      ts,
 		UpdatedAt:      ts,
@@ -94,11 +94,7 @@ func newBaseItem(now time.Time, title, entityType string) Item {
 }
 
 func NewItem(now time.Time, title string, triage Triage, stage Stage, deferredKind DeferredKind) Item {
-	entityType := entityTask
-	if triage == TriageInbox {
-		entityType = entityInbox
-	}
-	item := newBaseItem(now, title, entityType)
+	item := newBaseItem(now, title)
 	item.MoveTo(now, triage, stage, deferredKind)
 	item.Log = nil
 	item.LastReviewedOn = ""
@@ -106,7 +102,7 @@ func NewItem(now time.Time, title string, triage Triage, stage Stage, deferredKi
 }
 
 func NewInboxItem(now time.Time, title string) Item {
-	item := newBaseItem(now, title, entityInbox)
+	item := newBaseItem(now, title)
 	item.MoveTo(now, TriageInbox, "", "")
 	item.Log = nil
 	item.LastReviewedOn = ""
@@ -114,11 +110,7 @@ func NewInboxItem(now time.Time, title string) Item {
 }
 
 func NewIssueItem(now time.Time, title string, triage Triage, stage Stage, deferredKind DeferredKind) Item {
-	item := newBaseItem(now, title, entityIssue)
-	item.MoveTo(now, triage, stage, deferredKind)
-	item.Log = nil
-	item.LastReviewedOn = ""
-	return item
+	return NewItem(now, title, triage, stage, deferredKind)
 }
 
 func NewStockItem(now time.Time, title string, stage Stage) Item {
@@ -126,11 +118,11 @@ func NewStockItem(now time.Time, title string, stage Stage) Item {
 }
 
 func NewIssueStockItem(now time.Time, title string, stage Stage) Item {
-	return NewIssueItem(now, title, TriageStock, stage, "")
+	return NewStockItem(now, title, stage)
 }
 
 func NewScheduledItem(now time.Time, title, day string) Item {
-	item := newBaseItem(now, title, entityTask)
+	item := newBaseItem(now, title)
 	item.SetScheduledFor(now, day)
 	item.Log = nil
 	item.LastReviewedOn = ""
@@ -138,15 +130,11 @@ func NewScheduledItem(now time.Time, title, day string) Item {
 }
 
 func NewIssueScheduledItem(now time.Time, title, day string) Item {
-	item := newBaseItem(now, title, entityIssue)
-	item.SetScheduledFor(now, day)
-	item.Log = nil
-	item.LastReviewedOn = ""
-	return item
+	return NewScheduledItem(now, title, day)
 }
 
 func NewRecurringItem(now time.Time, title string, everyDays int, anchor string) Item {
-	item := newBaseItem(now, title, entityTask)
+	item := newBaseItem(now, title)
 	item.SetRecurring(now, everyDays, anchor)
 	item.Log = nil
 	item.LastReviewedOn = ""
@@ -154,11 +142,7 @@ func NewRecurringItem(now time.Time, title string, everyDays int, anchor string)
 }
 
 func NewIssueRecurringItem(now time.Time, title string, everyDays int, anchor string) Item {
-	item := newBaseItem(now, title, entityIssue)
-	item.SetRecurring(now, everyDays, anchor)
-	item.Log = nil
-	item.LastReviewedOn = ""
-	return item
+	return NewRecurringItem(now, title, everyDays, anchor)
 }
 
 func (s *State) FindItem(id string) (*Item, error) {

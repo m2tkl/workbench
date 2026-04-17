@@ -188,7 +188,6 @@ func TestViewShortcutDoesNotMoveSelectedItems(t *testing.T) {
 func TestVaultModeShiftTConvertsInboxItemToTask(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewInboxItem(now, "Draft expense note")
-	item.EntityType = entityInbox
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -201,8 +200,8 @@ func TestVaultModeShiftTConvertsInboxItemToTask(t *testing.T) {
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
 	updated := model.(*App)
 
-	if updated.state.Items[0].EntityType != entityTask {
-		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityTask)
+	if updated.state.Items[0].EntityType != entityWork {
+		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityWork)
 	}
 	if updated.state.Items[0].Triage != TriageStock || updated.state.Items[0].Stage != StageNext {
 		t.Fatalf("state = %q/%q/%q, want stock/next", updated.state.Items[0].Triage, updated.state.Items[0].Stage, updated.state.Items[0].DeferredKind)
@@ -212,7 +211,6 @@ func TestVaultModeShiftTConvertsInboxItemToTask(t *testing.T) {
 func TestVaultModeShiftIConvertsInboxItemToIssue(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewInboxItem(now, "Investigate OTP edge case")
-	item.EntityType = entityInbox
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -236,8 +234,8 @@ func TestVaultModeShiftIConvertsInboxItemToIssue(t *testing.T) {
 	updated.inputs[1].SetValue("later")
 	updated.submitModal()
 
-	if updated.state.Items[0].EntityType != entityIssue {
-		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityIssue)
+	if updated.state.Items[0].EntityType != entityWork {
+		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityWork)
 	}
 	if updated.state.Items[0].Triage != TriageStock || updated.state.Items[0].Stage != StageLater {
 		t.Fatalf("state = %q/%q/%q, want stock/later", updated.state.Items[0].Triage, updated.state.Items[0].Stage, updated.state.Items[0].DeferredKind)
@@ -370,9 +368,9 @@ func TestModeSwitchTogglesExecutionAndWorkbench(t *testing.T) {
 func TestWorkbenchSectionsShowIssueStateFilters(t *testing.T) {
 	app := NewApp(newTestStore(t), State{
 		Items: []Item{
-			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open", Triage: TriageStock, Stage: StageNow},
-			{ID: "issue-2", Title: "Queued issue", EntityType: entityIssue, Status: "open", Triage: TriageStock, Stage: StageNext},
-			{ID: "task-1", Title: "Task", EntityType: entityTask, Status: "open"},
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityWork, Theme: "auth-stepup", Status: "open", Triage: TriageStock, Stage: StageNow},
+			{ID: "issue-2", Title: "Queued issue", EntityType: entityWork, Theme: "auth-stepup", Status: "open", Triage: TriageStock, Stage: StageNext},
+			{ID: "task-1", Title: "Task", EntityType: entityWork, Status: "open"},
 		},
 	})
 	app.view = viewWorkbench
@@ -838,7 +836,6 @@ func TestEditSelectedThemeRejectsRemovingReferencedSourceRef(t *testing.T) {
 func TestConvertInboxIssueBlankThemeFallsBackToNoTheme(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewInboxItem(now, "Investigate OTP edge case")
-	item.EntityType = entityInbox
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -857,15 +854,14 @@ func TestConvertInboxIssueBlankThemeFallsBackToNoTheme(t *testing.T) {
 	if updated.state.Items[0].Theme != "" {
 		t.Fatalf("theme = %q, want blank", updated.state.Items[0].Theme)
 	}
-	if updated.state.Items[0].EntityType != entityIssue {
-		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityIssue)
+	if updated.state.Items[0].EntityType != entityWork {
+		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityWork)
 	}
 }
 
 func TestConvertInboxIssueRejectsAmbiguousThemeSearch(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewInboxItem(now, "Investigate OTP edge case")
-	item.EntityType = entityInbox
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -884,8 +880,8 @@ func TestConvertInboxIssueRejectsAmbiguousThemeSearch(t *testing.T) {
 	if updated.mode != modeConvertInboxIssue {
 		t.Fatalf("mode = %v, want modeConvertInboxIssue", updated.mode)
 	}
-	if updated.state.Items[0].EntityType != entityInbox {
-		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityInbox)
+	if updated.state.Items[0].EntityType != entityWork {
+		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityWork)
 	}
 	if updated.status != "Theme is ambiguous. Narrow the search." {
 		t.Fatalf("status = %q", updated.status)
@@ -895,7 +891,6 @@ func TestConvertInboxIssueRejectsAmbiguousThemeSearch(t *testing.T) {
 func TestConvertInboxIssueAllowsSelectingNowStage(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewInboxItem(now, "Investigate OTP edge case")
-	item.EntityType = entityInbox
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -920,7 +915,6 @@ func TestConvertInboxIssueAllowsSelectingNowStage(t *testing.T) {
 func TestConvertInboxIssueRejectsInvalidStage(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewInboxItem(now, "Investigate OTP edge case")
-	item.EntityType = entityInbox
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
@@ -937,26 +931,25 @@ func TestConvertInboxIssueRejectsInvalidStage(t *testing.T) {
 	if updated.status != "Stage must be now, next, or later." {
 		t.Fatalf("status = %q", updated.status)
 	}
-	if updated.state.Items[0].EntityType != entityInbox {
-		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityInbox)
+	if updated.state.Items[0].EntityType != entityWork {
+		t.Fatalf("entity type = %q, want %q", updated.state.Items[0].EntityType, entityWork)
 	}
 }
 
-func TestEditThemeRejectsTask(t *testing.T) {
+func TestEditThemeAllowsAnyWorkItem(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewItem(now, "Submit expense", TriageStock, StageNow, "")
-	item.EntityType = entityTask
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
 	app.now = func() time.Time { return now }
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
 	updated := model.(*App)
-	if updated.mode != modeNormal {
-		t.Fatalf("mode = %v, want modeNormal", updated.mode)
+	if updated.mode != modeEditTheme {
+		t.Fatalf("mode = %v, want modeEditTheme", updated.mode)
 	}
-	if updated.status != "Selected item is not an issue." {
-		t.Fatalf("status = %q", updated.status)
+	if len(updated.inputs) != 1 {
+		t.Fatalf("expected one theme input, got %d", len(updated.inputs))
 	}
 }
 

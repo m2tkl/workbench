@@ -1996,10 +1996,6 @@ func (a *App) startEditTheme() {
 		a.status = "No item selected."
 		return
 	}
-	if item.EntityType != entityIssue {
-		a.status = "Selected item is not an issue."
-		return
-	}
 	a.startSingleInput(modeEditTheme, "theme id or title", item.Theme)
 }
 
@@ -2033,7 +2029,7 @@ func (a *App) startConvertInboxSelectionToIssue() {
 		a.status = "No item selected."
 		return
 	}
-	if item.EntityType != entityInbox || item.Triage != TriageInbox {
+	if item.Triage != TriageInbox {
 		a.status = "Select an inbox item to convert."
 		return
 	}
@@ -2307,10 +2303,6 @@ func (a *App) submitEditTheme() {
 		a.status = "No item selected."
 		return
 	}
-	if item.EntityType != entityIssue {
-		a.status = "Selected item is not an issue."
-		return
-	}
 	themeID, ok := a.resolveThemeInput(strings.TrimSpace(a.inputs[0].Value()), true)
 	if !ok {
 		a.keepModalOpen = true
@@ -2332,7 +2324,7 @@ func (a *App) submitConvertInboxIssue() {
 		a.status = "No item selected."
 		return
 	}
-	if item.EntityType != entityInbox || item.Triage != TriageInbox {
+	if item.Triage != TriageInbox {
 		a.status = "Select an inbox item to convert."
 		return
 	}
@@ -2348,7 +2340,7 @@ func (a *App) submitConvertInboxIssue() {
 		return
 	}
 	a.captureUndo("convert " + item.ID + " to issue")
-	item.EntityType = entityIssue
+	item.EntityType = entityWork
 	item.Theme = themeID
 	item.MoveTo(a.now(), TriageStock, stage, "")
 	a.save()
@@ -3194,19 +3186,19 @@ func (a *App) itemsForSection(s section) []itemRef {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionIssueNoStatus:
-			if item.EntityType == entityIssue && item.Status == "open" {
+			if item.Status == "open" && item.Theme != "" {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionIssueNow:
-			if item.EntityType == entityIssue && item.Status == "open" && item.Triage == TriageStock && item.Stage == StageNow {
+			if item.Status == "open" && item.Theme != "" && item.Triage == TriageStock && item.Stage == StageNow {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionIssueNext:
-			if item.EntityType == entityIssue && item.Status == "open" && item.Triage == TriageStock && item.Stage == StageNext {
+			if item.Status == "open" && item.Theme != "" && item.Triage == TriageStock && item.Stage == StageNext {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		case sectionIssueLater:
-			if item.EntityType == entityIssue && item.Status == "open" && (item.Triage == TriageStock && item.Stage == StageLater || item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled || item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring) {
+			if item.Status == "open" && item.Theme != "" && (item.Triage == TriageStock && item.Stage == StageLater || item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled || item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring) {
 				out = append(out, itemRef{index: idx, item: item})
 			}
 		}
@@ -3633,7 +3625,7 @@ func listStateLabel(item Item) string {
 func (a *App) issueCountForTheme(themeID string) int {
 	count := 0
 	for _, item := range a.state.Items {
-		if item.EntityType == entityIssue && item.Theme == themeID {
+		if item.Theme == themeID {
 			count++
 		}
 	}
@@ -3643,7 +3635,7 @@ func (a *App) issueCountForTheme(themeID string) int {
 func (a *App) issueTitlesForTheme(themeID string) []string {
 	var titles []string
 	for _, item := range a.state.Items {
-		if item.EntityType == entityIssue && item.Theme == themeID {
+		if item.Theme == themeID {
 			titles = append(titles, item.Title)
 		}
 	}
@@ -3653,14 +3645,16 @@ func (a *App) issueTitlesForTheme(themeID string) []string {
 
 func itemTypeLabel(item Item) string {
 	switch item.EntityType {
-	case entityInbox:
-		return "inbox"
-	case entityIssue:
-		return "issue"
-	case entityTask:
-		return "task"
+	case entityWork:
+		if item.Triage == TriageInbox {
+			return "inbox"
+		}
+		return "work"
 	default:
-		return "item"
+		if item.Triage == TriageInbox {
+			return "inbox"
+		}
+		return "work"
 	}
 }
 
@@ -3760,12 +3754,12 @@ func (a *App) convertInboxSelectionToTask() {
 		a.status = "No item selected."
 		return
 	}
-	if item.EntityType != entityInbox || item.Triage != TriageInbox {
+	if item.Triage != TriageInbox {
 		a.status = "Select an inbox item to convert."
 		return
 	}
 	a.captureUndo("convert " + item.ID + " to task")
-	item.EntityType = entityTask
+	item.EntityType = entityWork
 	item.MoveTo(a.now(), TriageStock, StageNext, "")
 	a.save()
 	a.status = a.undoStatus("Converted " + item.ID + " to Task in Next.")

@@ -1,10 +1,10 @@
 # Workbench
 
-Terminal-first task management with a focused dashboard UI.
+Terminal-first work management with a focused dashboard UI.
 
 ## What it does
 
-- Capture new tasks into `Inbox`
+- Capture new work items into `Inbox`
 - Separate self-prioritized work from date-based or recurring work
 - Keep the main execution view focused on `Focus = Now + active Deferred`
 - Open `Next`, `Later`, and `Deferred` only when needed, without mixing them into the focus list
@@ -13,7 +13,7 @@ Terminal-first task management with a focused dashboard UI.
 
 ## Model
 
-- `Inbox`: new, unclassified tasks
+- `Inbox`: new, unclassified work items
 - `Now`, `Next`, `Later`: self-prioritized stock
 - `Scheduled`, `Recurring`: deferred work that becomes active by condition
 - `Focus`: the execution view, made from `Now` plus active deferred items
@@ -41,9 +41,7 @@ Workbench reads configuration from your OS config directory, for example `~/.con
 
 ```text
 ./vault/
-  inbox/
-  tasks/
-  issues/
+  work-items/
   themes/
   knowledge/
 ```
@@ -86,15 +84,14 @@ workbench vault move --id 7fa3c2d1 --to scheduled --day 2026-04-20
 workbench vault complete --id 7fa3c2d1 --note "done"
 workbench vault reopen --id 7fa3c2d1 --scope complete
 workbench vault done-for-day --id 7fa3c2d1 --note "resume tomorrow"
-workbench vault convert inbox --id c4e12a9b --to issue --theme 3b91e4aa --stage next
+workbench vault update item --id 7fa3c2d1 --theme 3b91e4aa
 ```
 
-Active task state is stored in the configured data directory. A one-off override is still available with `--data-dir` or `TASKBENCH_DATA_DIR`:
+Active work state is stored in the configured data directory. A one-off override is still available with `--data-dir` or `TASKBENCH_DATA_DIR`:
 
 ```text
-./vault/inbox/<title-slug>--<id>.md
-./vault/tasks/<title-slug>--<id>/task.md
-./vault/issues/<title-slug>--<id>/issue.md
+./vault/work-items/<title-slug>--<id>.md
+./vault/work-items/<title-slug>--<id>/main.md
 ./vault/themes/<title-slug>--<id>/theme.md
 ```
 
@@ -126,14 +123,15 @@ Start a small browser workbench for upload:
 workbench web serve --addr 127.0.0.1:8080
 ```
 
-Open the shown URL and drop or pick a file to add it. Pasted Markdown text and uploaded Markdown files are saved directly into `sources/documents/`. If you already know the related theme or issue, select it in the form and Workbench will link the new source document immediately. Other file types still go to `sources/files/staged/` for later agent work. The page also includes a form to link existing source documents to themes and issues after an agent has produced them.
+Open the shown URL and drop or pick a file to add it. Pasted Markdown text and uploaded Markdown files are saved directly into `sources/documents/`. If you already know the related theme or work item, select it in the form and Workbench will link the new source document immediately. Other file types still go to `sources/files/staged/` for later agent work. The page also includes a form to link existing source documents to themes and work items after an agent has produced them.
 
 In the TUI workbench, select a theme and press `D` to open a dialog with the source inbox URL. The web server stays up only while that dialog is open.
 
 The intended model is:
 
-- task and issue metadata lives with each item in the vault
-- long-form notes stay in per-item directories
+- work-item metadata lives with each item in the vault
+- every work item has one main Markdown file
+- long-form supporting material stays in promoted per-item directories
 - recurring rules are edited in the app with `c`
 - Git remains sufficient for inspection, history, and review
 
@@ -157,7 +155,7 @@ See [docs/storage-model.md](docs/storage-model.md) for the storage and archive d
 - `?`: open help
 - `/`: search and filter
 - `a`: add item to `Inbox`
-- `e`: open the selected task's note file in `$EDITOR`
+- `e`: open the selected work item's main file in `$EDITOR`
 - `m`: move the current item or selected items between `Now`, `Next`, `Later`, `Scheduled`, `Recurring`
 - `c`: edit deferred conditions for `Scheduled` / `Recurring`
 - `w`: close selected `Focus` item for today only without completing it
@@ -172,7 +170,7 @@ See [docs/storage-model.md](docs/storage-model.md) for the storage and archive d
 
 1. Start the app with `workbench`
 2. If needed, seed demo data first with `workbench --seed-demo`
-3. Press `a` and add an Inbox task
+3. Press `a` and add an Inbox item
 4. Press `m` and move it to `Next`
 5. Press `m` again and move it to `Now`
 6. Confirm it appears in `Focus`

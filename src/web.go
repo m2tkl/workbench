@@ -367,7 +367,7 @@ func (s *sourceWorkbenchServer) handleIndex(w http.ResponseWriter, r *http.Reque
 	}
 	issueLabels := map[string]string{}
 	for _, item := range state.Items {
-		if item.EntityType != entityIssue || item.Status != "open" {
+		if item.Status != "open" {
 			continue
 		}
 		label := fmt.Sprintf("%s (%s)", item.Title, item.ID)
@@ -753,9 +753,6 @@ func linkSourceRef(vault VaultFS, ref, themeID, issueID string, now time.Time) e
 		if err != nil {
 			return err
 		}
-		if item.EntityType != entityIssue {
-			return fmt.Errorf("item is not an issue: %s", issueID)
-		}
 		item.Refs = normalizeStrings(append(item.Refs, ref))
 		item.LastReviewedOn = dateKey(now)
 		item.touch(now)
@@ -971,28 +968,25 @@ func rewriteWorkItemAssetMarkdown(id, markdown string) string {
 }
 
 func (s *sourceWorkbenchServer) loadWorkItemBody(item Item) (string, error) {
-	switch item.EntityType {
-	case entityTask:
-		task, err := readTaskDoc(s.vault.TaskMetaPath(item.ID))
-		if err != nil {
-			if os.IsNotExist(err) {
-				return "", os.ErrNotExist
-			}
-			return "", err
+	path := s.vault.WorkItemMainPath(item.ID)
+	if !fileExists(path) {
+		switch {
+		case fileExists(s.vault.WorkItemFilePath(item.ID)):
+			path = s.vault.WorkItemFilePath(item.ID)
+		case fileExists(s.vault.IssueMetaPath(item.ID)):
+			path = s.vault.IssueMetaPath(item.ID)
+		case fileExists(s.vault.TaskMetaPath(item.ID)):
+			path = s.vault.TaskMetaPath(item.ID)
 		}
-		return task.Body, nil
-	case entityIssue:
-		issue, err := readIssueDoc(s.vault.IssueMetaPath(item.ID))
-		if err != nil {
-			if os.IsNotExist(err) {
-				return "", os.ErrNotExist
-			}
-			return "", err
-		}
-		return issue.Body, nil
-	default:
-		return "", os.ErrNotExist
 	}
+	work, err := readWorkDoc(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", os.ErrNotExist
+		}
+		return "", err
+	}
+	return work.Body, nil
 }
 
 func (s *sourceWorkbenchServer) saveWorkItemAsset(id, filename string, content io.Reader) (string, error) {
@@ -1029,34 +1023,28 @@ func (s *sourceWorkbenchServer) saveWorkItemBody(id, body string) error {
 		return os.ErrNotExist
 	}
 	now := todayLocal()
-	switch item.EntityType {
-	case entityTask:
-		task, err := readTaskDoc(s.vault.TaskMetaPath(item.ID))
-		if err != nil {
-			if os.IsNotExist(err) {
-				return os.ErrNotExist
-			}
-			return err
+	path := s.vault.WorkItemMainPath(item.ID)
+	if !fileExists(path) {
+		switch {
+		case fileExists(s.vault.WorkItemFilePath(item.ID)):
+			path = s.vault.WorkItemFilePath(item.ID)
+		case fileExists(s.vault.IssueMetaPath(item.ID)):
+			path = s.vault.IssueMetaPath(item.ID)
+		case fileExists(s.vault.TaskMetaPath(item.ID)):
+			path = s.vault.TaskMetaPath(item.ID)
 		}
-		task.Body = body
-		task.Updated = dateKey(now)
-		task.LastReviewedOn = dateKey(now)
-		return s.vault.SaveTask(task)
-	case entityIssue:
-		issue, err := readIssueDoc(s.vault.IssueMetaPath(item.ID))
-		if err != nil {
-			if os.IsNotExist(err) {
-				return os.ErrNotExist
-			}
-			return err
-		}
-		issue.Body = body
-		issue.Updated = dateKey(now)
-		issue.LastReviewedOn = dateKey(now)
-		return s.vault.SaveIssue(issue)
-	default:
-		return os.ErrNotExist
 	}
+	work, err := readWorkDoc(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.ErrNotExist
+		}
+		return err
+	}
+	work.Body = body
+	work.Updated = dateKey(now)
+	work.LastReviewedOn = dateKey(now)
+	return s.vault.SaveWorkItem(work)
 }
 
 func (s *sourceWorkbenchServer) loadWorkItemMemos(item Item, memoMode workItemMemoMode) ([]workItemWorkspaceFile, error) {
@@ -1195,25 +1183,32 @@ func loadWorkspaceMarkdownFiles(root string) ([]workItemWorkspaceFile, error) {
 }
 
 func workItemMemoDir(vault VaultFS, item Item) (string, error) {
-	switch item.EntityType {
-	case entityTask:
-		return vault.TaskMemosDir(item.ID), nil
-	case entityIssue:
-		return vault.IssueMemosDir(item.ID), nil
-	default:
-		return "", os.ErrNotExist
+	if dirExists(vault.WorkItemContextDir(item.ID)) {
+		return vault.WorkItemContextDir(item.ID), nil
 	}
+	if dirExists(vault.IssueMemosDir(item.ID)) {
+		return vault.IssueMemosDir(item.ID), nil
+	}
+	if dirExists(vault.TaskMemosDir(item.ID)) {
+		return vault.TaskMemosDir(item.ID), nil
+	}
+	return vault.WorkItemContextDir(item.ID), nil
 }
 
 func workItemRootDir(vault VaultFS, item Item) (string, error) {
-	switch item.EntityType {
-	case entityTask:
-		return vault.TaskDir(item.ID), nil
-	case entityIssue:
-		return vault.IssueDir(item.ID), nil
-	default:
-		return "", os.ErrNotExist
+	if dir := vault.WorkItemDir(item.ID); dir != "" {
+		return dir, nil
 	}
+	if dirExists(vault.IssueDir(item.ID)) {
+		return vault.IssueDir(item.ID), nil
+	}
+	if dirExists(vault.TaskDir(item.ID)) {
+		return vault.TaskDir(item.ID), nil
+	}
+	if err := vault.ensurePromotedWorkItemDir(item.ID, item.Title); err != nil {
+		return "", err
+	}
+	return vault.WorkItemDir(item.ID), nil
 }
 
 func workItemAssetsDir(vault VaultFS, item Item) string {
@@ -1995,7 +1990,7 @@ const workItemWorkspaceHTML = `<!doctype html>
     <div class="workspace">
       <section class="workspace-main">
         <div class="mode-actions">
-          <div class="section-label">{{if eq .EntityType "issue"}}Issue{{else if eq .EntityType "task"}}Task{{else}}{{.EntityType}}{{end}}</div>
+          <div class="section-label">{{if eq .EntityType "issue"}}Issue{{else if eq .EntityType "task"}}Task{{else}}Work item{{end}}</div>
           <button id="toggle-preview-mode" class="mode-toggle" type="button" aria-pressed="false">Preview</button>
         </div>
         <form id="work-item-editor" method="post" action="{{.SaveAction}}" data-preview-url="{{.PreviewAction}}" data-asset-upload-url="{{.AssetUploadAction}}">

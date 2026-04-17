@@ -239,8 +239,14 @@ func TestRunUISeedDemoWritesDemoData(t *testing.T) {
 	}
 }
 
-func TestRunRejectsTopLevelFlagsWithoutUICommand(t *testing.T) {
-	if code := Run([]string{"workbench", "--seed-demo"}); code == 0 {
-		t.Fatal("expected top-level --seed-demo without ui to fail")
+func TestRunAcceptsTopLevelSeedDemoAlias(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "demo-data")
+	output := captureStdout(t, func() {
+		if code := Run([]string{"workbench", "--data-dir", root, "--seed-demo"}); code != 0 {
+			t.Fatalf("Run exit code = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(output, "demo data written to") {
+		t.Fatalf("expected seed-demo output, got:\n%s", output)
 	}
 }

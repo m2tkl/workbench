@@ -2,23 +2,21 @@
 
 ## Target
 
-Persist workbench state directly in the vault. Metadata should live beside each item, and supporting content should stay in item-local directories.
+Persist workbench state directly in the vault. Every work item has one primary Markdown document, and only items that need helper files are promoted into directories.
 
 ## Active Layout
 
 ```text
 vault/
-  inbox/
-    <title-slug>--<capture-id>.md
-  tasks/
-    <title-slug>--<task-id>/
-      task.md
-      memos/
-  issues/
-    <title-slug>--<issue-id>/
-      issue.md
+  work-items/
+    <title-slug>--<work-item-id>.md
+    <title-slug>--<work-item-id>/
+      main.md
+      assets/
       context/
-      memos/
+        manual/
+        generated/
+      outputs/
   themes/
     <title-slug>--<theme-id>/
       theme.md
@@ -34,15 +32,19 @@ vault/
 ## Design Rules
 
 - The vault is the only source of truth.
-- Inbox items are single Markdown files with frontmatter and body content.
-- Tasks, issues, and themes are directory-scoped items with a primary Markdown document plus supporting directories.
-- Item and theme IDs are random 8-char hex strings; the human-readable title slug lives in the saved path name.
-- `status`, `triage`, `stage`, and `deferred_kind` are stored explicitly.
-- Notes and context stay outside metadata files.
+- `work_item` is the only durable item kind.
+- `task` and `issue` are not separate storage classes.
+- `inbox` is a `triage` value, not a directory.
+- Every work item has exactly one main Markdown document.
+- Default storage is a single file under `vault/work-items/`.
+- If helper files are needed, the item is promoted to a same-named directory and the main file becomes `main.md`.
+- Item and theme IDs are random 8-char hex strings; the saved path uses `<title-slug>--<id>`.
+- `status`, `triage`, `stage`, `deferred_kind`, dates, refs, and short memo state stay visible from the main file.
+- References are modeled by item or theme IDs; file paths are a derived storage detail.
 
 ## Metadata Model
 
-Task and issue metadata stores:
+Work-item metadata stores:
 
 - `id`
 - `title`
@@ -64,9 +66,6 @@ Task and issue metadata stores:
 - `updated`
 - `tags`
 - `refs`
-
-Issue metadata additionally stores:
-
 - `theme`
 
 Theme metadata stores:
@@ -80,54 +79,34 @@ Theme metadata stores:
 
 ## Responsibility Split
 
-Metadata files answer:
+Main work-item files answer:
 
 - what the item is
 - where it sits in workflow
 - whether it is open, done, scheduled, or recurring
 - what it links to
+- the current short memo or main working note
 
-Supporting Markdown files answer:
+Promoted helper files answer:
 
-- working notes in the primary item file
-- raw material and intermediate thinking in `memos/`
-- issue-local or theme-local artifacts in `context/`
-- reusable knowledge drafts
+- `context/manual/`: human-maintained context that should stay with the item
+- `context/generated/`: agent-produced or imported supporting context
+- `assets/`: uploaded files referenced from the main document or context
+- `outputs/`: durable item-local deliverables
 
-The intended flow is:
-
-- capture raw ideas, excerpts, and working notes in `memos/`
-- refine what matters for the current issue or theme into `context/`
-- promote reusable results into `knowledge/`
+Theme-local `context/` remains the place for shared theme artifacts.
 
 ## Operational Notes
 
-- Saving app state rewrites item metadata files and preserves item directories.
-- Moving `Inbox -> Task` or `Inbox -> Issue` removes the inbox file and creates the destination directory.
-- Captured note content is written into `memos/captured.md` for tasks and issues.
-- `task.md` / `issue.md` is the current primary note, not a dump of all supporting files.
-- `memos/` is the scratch space for both human and agent working material.
-- `context/` is where that material becomes a usable artifact for the current issue or theme.
-- `knowledge/` is only for material that should outlive the current issue or theme.
-- Theme membership is stored on the issue itself via `theme`.
+- Saving app state rewrites main work-item documents and preserves promoted directories.
+- A work item may start as a single file and later be promoted without changing its ID.
+- Promotion is driven by storage needs, not by item type.
+- `main.md` is the primary note for promoted items.
+- Theme membership is stored on the work item itself via `theme`.
 - `sources/` is the global source collection root.
-- Extracted source documents live under `sources/documents/` and keep the original filename.
+- Extracted source documents live under `sources/documents/`.
 - Raw uploaded files live under `sources/files/` and should stay out of Git.
-- Source entry content is Markdown with frontmatter such as `attachment`, `filename`, `links`, `tags`, and `imported_at`.
-- `theme.md` stores `source_refs` to define which external sources a theme is working from.
-- Theme-local `context/` documents can also store `source_refs`, and those refs should be a subset of the theme-level source set.
-- A browser-facing upload flow stages files in `sources/files/staged/`. A later agent or CLI step can extract and classify them.
-
-## Complexity Guardrails
-
-- Prefer `memos/` and `context/` over introducing more asset classes.
-- Do not split files by author such as human notes vs agent notes.
-- Do not treat transcripts or temporary execution traces as first-class durable artifacts unless a concrete retrieval need appears.
-- If a note is only useful as input, keep it in `memos/`.
-- If a note is something future work should read directly, move it into `context/` or `knowledge/`.
-
-## Transitional Note
 
 ## Future Direction
 
-This layout already uses per-item Markdown documents with frontmatter. If indexes are added later, they should remain rebuildable projections rather than a second source of truth.
+If indexes or caches are added later, they should remain rebuildable projections rather than a second source of truth.

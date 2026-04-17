@@ -123,52 +123,45 @@ func TestRunVaultAddCommandsCreateFiles(t *testing.T) {
 	}
 
 	vault := NewVault(root)
-	inbox, err := vault.LoadInbox()
-	if err != nil {
-		t.Fatalf("LoadInbox returned error: %v", err)
+	workItems := mustLoadWorkItems(t, vault)
+	if len(workItems) != 3 {
+		t.Fatalf("LoadWorkItems len = %d, want 3", len(workItems))
 	}
-	if len(inbox) != 1 {
-		t.Fatalf("LoadInbox len = %d, want 1", len(inbox))
+	var inbox, task, issue WorkDoc
+	var inboxOK, taskOK, issueOK bool
+	for _, item := range workItems {
+		switch {
+		case item.Triage == TriageInbox:
+			inbox = item
+			inboxOK = true
+		case item.Theme == "auth-stepup":
+			issue = item
+			issueOK = true
+		default:
+			task = item
+			taskOK = true
+		}
 	}
-	if !regexp.MustCompile(`^[0-9a-f]{8}$`).MatchString(inbox[0].ID) {
-		t.Fatalf("inbox id = %q, want 8-char hex id", inbox[0].ID)
+	if !inboxOK || !taskOK || !issueOK {
+		t.Fatalf("missing inbox work item: %#v", workItems)
 	}
-	if _, err := os.Stat(vault.InboxPath(inbox[0].ID)); err != nil {
-		t.Fatalf("expected inbox path to exist: %v", err)
+	if !regexp.MustCompile(`^[0-9a-f]{8}$`).MatchString(inbox.ID) {
+		t.Fatalf("inbox id = %q, want 8-char hex id", inbox.ID)
 	}
-
-	tasks, err := vault.LoadTasks()
-	if err != nil {
-		t.Fatalf("LoadTasks returned error: %v", err)
+	if _, err := os.Stat(vault.WorkItemMainPath(inbox.ID)); err != nil {
+		t.Fatalf("expected inbox work-item path to exist: %v", err)
 	}
-	if len(tasks) != 1 || len(tasks[0].Refs) != 1 {
-		t.Fatalf("unexpected task refs: %#v", tasks)
+	if task.Theme != "" || len(task.Refs) != 1 {
+		t.Fatalf("unexpected task-like work item: %#v", workItems)
 	}
-	if !regexp.MustCompile(`^[0-9a-f]{8}$`).MatchString(tasks[0].ID) {
-		t.Fatalf("task id = %q, want 8-char hex id", tasks[0].ID)
+	if _, err := os.Stat(vault.WorkItemMainPath(task.ID)); err != nil {
+		t.Fatalf("expected task-like work-item path to exist: %v", err)
 	}
-	if _, err := os.Stat(vault.TaskMetaPath(tasks[0].ID)); err != nil {
-		t.Fatalf("expected task path to exist: %v", err)
+	if issue.Theme != "auth-stepup" || len(issue.Refs) != 1 {
+		t.Fatalf("unexpected themed work item: %#v", workItems)
 	}
-
-	issues, err := vault.LoadIssues()
-	if err != nil {
-		t.Fatalf("LoadIssues returned error: %v", err)
-	}
-	if len(issues) != 1 || len(issues[0].Refs) != 1 {
-		t.Fatalf("unexpected issue refs: %#v", issues)
-	}
-	if !regexp.MustCompile(`^[0-9a-f]{8}$`).MatchString(issues[0].ID) {
-		t.Fatalf("issue id = %q, want 8-char hex id", issues[0].ID)
-	}
-	if _, err := os.Stat(vault.IssueMetaPath(issues[0].ID)); err != nil {
-		t.Fatalf("expected issue path to exist: %v", err)
-	}
-	if _, err := os.Stat(vault.IssueContextDir(issues[0].ID)); err != nil {
-		t.Fatalf("expected issue context dir to exist: %v", err)
-	}
-	if _, err := os.Stat(vault.IssueMemosDir(issues[0].ID)); err != nil {
-		t.Fatalf("expected issue memos dir to exist: %v", err)
+	if _, err := os.Stat(vault.WorkItemMainPath(issue.ID)); err != nil {
+		t.Fatalf("expected themed work-item path to exist: %v", err)
 	}
 
 	themes, err := vault.LoadThemes()
@@ -298,18 +291,15 @@ func TestRunVaultAddTaskGeneratesRandomIDWhenNotSpecified(t *testing.T) {
 	}
 
 	vault := NewVault(root)
-	tasks, err := vault.LoadTasks()
-	if err != nil {
-		t.Fatalf("LoadTasks returned error: %v", err)
+	workItems := mustLoadWorkItems(t, vault)
+	if len(workItems) != 1 {
+		t.Fatalf("LoadWorkItems len = %d, want 1", len(workItems))
 	}
-	if len(tasks) != 1 {
-		t.Fatalf("LoadTasks len = %d, want 1", len(tasks))
+	if workItems[0].ID == "submit-expense" {
+		t.Fatalf("work item id = %q, want random id", workItems[0].ID)
 	}
-	if tasks[0].ID == "submit-expense" {
-		t.Fatalf("task id = %q, want random id", tasks[0].ID)
-	}
-	if !regexp.MustCompile(`^[0-9a-f]{8}$`).MatchString(tasks[0].ID) {
-		t.Fatalf("task id = %q, want 8-char hex id", tasks[0].ID)
+	if !regexp.MustCompile(`^[0-9a-f]{8}$`).MatchString(workItems[0].ID) {
+		t.Fatalf("work item id = %q, want 8-char hex id", workItems[0].ID)
 	}
 }
 
@@ -351,15 +341,10 @@ func TestRunVaultConvertInboxToIssue(t *testing.T) {
 		t.Fatalf("runVaultCommand exit code = %d, want 0", code)
 	}
 
-	issues, err := vault.LoadIssues()
-	if err != nil {
-		t.Fatalf("LoadIssues returned error: %v", err)
-	}
-	if len(issues) != 1 || issues[0].ID != "capture-1" || issues[0].Theme != "auth-stepup" || issues[0].Stage != StageNext {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if _, err := os.Stat(vault.InboxPath("capture-1")); !os.IsNotExist(err) {
-		t.Fatalf("expected inbox file removed, got %v", err)
+	workItems := mustLoadWorkItems(t, vault)
+	got, ok := findWorkDoc(workItems, "capture-1")
+	if !ok || got.Theme != "auth-stepup" || got.Stage != StageNext {
+		t.Fatalf("work items = %#v", workItems)
 	}
 }
 

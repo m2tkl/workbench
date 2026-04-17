@@ -550,8 +550,8 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("SaveIssue returned error: %v", err)
 	}
-	writeWorkspaceMemo(t, filepath.Join(vault.IssueMemosDir("issue-1"), "older.md"), "# Older Memo\n\nolder details", time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
-	writeWorkspaceMemo(t, filepath.Join(vault.IssueMemosDir("issue-1"), "notes/newer.md"), "# Newer Memo\n\nfresh details", time.Date(2025, 1, 3, 10, 0, 0, 0, time.UTC))
+	writeWorkspaceMemo(t, filepath.Join(vault.WorkItemContextGeneratedDir("issue-1"), "older.md"), "# Older Memo\n\nolder details", time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
+	writeWorkspaceMemo(t, filepath.Join(vault.WorkItemContextGeneratedDir("issue-1"), "notes/newer.md"), "# Newer Memo\n\nfresh details", time.Date(2025, 1, 3, 10, 0, 0, 0, time.UTC))
 
 	server := newSourceWorkbenchServer(vault)
 	req := httptest.NewRequest(http.MethodGet, "/work-items/issue-1", nil)
@@ -561,7 +561,7 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 		t.Fatalf("workspace status = %d, want %d", res.Code, http.StatusOK)
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, "Investigate OTP copy") || !strings.Contains(body, `action="/work-items/issue-1/save?memo=notes%2Fnewer.md`) {
+	if !strings.Contains(body, "Investigate OTP copy") || !strings.Contains(body, `action="/work-items/issue-1/save?memo=generated%2Fnotes%2Fnewer.md`) {
 		t.Fatalf("expected workspace header and save action: %s", body)
 	}
 	if !strings.Contains(body, `class="workspace-main"`) || strings.Contains(body, `class="panel workspace-main"`) || !strings.Contains(body, `id="work-item-editor"`) || !strings.Contains(body, `id="toggle-preview-mode"`) || !strings.Contains(body, `>Preview</button>`) || !strings.Contains(body, `>Save</button>`) {
@@ -570,7 +570,7 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if strings.Contains(body, "Human-editable") || strings.Contains(body, "Agent Memos") || strings.Contains(body, "Main Document") || strings.Contains(body, "Source Documents") || strings.Contains(body, "Work item workspace") {
 		t.Fatalf("expected workspace copy to stay minimal: %s", body)
 	}
-	if !strings.Contains(body, `class="section-label">Issue`) || !strings.Contains(body, `class="section-label">Memos`) || !strings.Contains(body, `class="section-label">Resources`) {
+	if !strings.Contains(body, `class="section-label">Work item`) || !strings.Contains(body, `class="section-label">Memos`) || !strings.Contains(body, `class="section-label">Resources`) {
 		t.Fatalf("expected subtle workspace labels: %s", body)
 	}
 	if strings.Contains(body, `class="notice ok">saved work item document`) || strings.Contains(body, `class="notice error"`) {
@@ -582,7 +582,7 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if !strings.Contains(body, `class="editor-footer"`) || !strings.Contains(body, `id="editor-feedback"`) {
 		t.Fatalf("expected inline editor feedback area in workspace: %s", body)
 	}
-	if !strings.Contains(body, `id="agent-pane"`) || !strings.Contains(body, `/work-items/issue-1/agent-pane?memo=notes%2Fnewer.md`) {
+	if !strings.Contains(body, `id="agent-pane"`) || !strings.Contains(body, `/work-items/issue-1/agent-pane?memo=generated%2Fnotes%2Fnewer.md`) {
 		t.Fatalf("expected auto-refresh agent pane wiring in workspace: %s", body)
 	}
 	if !strings.Contains(body, `/work-items/issue-1/preview`) || !strings.Contains(body, `/work-items/issue-1/assets`) {
@@ -628,8 +628,8 @@ func TestWorkItemWorkspaceCanSwitchToMemoTreeView(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveIssue returned error: %v", err)
 	}
-	writeWorkspaceMemo(t, filepath.Join(vault.IssueMemosDir("issue-1"), "z-last.md"), "# Last\n\nbody", time.Date(2025, 1, 3, 10, 0, 0, 0, time.UTC))
-	writeWorkspaceMemo(t, filepath.Join(vault.IssueMemosDir("issue-1"), "notes/a-first.md"), "# First\n\nbody", time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
+	writeWorkspaceMemo(t, filepath.Join(vault.WorkItemContextGeneratedDir("issue-1"), "z-last.md"), "# Last\n\nbody", time.Date(2025, 1, 3, 10, 0, 0, 0, time.UTC))
+	writeWorkspaceMemo(t, filepath.Join(vault.WorkItemContextGeneratedDir("issue-1"), "notes/a-first.md"), "# First\n\nbody", time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
 
 	server := newSourceWorkbenchServer(vault)
 	req := httptest.NewRequest(http.MethodGet, "/work-items/issue-1?memo_view=tree", nil)
@@ -642,7 +642,7 @@ func TestWorkItemWorkspaceCanSwitchToMemoTreeView(t *testing.T) {
 	if !strings.Contains(body, `class="active">Tree</a>`) {
 		t.Fatalf("expected tree toggle active in workspace: %s", body)
 	}
-	if strings.Index(body, "notes/a-first.md") > strings.Index(body, "z-last.md") {
+	if strings.Index(body, "generated/notes/a-first.md") > strings.Index(body, "generated/z-last.md") {
 		t.Fatalf("expected tree memo ordering in workspace: %s", body)
 	}
 }
@@ -667,7 +667,7 @@ func TestWorkItemWorkspaceAgentPaneReflectsUpdatedMemoContent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveIssue returned error: %v", err)
 	}
-	memoPath := filepath.Join(vault.IssueMemosDir("issue-1"), "agent.md")
+	memoPath := filepath.Join(vault.WorkItemContextGeneratedDir("issue-1"), "agent.md")
 	writeWorkspaceMemo(t, memoPath, "# Agent Memo\n\nfirst pass", time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
 
 	server := newSourceWorkbenchServer(vault)
@@ -745,7 +745,7 @@ func TestWorkItemWorkspaceAssetUploadReturnsMarkdownLink(t *testing.T) {
 	if payload.Markdown != "![]("+payload.Path+")" {
 		t.Fatalf("payload.Markdown = %q, want markdown image link", payload.Markdown)
 	}
-	if _, err := os.Stat(filepath.Join(vault.IssueDir("issue-1"), filepath.FromSlash(payload.Path))); err != nil {
+	if _, err := os.Stat(filepath.Join(vault.WorkItemDir("issue-1"), filepath.FromSlash(payload.Path))); err != nil {
 		t.Fatalf("expected uploaded asset file to exist: %v", err)
 	}
 }
@@ -770,7 +770,7 @@ func TestWorkItemWorkspacePreviewRendersAssetImage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveIssue returned error: %v", err)
 	}
-	writeWorkspaceAsset(t, filepath.Join(vault.IssueDir("issue-1"), "assets", "diagram.png"), smallPNG())
+	writeWorkspaceAsset(t, filepath.Join(vault.WorkItemAssetsDir("issue-1"), "diagram.png"), smallPNG())
 
 	server := newSourceWorkbenchServer(vault)
 	form := url.Values{"body": []string{"# Issue\n\n![](assets/diagram.png)"}}
@@ -807,7 +807,7 @@ func TestWorkItemWorkspaceServesAssetFile(t *testing.T) {
 		t.Fatalf("SaveTask returned error: %v", err)
 	}
 	png := smallPNG()
-	writeWorkspaceAsset(t, filepath.Join(vault.TaskDir("task-1"), "assets", "diagram.png"), png)
+	writeWorkspaceAsset(t, filepath.Join(vault.WorkItemAssetsDir("task-1"), "diagram.png"), png)
 
 	server := newSourceWorkbenchServer(vault)
 	req := httptest.NewRequest(http.MethodGet, "/work-items/task-1/assets/diagram.png", nil)
@@ -854,7 +854,7 @@ func TestWorkItemWorkspaceSavesTaskMainDocument(t *testing.T) {
 	if location := res.Header().Get("Location"); location != "/work-items/task-1" {
 		t.Fatalf("save redirect location = %q", location)
 	}
-	task, err := readTaskDoc(vault.TaskMetaPath("task-1"))
+	task, err := readWorkDoc(vault.WorkItemMainPath("task-1"))
 	if err != nil {
 		t.Fatalf("readTaskDoc returned error: %v", err)
 	}
@@ -907,7 +907,7 @@ func TestWorkItemWorkspaceFetchSaveReturnsJSONWithoutRedirect(t *testing.T) {
 	if payload.Status != "saved work item document" {
 		t.Fatalf("payload.Status = %q, want saved message", payload.Status)
 	}
-	task, err := readTaskDoc(vault.TaskMetaPath("task-1"))
+	task, err := readWorkDoc(vault.WorkItemMainPath("task-1"))
 	if err != nil {
 		t.Fatalf("readTaskDoc returned error: %v", err)
 	}

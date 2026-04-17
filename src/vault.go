@@ -45,6 +45,12 @@ type InboxItem struct {
 	Body    string
 }
 
+type WorkDoc struct {
+	Metadata
+	Theme string
+	Body  string
+}
+
 type TaskDoc struct {
 	Metadata
 	Body string
@@ -90,10 +96,16 @@ type KnowledgeDoc struct {
 	Title string
 }
 
-type IssueAssetSummary struct {
-	ContextFiles int
-	MemoFiles    int
+type WorkItemAssetSummary struct {
+	ContextFiles   int
+	GeneratedFiles int
+	ManualFiles    int
+	MemoFiles      int
+	OutputFiles    int
+	AssetFiles     int
 }
+
+type IssueAssetSummary = WorkItemAssetSummary
 
 type ThemeAssetSummary struct {
 	SourceFiles  int
@@ -105,6 +117,7 @@ type VaultFS struct {
 }
 
 const (
+	entityWork  = "work"
 	entityInbox = "inbox"
 	entityTask  = "task"
 	entityIssue = "issue"
@@ -120,6 +133,10 @@ func (v VaultFS) RootDir() string {
 
 func (v VaultFS) InboxDir() string {
 	return filepath.Join(v.RootDir(), "inbox")
+}
+
+func (v VaultFS) WorkItemsDir() string {
+	return filepath.Join(v.RootDir(), "work-items")
 }
 
 func (v VaultFS) TasksDir() string {
@@ -160,6 +177,42 @@ func (v VaultFS) SourceImportedDir() string {
 
 func (v VaultFS) InboxPath(id string) string {
 	return v.resolveInboxPath(id)
+}
+
+func (v VaultFS) WorkItemFilePath(id string) string {
+	return v.resolveWorkItemFilePath(id)
+}
+
+func (v VaultFS) WorkItemDir(id string) string {
+	return v.resolveWorkItemDir(id)
+}
+
+func (v VaultFS) WorkItemMainPath(id string) string {
+	dir := v.WorkItemDir(id)
+	if dir != "" {
+		return filepath.Join(dir, "main.md")
+	}
+	return v.WorkItemFilePath(id)
+}
+
+func (v VaultFS) WorkItemContextDir(id string) string {
+	return filepath.Join(v.workItemDirPath(id), "context")
+}
+
+func (v VaultFS) WorkItemContextManualDir(id string) string {
+	return filepath.Join(v.WorkItemContextDir(id), "manual")
+}
+
+func (v VaultFS) WorkItemContextGeneratedDir(id string) string {
+	return filepath.Join(v.WorkItemContextDir(id), "generated")
+}
+
+func (v VaultFS) WorkItemAssetsDir(id string) string {
+	return filepath.Join(v.workItemDirPath(id), "assets")
+}
+
+func (v VaultFS) WorkItemOutputsDir(id string) string {
+	return filepath.Join(v.workItemDirPath(id), "outputs")
 }
 
 func (v VaultFS) TaskDir(id string) string {
@@ -208,6 +261,7 @@ func (v VaultFS) ThemeContextPath(themeID, name string) string {
 
 func (v VaultFS) EnsureLayout() error {
 	for _, dir := range []string{
+		v.WorkItemsDir(),
 		v.InboxDir(),
 		v.TasksDir(),
 		v.IssuesDir(),
@@ -225,6 +279,13 @@ func (v VaultFS) EnsureLayout() error {
 		return err
 	}
 	return nil
+}
+
+func (v VaultFS) workItemDirPath(id string) string {
+	if current := v.resolveWorkItemDir(id); current != "" {
+		return current
+	}
+	return filepath.Join(v.WorkItemsDir(), workItemDirName(id, ""))
 }
 
 func (v VaultFS) LoadInbox() ([]InboxItem, error) {
@@ -246,6 +307,38 @@ func (v VaultFS) LoadInbox() ([]InboxItem, error) {
 			return nil, err
 		}
 		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (v VaultFS) LoadWorkItems() ([]WorkDoc, error) {
+	items := []WorkDoc{}
+	entries, err := readDirSorted(v.WorkItemsDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return items, nil
+		}
+		return nil, err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(v.WorkItemsDir(), entry.Name())
+		switch {
+		case entry.IsDir():
+			item, err := readWorkDoc(filepath.Join(path, "main.md"))
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, err
+			}
+			items = append(items, item)
+		case filepath.Ext(entry.Name()) == ".md":
+			item, err := readWorkDoc(path)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+		}
 	}
 	return items, nil
 }
@@ -317,19 +410,39 @@ func (v VaultFS) LoadKnowledgeIndex() ([]KnowledgeDoc, error) {
 	return docs, nil
 }
 
-func (v VaultFS) SummarizeIssue(id string) (IssueAssetSummary, error) {
-	contextFiles, err := countFiles(v.IssueContextDir(id))
+func (v VaultFS) SummarizeWorkItem(id string) (WorkItemAssetSummary, error) {
+	contextFiles, err := countFiles(v.WorkItemContextDir(id))
 	if err != nil {
-		return IssueAssetSummary{}, err
+		return WorkItemAssetSummary{}, err
 	}
-	memoFiles, err := countFiles(v.IssueMemosDir(id))
+	manualFiles, err := countFiles(v.WorkItemContextManualDir(id))
 	if err != nil {
-		return IssueAssetSummary{}, err
+		return WorkItemAssetSummary{}, err
 	}
-	return IssueAssetSummary{
-		ContextFiles: contextFiles,
-		MemoFiles:    memoFiles,
+	generatedFiles, err := countFiles(v.WorkItemContextGeneratedDir(id))
+	if err != nil {
+		return WorkItemAssetSummary{}, err
+	}
+	outputFiles, err := countFiles(v.WorkItemOutputsDir(id))
+	if err != nil {
+		return WorkItemAssetSummary{}, err
+	}
+	assetFiles, err := countFiles(v.WorkItemAssetsDir(id))
+	if err != nil {
+		return WorkItemAssetSummary{}, err
+	}
+	return WorkItemAssetSummary{
+		ContextFiles:   contextFiles,
+		GeneratedFiles: generatedFiles,
+		ManualFiles:    manualFiles,
+		MemoFiles:      manualFiles + generatedFiles,
+		OutputFiles:    outputFiles,
+		AssetFiles:     assetFiles,
 	}, nil
+}
+
+func (v VaultFS) SummarizeIssue(id string) (IssueAssetSummary, error) {
+	return v.SummarizeWorkItem(id)
 }
 
 func (v VaultFS) SummarizeTheme(id string) (ThemeAssetSummary, error) {
@@ -359,40 +472,50 @@ func (v VaultFS) SaveInboxItem(item InboxItem) error {
 	return removeIfDifferent(current, path)
 }
 
+func (v VaultFS) SaveWorkItem(item WorkDoc) error {
+	item.Metadata = normalizeMetadata(item.Metadata)
+	item.Theme = strings.TrimSpace(item.Theme)
+	item.Body = normalizeMarkdown(item.Body)
+	if err := validateMetadata(item.Metadata); err != nil {
+		return err
+	}
+	if err := v.EnsureLayout(); err != nil {
+		return err
+	}
+	if err := v.movePromotedWorkItemDir(item.ID, item.Title); err != nil {
+		return err
+	}
+	if err := v.migrateLegacyWorkItem(item.ID, item.Title); err != nil {
+		return err
+	}
+	if v.shouldStorePromoted(item.ID) {
+		dir := v.preferredWorkItemDir(item.ID, item.Title)
+		if err := v.ensurePromotedWorkItemDir(item.ID, item.Title); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "main.md"), []byte(renderWorkDoc(item)), 0o644)
+	}
+	current := v.resolveWorkItemFilePath(item.ID)
+	path := v.preferredWorkItemFilePath(item.ID, item.Title)
+	if err := os.WriteFile(path, []byte(renderWorkDoc(item)), 0o644); err != nil {
+		return err
+	}
+	return removeIfDifferent(current, path)
+}
+
 func (v VaultFS) SaveTask(task TaskDoc) error {
-	task.Metadata = normalizeMetadata(task.Metadata)
-	if err := validateMetadata(task.Metadata); err != nil {
-		return err
-	}
-	taskDir := v.preferredEntityDir(v.TasksDir(), task.ID, task.Title)
-	if err := v.moveEntityDir(v.TasksDir(), task.ID, task.Title); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Join(taskDir, "memos"), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(taskDir, "task.md"), []byte(renderTaskDoc(task)), 0o644)
+	return v.SaveWorkItem(WorkDoc{
+		Metadata: task.Metadata,
+		Body:     task.Body,
+	})
 }
 
 func (v VaultFS) SaveIssue(issue IssueDoc) error {
-	issue.Metadata = normalizeMetadata(issue.Metadata)
-	issue.Theme = strings.TrimSpace(issue.Theme)
-	if err := validateMetadata(issue.Metadata); err != nil {
-		return err
-	}
-	issueDir := v.preferredEntityDir(v.IssuesDir(), issue.ID, issue.Title)
-	if err := v.moveEntityDir(v.IssuesDir(), issue.ID, issue.Title); err != nil {
-		return err
-	}
-	for _, dir := range []string{
-		filepath.Join(issueDir, "context"),
-		filepath.Join(issueDir, "memos"),
-	} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-	}
-	return os.WriteFile(filepath.Join(issueDir, "issue.md"), []byte(renderIssueDoc(issue)), 0o644)
+	return v.SaveWorkItem(WorkDoc{
+		Metadata: issue.Metadata,
+		Theme:    issue.Theme,
+		Body:     issue.Body,
+	})
 }
 
 func (v VaultFS) SaveTheme(theme ThemeDoc) error {
@@ -479,10 +602,10 @@ func (v VaultFS) WriteTaskMemo(id, name, content string) error {
 	if content == "" {
 		return nil
 	}
-	if err := os.MkdirAll(v.TaskMemosDir(id), 0o755); err != nil {
+	if err := os.MkdirAll(v.WorkItemContextManualDir(id), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(v.TaskMemosDir(id), ensureMarkdownName(name)), []byte(content+"\n"), 0o644)
+	return os.WriteFile(filepath.Join(v.WorkItemContextManualDir(id), ensureMarkdownName(name)), []byte(content+"\n"), 0o644)
 }
 
 func (v VaultFS) WriteIssueMemo(id, name, content string) error {
@@ -490,10 +613,10 @@ func (v VaultFS) WriteIssueMemo(id, name, content string) error {
 	if content == "" {
 		return nil
 	}
-	if err := os.MkdirAll(v.IssueMemosDir(id), 0o755); err != nil {
+	if err := os.MkdirAll(v.WorkItemContextGeneratedDir(id), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(v.IssueMemosDir(id), ensureMarkdownName(name)), []byte(content+"\n"), 0o644)
+	return os.WriteFile(filepath.Join(v.WorkItemContextGeneratedDir(id), ensureMarkdownName(name)), []byte(content+"\n"), 0o644)
 }
 
 func (v VaultFS) DeleteInboxItem(id string) error {
@@ -698,60 +821,45 @@ func validateInboxItem(item InboxItem) error {
 }
 
 func renderTaskDoc(task TaskDoc) string {
-	meta := renderYAMLMap([]yamlField{
-		{Key: "id", Value: task.ID},
-		{Key: "title", Value: task.Title},
-		{Key: "status", Value: task.Status},
-		{Key: "triage", Value: string(task.Triage)},
-		{Key: "stage", Value: string(task.Stage)},
-		{Key: "deferred_kind", Value: string(task.DeferredKind)},
-		{Key: "done_for_day_on", Value: task.DoneForDayOn},
-		{Key: "last_reviewed_on", Value: task.LastReviewedOn},
-		{Key: "scheduled_for", Value: task.ScheduledFor},
-		{Key: "recurring_every_days", Value: formatInt(task.RecurringEveryDays)},
-		{Key: "recurring_anchor", Value: task.RecurringAnchor},
-		{Key: "recurring_weekdays", List: task.RecurringWeekdays},
-		{Key: "recurring_weeks", List: task.RecurringWeeks},
-		{Key: "recurring_months", IntList: task.RecurringMonths},
-		{Key: "recurring_done_policy", Value: string(task.RecurringDonePolicy)},
-		{Key: "last_completed_on", Value: task.LastCompletedOn},
-		{Key: "created", Value: task.Created},
-		{Key: "updated", Value: task.Updated},
-		{Key: "tags", List: task.Tags},
-		{Key: "refs", List: task.Refs},
+	return renderWorkDoc(WorkDoc{
+		Metadata: task.Metadata,
+		Body:     task.Body,
 	})
-	return renderFrontmatterDoc(meta, task.Body)
+}
+
+func renderWorkDoc(item WorkDoc) string {
+	meta := renderYAMLMap([]yamlField{
+		{Key: "id", Value: item.ID},
+		{Key: "title", Value: item.Title},
+		{Key: "theme", Value: item.Theme},
+		{Key: "status", Value: item.Status},
+		{Key: "triage", Value: string(item.Triage)},
+		{Key: "stage", Value: string(item.Stage)},
+		{Key: "deferred_kind", Value: string(item.DeferredKind)},
+		{Key: "done_for_day_on", Value: item.DoneForDayOn},
+		{Key: "last_reviewed_on", Value: item.LastReviewedOn},
+		{Key: "scheduled_for", Value: item.ScheduledFor},
+		{Key: "recurring_every_days", Value: formatInt(item.RecurringEveryDays)},
+		{Key: "recurring_anchor", Value: item.RecurringAnchor},
+		{Key: "recurring_weekdays", List: item.RecurringWeekdays},
+		{Key: "recurring_weeks", List: item.RecurringWeeks},
+		{Key: "recurring_months", IntList: item.RecurringMonths},
+		{Key: "recurring_done_policy", Value: string(item.RecurringDonePolicy)},
+		{Key: "last_completed_on", Value: item.LastCompletedOn},
+		{Key: "created", Value: item.Created},
+		{Key: "updated", Value: item.Updated},
+		{Key: "tags", List: item.Tags},
+		{Key: "refs", List: item.Refs},
+	})
+	return renderFrontmatterDoc(meta, item.Body)
 }
 
 func renderIssueDoc(issue IssueDoc) string {
-	fields := []yamlField{
-		{Key: "id", Value: issue.ID},
-		{Key: "title", Value: issue.Title},
-	}
-	if issue.Theme != "" {
-		fields = append(fields, yamlField{Key: "theme", Value: issue.Theme})
-	}
-	fields = append(fields,
-		yamlField{Key: "status", Value: issue.Status},
-		yamlField{Key: "triage", Value: string(issue.Triage)},
-		yamlField{Key: "stage", Value: string(issue.Stage)},
-		yamlField{Key: "deferred_kind", Value: string(issue.DeferredKind)},
-		yamlField{Key: "done_for_day_on", Value: issue.DoneForDayOn},
-		yamlField{Key: "last_reviewed_on", Value: issue.LastReviewedOn},
-		yamlField{Key: "scheduled_for", Value: issue.ScheduledFor},
-		yamlField{Key: "recurring_every_days", Value: formatInt(issue.RecurringEveryDays)},
-		yamlField{Key: "recurring_anchor", Value: issue.RecurringAnchor},
-		yamlField{Key: "recurring_weekdays", List: issue.RecurringWeekdays},
-		yamlField{Key: "recurring_weeks", List: issue.RecurringWeeks},
-		yamlField{Key: "recurring_months", IntList: issue.RecurringMonths},
-		yamlField{Key: "recurring_done_policy", Value: string(issue.RecurringDonePolicy)},
-		yamlField{Key: "last_completed_on", Value: issue.LastCompletedOn},
-		yamlField{Key: "created", Value: issue.Created},
-		yamlField{Key: "updated", Value: issue.Updated},
-		yamlField{Key: "tags", List: issue.Tags},
-		yamlField{Key: "refs", List: issue.Refs},
-	)
-	return renderFrontmatterDoc(renderYAMLMap(fields), issue.Body)
+	return renderWorkDoc(WorkDoc{
+		Metadata: issue.Metadata,
+		Theme:    issue.Theme,
+		Body:     issue.Body,
+	})
 }
 
 func renderThemeDoc(theme ThemeDoc) string {
@@ -857,44 +965,19 @@ func escapeYAMLScalar(value string) string {
 }
 
 func readTaskDoc(path string) (TaskDoc, error) {
-	fields, body, err := parseMetadataDoc(path)
+	work, err := readWorkDoc(path)
 	if err != nil {
 		return TaskDoc{}, err
 	}
-	task := TaskDoc{
-		Metadata: Metadata{
-			ID:                  fields["id"],
-			Title:               fields["title"],
-			Status:              fields["status"],
-			Triage:              Triage(fields["triage"]),
-			Stage:               Stage(fields["stage"]),
-			DeferredKind:        DeferredKind(fields["deferred_kind"]),
-			DoneForDayOn:        fields["done_for_day_on"],
-			LastReviewedOn:      fields["last_reviewed_on"],
-			ScheduledFor:        fields["scheduled_for"],
-			RecurringEveryDays:  parseYAMLInt(fields["recurring_every_days"]),
-			RecurringAnchor:     fields["recurring_anchor"],
-			RecurringWeekdays:   parseYAMLList(fields["_recurring_weekdays"]),
-			RecurringWeeks:      parseYAMLList(fields["_recurring_weeks"]),
-			RecurringMonths:     parseYAMLIntList(fields["_recurring_months"]),
-			RecurringDonePolicy: DonePolicy(fields["recurring_done_policy"]),
-			LastCompletedOn:     fields["last_completed_on"],
-			Created:             fields["created"],
-			Updated:             fields["updated"],
-			Tags:                parseYAMLList(fields["_tags"]),
-			Refs:                parseYAMLList(fields["_refs"]),
-		},
-		Body: body,
-	}
-	return task, validateMetadata(normalizeMetadata(task.Metadata))
+	return TaskDoc{Metadata: work.Metadata, Body: work.Body}, nil
 }
 
-func readIssueDoc(path string) (IssueDoc, error) {
+func readWorkDoc(path string) (WorkDoc, error) {
 	fields, body, err := parseMetadataDoc(path)
 	if err != nil {
-		return IssueDoc{}, err
+		return WorkDoc{}, err
 	}
-	issue := IssueDoc{
+	item := WorkDoc{
 		Metadata: Metadata{
 			ID:                  fields["id"],
 			Title:               fields["title"],
@@ -920,10 +1003,18 @@ func readIssueDoc(path string) (IssueDoc, error) {
 		Theme: fields["theme"],
 		Body:  body,
 	}
-	issue.Metadata = normalizeMetadata(issue.Metadata)
-	issue.Theme = strings.TrimSpace(issue.Theme)
-	issue.Body = normalizeMarkdown(issue.Body)
-	return issue, validateMetadata(issue.Metadata)
+	item.Metadata = normalizeMetadata(item.Metadata)
+	item.Theme = strings.TrimSpace(item.Theme)
+	item.Body = normalizeMarkdown(item.Body)
+	return item, validateMetadata(item.Metadata)
+}
+
+func readIssueDoc(path string) (IssueDoc, error) {
+	work, err := readWorkDoc(path)
+	if err != nil {
+		return IssueDoc{}, err
+	}
+	return IssueDoc{Metadata: work.Metadata, Theme: work.Theme, Body: work.Body}, nil
 }
 
 func readThemeDoc(path string) (ThemeDoc, error) {
@@ -1230,6 +1321,14 @@ func (v VaultFS) preferredInboxPath(id, title string) string {
 	return filepath.Join(v.InboxDir(), sluggedMarkdownName(id, title))
 }
 
+func (v VaultFS) preferredWorkItemFilePath(id, title string) string {
+	return filepath.Join(v.WorkItemsDir(), sluggedMarkdownName(id, title))
+}
+
+func (v VaultFS) preferredWorkItemDir(id, title string) string {
+	return filepath.Join(v.WorkItemsDir(), sluggedDirName(id, title))
+}
+
 func (v VaultFS) resolveInboxPath(id string) string {
 	path := filepath.Join(v.InboxDir(), id+".md")
 	if _, err := os.Stat(path); err == nil {
@@ -1241,6 +1340,43 @@ func (v VaultFS) resolveInboxPath(id string) string {
 		return matches[0]
 	}
 	return path
+}
+
+func (v VaultFS) resolveWorkItemFilePath(id string) string {
+	path := filepath.Join(v.WorkItemsDir(), id+".md")
+	if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
+		return path
+	}
+	matches, err := filepath.Glob(filepath.Join(v.WorkItemsDir(), "*--"+id+".md"))
+	if err == nil && len(matches) > 0 {
+		slices.Sort(matches)
+		return matches[0]
+	}
+	return path
+}
+
+func (v VaultFS) resolveWorkItemDir(id string) string {
+	path := filepath.Join(v.WorkItemsDir(), id)
+	if stat, err := os.Stat(path); err == nil && stat.IsDir() {
+		return path
+	}
+	matches, err := filepath.Glob(filepath.Join(v.WorkItemsDir(), "*--"+id))
+	if err == nil && len(matches) > 0 {
+		slices.Sort(matches)
+		for _, match := range matches {
+			if stat, err := os.Stat(match); err == nil && stat.IsDir() {
+				return match
+			}
+		}
+	}
+	return ""
+}
+
+func (v VaultFS) resolveWorkItemMainPath(id string) string {
+	if dir := v.resolveWorkItemDir(id); dir != "" {
+		return filepath.Join(dir, "main.md")
+	}
+	return v.resolveWorkItemFilePath(id)
 }
 
 func (v VaultFS) preferredEntityDir(root, id, title string) string {
@@ -1283,6 +1419,123 @@ func (v VaultFS) moveEntityDir(root, id, title string) error {
 	return os.Rename(current, target)
 }
 
+func (v VaultFS) movePromotedWorkItemDir(id, title string) error {
+	if err := os.MkdirAll(v.WorkItemsDir(), 0o755); err != nil {
+		return err
+	}
+	current := v.resolveWorkItemDir(id)
+	if current == "" {
+		return nil
+	}
+	target := v.preferredWorkItemDir(id, title)
+	if current == target {
+		return nil
+	}
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(current, target)
+}
+
+func (v VaultFS) shouldStorePromoted(id string) bool {
+	if v.resolveWorkItemDir(id) != "" {
+		return true
+	}
+	for _, path := range []string{
+		v.TaskDir(id),
+		v.IssueDir(id),
+		v.WorkItemContextDir(id),
+		v.WorkItemAssetsDir(id),
+		v.WorkItemOutputsDir(id),
+	} {
+		if stat, err := os.Stat(path); err == nil && stat.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func (v VaultFS) ensurePromotedWorkItemDir(id, title string) error {
+	target := v.preferredWorkItemDir(id, title)
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	for _, dir := range []string{
+		filepath.Join(target, "context", "manual"),
+		filepath.Join(target, "context", "generated"),
+		filepath.Join(target, "assets"),
+		filepath.Join(target, "outputs"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	currentFile := v.resolveWorkItemFilePath(id)
+	if currentFile != "" && currentFile != filepath.Join(target, "main.md") {
+		if stat, err := os.Stat(currentFile); err == nil && !stat.IsDir() {
+			if err := os.Rename(currentFile, filepath.Join(target, "main.md")); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (v VaultFS) migrateLegacyWorkItem(id, title string) error {
+	if v.resolveWorkItemDir(id) != "" || fileExists(v.resolveWorkItemFilePath(id)) {
+		return nil
+	}
+	if legacy := v.resolveEntityDir(v.TasksDir(), id); dirExists(legacy) {
+		return v.migrateLegacyWorkItemDir(legacy, title, "task.md")
+	}
+	if legacy := v.resolveEntityDir(v.IssuesDir(), id); dirExists(legacy) {
+		return v.migrateLegacyWorkItemDir(legacy, title, "issue.md")
+	}
+	if legacy := v.resolveInboxPath(id); fileExists(legacy) {
+		target := v.preferredWorkItemFilePath(id, title)
+		if err := os.MkdirAll(v.WorkItemsDir(), 0o755); err != nil {
+			return err
+		}
+		if legacy != target {
+			return os.Rename(legacy, target)
+		}
+	}
+	return nil
+}
+
+func (v VaultFS) migrateLegacyWorkItemDir(legacyDir, title, metaName string) error {
+	id := entityIDFromName(filepath.Base(legacyDir))
+	target := v.preferredWorkItemDir(id, title)
+	if err := os.MkdirAll(v.WorkItemsDir(), 0o755); err != nil {
+		return err
+	}
+	if legacyDir != target {
+		if err := os.Rename(legacyDir, target); err != nil {
+			return err
+		}
+	} else if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	oldMain := filepath.Join(target, metaName)
+	newMain := filepath.Join(target, "main.md")
+	if oldMain != newMain && fileExists(oldMain) && !fileExists(newMain) {
+		if err := os.Rename(oldMain, newMain); err != nil {
+			return err
+		}
+	}
+	if legacyMemos := filepath.Join(target, "memos"); dirExists(legacyMemos) {
+		if err := moveDirContents(legacyMemos, filepath.Join(target, "context", "manual")); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(legacyMemos); err != nil {
+			return err
+		}
+	}
+	return os.MkdirAll(filepath.Join(target, "context", "generated"), 0o755)
+}
+
 func removeIfDifferent(current, target string) error {
 	if current == target {
 		return nil
@@ -1296,8 +1549,52 @@ func removeIfDifferent(current, target string) error {
 	return os.Remove(current)
 }
 
+func fileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	stat, err := os.Stat(path)
+	return err == nil && !stat.IsDir()
+}
+
+func dirExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	stat, err := os.Stat(path)
+	return err == nil && stat.IsDir()
+}
+
+func moveDirContents(src, dst string) error {
+	if !dirExists(src) {
+		return nil
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		from := filepath.Join(src, entry.Name())
+		to := filepath.Join(dst, entry.Name())
+		if _, err := os.Stat(to); err == nil {
+			continue
+		}
+		if err := os.Rename(from, to); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func sluggedMarkdownName(id, title string) string {
 	return sluggedBaseName(id, title) + ".md"
+}
+
+func workItemDirName(id, title string) string {
+	return sluggedDirName(id, title)
 }
 
 func sluggedDirName(id, title string) string {
@@ -1347,6 +1644,10 @@ func ensureMarkdownName(name string) string {
 }
 
 func LoadVaultState(vault VaultFS) (State, error) {
+	workItems, err := vault.LoadWorkItems()
+	if err != nil {
+		return State{}, err
+	}
 	inbox, err := vault.LoadInbox()
 	if err != nil {
 		return State{}, err
@@ -1361,22 +1662,43 @@ func LoadVaultState(vault VaultFS) (State, error) {
 	}
 
 	state := State{}
+	seen := map[string]struct{}{}
+	for _, doc := range workItems {
+		item, err := itemFromWorkDoc(vault, doc)
+		if err != nil {
+			return State{}, err
+		}
+		state.Items = append(state.Items, item)
+		seen[item.ID] = struct{}{}
+	}
 	for _, item := range inbox {
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
 		state.Items = append(state.Items, itemFromInbox(vault, item))
+		seen[item.ID] = struct{}{}
 	}
 	for _, task := range tasks {
+		if _, ok := seen[task.ID]; ok {
+			continue
+		}
 		item, err := itemFromTaskDoc(vault, task)
 		if err != nil {
 			return State{}, err
 		}
 		state.Items = append(state.Items, item)
+		seen[item.ID] = struct{}{}
 	}
 	for _, issue := range issues {
+		if _, ok := seen[issue.ID]; ok {
+			continue
+		}
 		item, err := itemFromIssueDoc(vault, issue)
 		if err != nil {
 			return State{}, err
 		}
 		state.Items = append(state.Items, item)
+		seen[item.ID] = struct{}{}
 	}
 	state.Sort()
 	return state, nil
@@ -1386,7 +1708,7 @@ func itemFromInbox(vault VaultFS, inbox InboxItem) Item {
 	item := NewInboxItem(parseDateFallback(inbox.Created), inbox.Title)
 	item.ID = inbox.ID
 	item.Theme = ""
-	item.EntityType = entityInbox
+	item.EntityType = entityWork
 	item.Refs = nil
 	item.CreatedAt = normalizeRFC3339FromDate(inbox.Created)
 	item.UpdatedAt = normalizeRFC3339FromDate(inbox.Updated)
@@ -1399,36 +1721,42 @@ func itemFromInbox(vault VaultFS, inbox InboxItem) Item {
 	return item
 }
 
-func itemFromTaskDoc(vault VaultFS, task TaskDoc) (Item, error) {
-	item := itemFromMetadata(task.Metadata, entityTask)
-	item.EntityType = entityTask
-	item.NoteMarkdown = task.Body
-	memos, err := loadMarkdownSnippets(vault.TaskMemosDir(task.ID))
+func itemFromWorkDoc(vault VaultFS, doc WorkDoc) (Item, error) {
+	item := itemFromMetadata(doc.Metadata, entityWork)
+	item.Theme = doc.Theme
+	item.EntityType = entityWork
+	item.NoteMarkdown = doc.Body
+	manual, err := loadMarkdownSnippets(vault.WorkItemContextManualDir(doc.ID))
 	if err != nil {
 		return Item{}, err
 	}
-	item.Notes = append([]string(nil), memos...)
-	item.NoteTailMarkdown = strings.Join(memos, "\n\n---\n\n")
+	generated, err := loadMarkdownSnippets(vault.WorkItemContextGeneratedDir(doc.ID))
+	if err != nil {
+		return Item{}, err
+	}
+	contexts, err := loadMarkdownSnippets(vault.WorkItemContextDir(doc.ID))
+	if err != nil {
+		return Item{}, err
+	}
+	item.Notes = append([]string(nil), manual...)
+	item.ContextNotes = append(append([]string(nil), contexts...), generated...)
+	item.NoteTailMarkdown = strings.Join(append(append([]string(nil), manual...), generated...), "\n\n---\n\n")
 	return item, nil
 }
 
+func itemFromTaskDoc(vault VaultFS, task TaskDoc) (Item, error) {
+	return itemFromWorkDoc(vault, WorkDoc{
+		Metadata: task.Metadata,
+		Body:     task.Body,
+	})
+}
+
 func itemFromIssueDoc(vault VaultFS, issue IssueDoc) (Item, error) {
-	item := itemFromMetadata(issue.Metadata, entityIssue)
-	item.Theme = issue.Theme
-	item.EntityType = entityIssue
-	item.NoteMarkdown = issue.Body
-	memos, err := loadMarkdownSnippets(vault.IssueMemosDir(issue.ID))
-	if err != nil {
-		return Item{}, err
-	}
-	contexts, err := loadMarkdownSnippets(vault.IssueContextDir(issue.ID))
-	if err != nil {
-		return Item{}, err
-	}
-	item.Notes = append([]string(nil), memos...)
-	item.ContextNotes = append([]string(nil), contexts...)
-	item.NoteTailMarkdown = strings.Join(memos, "\n\n---\n\n")
-	return item, nil
+	return itemFromWorkDoc(vault, WorkDoc{
+		Metadata: issue.Metadata,
+		Theme:    issue.Theme,
+		Body:     issue.Body,
+	})
 }
 
 func itemFromMetadata(meta Metadata, entityType string) Item {
@@ -1518,64 +1846,35 @@ func SaveVaultState(vault VaultFS, state State) error {
 	if err := vault.EnsureLayout(); err != nil {
 		return err
 	}
-	keepInbox := map[string]struct{}{}
-	keepTasks := map[string]struct{}{}
-	keepIssues := map[string]struct{}{}
+	keepWorkItems := map[string]struct{}{}
 
 	for _, item := range state.Items {
-		entity := normalizeEntityForSave(item)
-		switch entity {
-		case entityInbox:
-			keepInbox[item.ID] = struct{}{}
-			if err := vault.SaveInboxItem(inboxFromItem(item)); err != nil {
-				return err
-			}
-		case entityTask:
-			keepTasks[item.ID] = struct{}{}
-			if err := vault.SaveTask(taskFromItem(item)); err != nil {
-				return err
-			}
-			if err := maybeWriteCapturedTaskMemo(vault, item); err != nil {
-				return err
-			}
-		case entityIssue:
-			keepIssues[item.ID] = struct{}{}
-			if err := vault.SaveIssue(issueFromItem(item)); err != nil {
-				return err
-			}
-			if err := maybeWriteCapturedIssueMemo(vault, item); err != nil {
-				return err
-			}
+		keepWorkItems[item.ID] = struct{}{}
+		if err := vault.SaveWorkItem(workDocFromItem(item)); err != nil {
+			return err
+		}
+		if err := maybeWriteCapturedContext(vault, item); err != nil {
+			return err
 		}
 	}
 
-	if err := removeMissingInboxItems(vault, keepInbox); err != nil {
+	if err := removeMissingWorkItems(vault, keepWorkItems); err != nil {
 		return err
 	}
-	if err := removeMissingDirs(vault.TasksDir(), keepTasks); err != nil {
+	if err := removeMissingInboxItems(vault, map[string]struct{}{}); err != nil {
 		return err
 	}
-	if err := removeMissingDirs(vault.IssuesDir(), keepIssues); err != nil {
+	if err := removeMissingDirs(vault.TasksDir(), map[string]struct{}{}); err != nil {
+		return err
+	}
+	if err := removeMissingDirs(vault.IssuesDir(), map[string]struct{}{}); err != nil {
 		return err
 	}
 	return nil
 }
 
 func normalizeEntityForSave(item Item) string {
-	switch item.EntityType {
-	case entityTask, entityIssue:
-		return item.EntityType
-	case entityInbox:
-		if item.Triage == TriageInbox {
-			return entityInbox
-		}
-		return entityTask
-	default:
-		if item.Triage == TriageInbox {
-			return entityInbox
-		}
-		return entityTask
-	}
+	return entityWork
 }
 
 func inboxFromItem(item Item) InboxItem {
@@ -1589,34 +1888,21 @@ func inboxFromItem(item Item) InboxItem {
 }
 
 func taskFromItem(item Item) TaskDoc {
-	return TaskDoc{
-		Metadata: Metadata{
-			ID:                  item.ID,
-			Title:               item.Title,
-			Status:              item.Status,
-			Triage:              item.Triage,
-			Stage:               item.Stage,
-			DeferredKind:        item.DeferredKind,
-			DoneForDayOn:        item.DoneForDayOn,
-			LastReviewedOn:      item.LastReviewedOn,
-			ScheduledFor:        item.ScheduledFor,
-			RecurringEveryDays:  item.RecurringEveryDays,
-			RecurringAnchor:     item.RecurringAnchor,
-			RecurringWeekdays:   append([]string(nil), item.RecurringWeekdays...),
-			RecurringWeeks:      append([]string(nil), item.RecurringWeeks...),
-			RecurringMonths:     append([]int(nil), item.RecurringMonths...),
-			RecurringDonePolicy: item.RecurringDonePolicy,
-			LastCompletedOn:     item.LastCompletedOn,
-			Created:             vaultDate(item.CreatedAt),
-			Updated:             vaultDate(item.UpdatedAt),
-			Refs:                append([]string(nil), item.Refs...),
-		},
-		Body: noteBodyFromItem(item),
-	}
+	work := workDocFromItem(item)
+	return TaskDoc{Metadata: work.Metadata, Body: work.Body}
 }
 
 func issueFromItem(item Item) IssueDoc {
+	work := workDocFromItem(item)
 	return IssueDoc{
+		Metadata: work.Metadata,
+		Theme:    work.Theme,
+		Body:     work.Body,
+	}
+}
+
+func workDocFromItem(item Item) WorkDoc {
+	return WorkDoc{
 		Metadata: Metadata{
 			ID:                  item.ID,
 			Title:               item.Title,
@@ -1668,32 +1954,21 @@ func itemHasCapturedMemo(item Item) bool {
 	return strings.TrimSpace(item.NoteTailMarkdown) != ""
 }
 
-func maybeWriteCapturedTaskMemo(vault VaultFS, item Item) error {
+func maybeWriteCapturedContext(vault VaultFS, item Item) error {
 	if !itemHasCapturedMemo(item) {
 		return nil
 	}
-	existing, err := loadMarkdownSnippets(vault.TaskMemosDir(item.ID))
+	existing, err := loadMarkdownSnippets(vault.WorkItemContextManualDir(item.ID))
 	if err != nil {
 		return err
 	}
 	if len(existing) > 0 {
 		return nil
 	}
-	return vault.WriteTaskMemo(item.ID, "captured", item.NoteTailMarkdown)
-}
-
-func maybeWriteCapturedIssueMemo(vault VaultFS, item Item) error {
-	if !itemHasCapturedMemo(item) {
-		return nil
-	}
-	existing, err := loadMarkdownSnippets(vault.IssueMemosDir(item.ID))
-	if err != nil {
+	if err := os.MkdirAll(vault.WorkItemContextManualDir(item.ID), 0o755); err != nil {
 		return err
 	}
-	if len(existing) > 0 {
-		return nil
-	}
-	return vault.WriteIssueMemo(item.ID, "captured", item.NoteTailMarkdown)
+	return os.WriteFile(filepath.Join(vault.WorkItemContextManualDir(item.ID), "captured.md"), []byte(strings.TrimSpace(item.NoteTailMarkdown)+"\n"), 0o644)
 }
 
 func removeMissingInboxItems(vault VaultFS, keep map[string]struct{}) error {
@@ -1713,6 +1988,26 @@ func removeMissingInboxItems(vault VaultFS, keep map[string]struct{}) error {
 			continue
 		}
 		if err := os.Remove(filepath.Join(vault.InboxDir(), entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeMissingWorkItems(vault VaultFS, keep map[string]struct{}) error {
+	entries, err := readDirSorted(vault.WorkItemsDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		id := entityIDFromName(strings.TrimSuffix(entry.Name(), ".md"))
+		if _, ok := keep[id]; ok {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(vault.WorkItemsDir(), entry.Name())); err != nil {
 			return err
 		}
 	}

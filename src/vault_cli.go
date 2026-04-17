@@ -265,11 +265,6 @@ func runVaultGet(args []string) int {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			return 1
 		}
-		want := target
-		if item.EntityType != want {
-			fmt.Fprintf(os.Stderr, "item %s is %s, not %s\n", id, item.EntityType, want)
-			return 1
-		}
 		return printJSON(item)
 	case "theme":
 		themes, err := vault.LoadThemes()
@@ -439,10 +434,6 @@ func runVaultUpdateItem(args []string) int {
 	if *clearTheme {
 		item.Theme = ""
 	} else if isFlagProvided(fs, "theme") {
-		if item.EntityType != entityIssue && strings.TrimSpace(*theme) != "" {
-			fmt.Fprintln(os.Stderr, "theme can only be set on issues")
-			return 1
-		}
 		item.Theme = strings.TrimSpace(*theme)
 	}
 	item.LastReviewedOn = dateKey(now)
@@ -711,12 +702,10 @@ func runVaultConvert(args []string) int {
 	}
 
 	switch strings.TrimSpace(*target) {
-	case "task":
-		item.EntityType = entityTask
+	case "", "task":
 		item.Theme = ""
 		item.MoveTo(now, TriageStock, parsedStage, "")
 	case "issue":
-		item.EntityType = entityIssue
 		item.Theme = strings.TrimSpace(*theme)
 		item.MoveTo(now, TriageStock, parsedStage, "")
 	default:
@@ -766,11 +755,12 @@ func runVaultAddInbox(args []string) int {
 		return 1
 	}
 	now := todayLocal()
-	item := NewInboxCapture(now, *title, *body, splitCSV(*tags))
-	item.ID = newID()
+	item := workDocFromItem(NewInboxItem(now, *title))
+	item.Tags = splitCSV(*tags)
+	item.Body = strings.TrimSpace(*body)
 	vault := NewVault(root)
-	if err := vault.SaveInboxItem(item); err != nil {
-		fmt.Fprintf(os.Stderr, "save inbox item: %v\n", err)
+	if err := vault.SaveWorkItem(item); err != nil {
+		fmt.Fprintf(os.Stderr, "save work item: %v\n", err)
 		return 1
 	}
 	return printJSON(item)
@@ -809,7 +799,7 @@ func runVaultAddTask(args []string) int {
 		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
 		return 1
 	}
-	task := TaskDoc{
+	task := WorkDoc{
 		Metadata: Metadata{
 			ID:           newID(),
 			Title:        strings.TrimSpace(*title),
@@ -824,8 +814,8 @@ func runVaultAddTask(args []string) int {
 		},
 	}
 	vault := NewVault(*dataDir)
-	if err := vault.SaveTask(task); err != nil {
-		fmt.Fprintf(os.Stderr, "save task: %v\n", err)
+	if err := vault.SaveWorkItem(task); err != nil {
+		fmt.Fprintf(os.Stderr, "save work item: %v\n", err)
 		return 1
 	}
 	return printJSON(task)
@@ -865,7 +855,7 @@ func runVaultAddIssue(args []string) int {
 		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
 		return 1
 	}
-	issue := IssueDoc{
+	issue := WorkDoc{
 		Metadata: Metadata{
 			ID:           newID(),
 			Title:        strings.TrimSpace(*title),
@@ -881,8 +871,8 @@ func runVaultAddIssue(args []string) int {
 		Theme: strings.TrimSpace(*theme),
 	}
 	vault := NewVault(*dataDir)
-	if err := vault.SaveIssue(issue); err != nil {
-		fmt.Fprintf(os.Stderr, "save issue: %v\n", err)
+	if err := vault.SaveWorkItem(issue); err != nil {
+		fmt.Fprintf(os.Stderr, "save work item: %v\n", err)
 		return 1
 	}
 	return printJSON(issue)

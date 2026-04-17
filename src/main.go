@@ -16,6 +16,14 @@ import (
 )
 
 func Run(args []string) int {
+	if len(args) > 1 && strings.HasPrefix(strings.TrimSpace(args[1]), "-") {
+		for _, arg := range args[1:] {
+			if strings.TrimSpace(arg) == "--seed-demo" {
+				seedArgs := append([]string{args[0], "ui"}, args[1:]...)
+				return runUICommand(seedArgs)
+			}
+		}
+	}
 	switch commandArg(args, 1) {
 	case "":
 		printTopLevelHelp(args)
@@ -51,7 +59,7 @@ func topLevelHelp(args []string) commandHelp {
 		Description: "Run the workbench TUI or use subcommands to inspect and manage vault-backed data.",
 		Commands: []helpCommand{
 			{Name: "ui", Summary: "Launch the workbench TUI."},
-			{Name: "vault", Summary: "Manage inbox captures, tasks, issues, themes, and sources."},
+			{Name: "vault", Summary: "Manage work items, themes, and sources."},
 			{Name: "config", Summary: "Show or update persisted CLI configuration."},
 			{Name: "web", Summary: "Serve the source inbox web UI."},
 		},
@@ -126,7 +134,7 @@ func runUICommand(args []string) int {
 		}
 		return summary
 	}
-	app.status = "Inbox, tasks, issues, and themes are backed by vault/."
+	app.status = "Work items and themes are backed by vault/."
 
 	program := tea.NewProgram(app, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
