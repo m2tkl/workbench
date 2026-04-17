@@ -552,7 +552,7 @@ func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, query, status, er
 func webWorkbenchItemFromItem(item Item, now time.Time, returnTo, returnLabel string) webWorkbenchItem {
 	moveOptions := []webWorkbenchMoveOption{
 		{Value: "inbox", Label: "Inbox", Selected: item.Triage == TriageInbox},
-		{Value: "now", Label: "Focus", Selected: item.Triage == TriageStock && item.Stage == StageNow},
+		{Value: "now", Label: "Now", Selected: item.Triage == TriageStock && item.Stage == StageNow},
 		{Value: "next", Label: "Next", Selected: item.Triage == TriageStock && item.Stage == StageNext},
 		{Value: "later", Label: "Later", Selected: item.Triage == TriageStock && item.Stage == StageLater},
 	}
