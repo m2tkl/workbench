@@ -209,6 +209,10 @@ const (
 type sourceWorkbenchPage struct {
 	WorkbenchHref   string
 	SourcesHref     string
+	HeaderTitle     string
+	TitleNav        []sourceWorkbenchNavItem
+	HeaderNav       []sourceWorkbenchNavItem
+	Breadcrumbs     []sourceWorkbenchNavItem
 	CaptureAction   string
 	CaptureReturn   string
 	ActiveView      string
@@ -231,6 +235,10 @@ type sourceWorkbenchPage struct {
 type webWorkbenchPage struct {
 	WorkbenchHref string
 	SourcesHref   string
+	HeaderTitle   string
+	TitleNav      []sourceWorkbenchNavItem
+	HeaderNav     []sourceWorkbenchNavItem
+	Breadcrumbs   []sourceWorkbenchNavItem
 	AddAction     string
 	Query         string
 	Nav           string
@@ -258,22 +266,22 @@ type webWorkbenchNavEntry struct {
 }
 
 type webWorkbenchItem struct {
-	ID                   string
-	Title                string
-	Theme                string
-	Summary              string
-	WorkspaceHref        string
-	MoveAction           string
-	DoneForDayAction     string
-	CompleteAction       string
-	ReopenAction         string
-	MoveOptions          []webWorkbenchMoveOption
-	CanMove              bool
-	CanDoneForDay        bool
-	CanComplete          bool
-	CanReopen            bool
-	CanReopenComplete    bool
-	CanReopenDoneForDay  bool
+	ID                  string
+	Title               string
+	Theme               string
+	Summary             string
+	WorkspaceHref       string
+	MoveAction          string
+	DoneForDayAction    string
+	CompleteAction      string
+	ReopenAction        string
+	MoveOptions         []webWorkbenchMoveOption
+	CanMove             bool
+	CanDoneForDay       bool
+	CanComplete         bool
+	CanReopen           bool
+	CanReopenComplete   bool
+	CanReopenDoneForDay bool
 }
 
 type webWorkbenchMoveOption struct {
@@ -305,6 +313,10 @@ type workItemWorkspacePage struct {
 	Title               string
 	WorkbenchHref       string
 	SourcesHref         string
+	HeaderTitle         string
+	TitleNav            []sourceWorkbenchNavItem
+	HeaderNav           []sourceWorkbenchNavItem
+	Breadcrumbs         []sourceWorkbenchNavItem
 	CaptureAction       string
 	CaptureReturn       string
 	EntityType          string
@@ -343,9 +355,11 @@ type workItemSaveResponse struct {
 }
 
 type workItemRequestState struct {
-	MemoMode  workItemMemoMode
-	MemoKey   string
-	SourceKey string
+	MemoMode    workItemMemoMode
+	MemoKey     string
+	SourceKey   string
+	ReturnTo    string
+	ReturnLabel string
 }
 
 func newSourceWorkbenchServer(vault VaultFS) *sourceWorkbenchServer {
@@ -423,8 +437,15 @@ func (s *sourceWorkbenchServer) handleSourceIndex(w http.ResponseWriter, r *http
 		return
 	}
 	page := sourceWorkbenchPage{
-		WorkbenchHref:   buildWorkbenchHref("", "", "", ""),
-		SourcesHref:     buildSourceWorkbenchHref(activeView, "", ""),
+		WorkbenchHref: buildWorkbenchHref("", "", "", ""),
+		SourcesHref:   buildSourceWorkbenchHref(activeView, "", ""),
+		HeaderTitle:   "Sources",
+		TitleNav: []sourceWorkbenchNavItem{{
+			Label:  "Sources",
+			Active: true,
+		}},
+		HeaderNav:       buildGlobalHeaderNav("sources"),
+		Breadcrumbs:     buildSourceBreadcrumbs(activeView),
 		CaptureAction:   "/workbench/add",
 		CaptureReturn:   buildSourceWorkbenchHref(activeView, "", ""),
 		ActiveView:      string(activeView),
@@ -498,6 +519,14 @@ func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, query, status, er
 	page := webWorkbenchPage{
 		WorkbenchHref: buildWorkbenchHref(selectedNav, "", "", ""),
 		SourcesHref:   buildSourceWorkbenchHref(sourceWorkbenchViewPaste, "", ""),
+		HeaderTitle:   "Workbench",
+		TitleNav: []sourceWorkbenchNavItem{{
+			Label:  "Workbench",
+			Href:   buildWorkbenchHref(selectedNav, query, "", ""),
+			Active: true,
+		}},
+		HeaderNav:     buildGlobalHeaderNav("workbench"),
+		Breadcrumbs:   nil,
 		AddAction:     "/workbench/add",
 		Query:         strings.TrimSpace(query),
 		Nav:           selectedNav,
@@ -511,43 +540,33 @@ func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, query, status, er
 		Items:         make([]webWorkbenchItem, 0, len(items)),
 	}
 	now := time.Now()
+	returnTo := buildWorkbenchHref(selectedNav, query, "", "")
 	for _, ref := range items {
-		page.Items = append(page.Items, webWorkbenchItemFromItem(ref.item, now))
+		page.Items = append(page.Items, webWorkbenchItemFromItem(ref.item, now, returnTo, currentTitle))
 	}
 	return page, nil
 }
 
-func webWorkbenchItemFromItem(item Item, now time.Time) webWorkbenchItem {
+func webWorkbenchItemFromItem(item Item, now time.Time, returnTo, returnLabel string) webWorkbenchItem {
 	moveOptions := []webWorkbenchMoveOption{
 		{Value: "inbox", Label: "Inbox", Selected: item.Triage == TriageInbox},
 		{Value: "now", Label: "Focus", Selected: item.Triage == TriageStock && item.Stage == StageNow},
 		{Value: "next", Label: "Next", Selected: item.Triage == TriageStock && item.Stage == StageNext},
 		{Value: "later", Label: "Later", Selected: item.Triage == TriageStock && item.Stage == StageLater},
 	}
-	summaryParts := []string{item.ID}
+	summaryParts := []string{}
 	switch {
-	case item.Status == "done":
-		summaryParts = append(summaryParts, "complete")
-	case item.IsClosedForToday(now):
-		summaryParts = append(summaryParts, "done for day")
-	case item.Triage == TriageInbox:
-		summaryParts = append(summaryParts, "inbox")
-	case item.Triage == TriageStock && item.Stage != "":
-		summaryParts = append(summaryParts, string(item.Stage))
 	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled && item.ScheduledFor != "":
 		summaryParts = append(summaryParts, "scheduled "+item.ScheduledFor)
 	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring:
 		summaryParts = append(summaryParts, "recurring")
-	}
-	if item.Theme != "" {
-		summaryParts = append(summaryParts, "theme:"+item.Theme)
 	}
 	return webWorkbenchItem{
 		ID:                  item.ID,
 		Title:               item.Title,
 		Theme:               item.Theme,
 		Summary:             strings.Join(summaryParts, " · "),
-		WorkspaceHref:       buildWorkItemWorkspaceHref(item.ID, workItemMemoModeRecent, "", ""),
+		WorkspaceHref:       buildWorkItemWorkspaceHref(item.ID, workItemMemoModeRecent, "", "", returnTo, returnLabel),
 		MoveAction:          "/workbench/items/" + url.PathEscape(item.ID) + "/move",
 		DoneForDayAction:    "/workbench/items/" + url.PathEscape(item.ID) + "/done-for-day",
 		CompleteAction:      "/workbench/items/" + url.PathEscape(item.ID) + "/complete",
@@ -952,7 +971,7 @@ func (s *sourceWorkbenchServer) handleWorkItemSave(w http.ResponseWriter, r *htt
 			respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: fmt.Sprintf("workspace form parse failed: %v", err)})
 			return
 		}
-		s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey)
+		s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey, state.ReturnTo, state.ReturnLabel)
 		return
 	}
 	body := r.FormValue("body")
@@ -966,14 +985,14 @@ func (s *sourceWorkbenchServer) handleWorkItemSave(w http.ResponseWriter, r *htt
 			respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: err.Error()})
 			return
 		}
-		s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey)
+		s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey, state.ReturnTo, state.ReturnLabel)
 		return
 	}
 	if isFetchRequest(r) {
 		respondJSON(w, http.StatusOK, workItemSaveResponse{Status: "saved work item document"})
 		return
 	}
-	s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey)
+	s.redirectToWorkItem(w, r, id, state.MemoMode, state.MemoKey, state.SourceKey, state.ReturnTo, state.ReturnLabel)
 }
 
 func (s *sourceWorkbenchServer) handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -1225,8 +1244,8 @@ func (s *sourceWorkbenchServer) redirectWithMessage(w http.ResponseWriter, r *ht
 	http.Redirect(w, r, buildSourceWorkbenchHref(view, status, errMsg), http.StatusSeeOther)
 }
 
-func (s *sourceWorkbenchServer) redirectToWorkItem(w http.ResponseWriter, r *http.Request, id string, memoMode workItemMemoMode, memoKey, sourceKey string) {
-	http.Redirect(w, r, buildWorkItemWorkspaceHref(id, memoMode, memoKey, sourceKey), http.StatusSeeOther)
+func (s *sourceWorkbenchServer) redirectToWorkItem(w http.ResponseWriter, r *http.Request, id string, memoMode workItemMemoMode, memoKey, sourceKey, returnTo, returnLabel string) {
+	http.Redirect(w, r, buildWorkItemWorkspaceHref(id, memoMode, memoKey, sourceKey, returnTo, returnLabel), http.StatusSeeOther)
 }
 
 func buildWorkbenchHref(nav, query, status, errMsg string) string {
@@ -1261,24 +1280,75 @@ func buildSourceWorkbenchHref(view sourceWorkbenchView, status, errMsg string) s
 	return "/sources?" + values.Encode()
 }
 
-func captureReturnHref(raw, nav, query string) string {
+func safeLocalReturnPath(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return buildWorkbenchHref(nav, query, "added work item", "")
+		return ""
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return buildWorkbenchHref(nav, query, "added work item", "")
+		return ""
 	}
 	if parsed.IsAbs() || parsed.Host != "" || !strings.HasPrefix(parsed.Path, "/") || strings.HasPrefix(raw, "//") {
-		return buildWorkbenchHref(nav, query, "added work item", "")
+		return ""
 	}
 	return parsed.RequestURI()
 }
 
+func captureReturnHref(raw, nav, query string) string {
+	if safe := safeLocalReturnPath(raw); safe != "" {
+		return safe
+	}
+	return buildWorkbenchHref(nav, query, "added work item", "")
+}
+
+func buildGlobalHeaderNav(active string) []sourceWorkbenchNavItem {
+	return []sourceWorkbenchNavItem{
+		{Label: "Workbench", Href: buildWorkbenchHref("", "", "", ""), Active: active == "workbench"},
+		{Label: "Sources", Href: buildSourceWorkbenchHref(sourceWorkbenchViewPaste, "", ""), Active: active == "sources"},
+	}
+}
+
+func buildSourceBreadcrumbs(activeView sourceWorkbenchView) []sourceWorkbenchNavItem {
+	label := "Sources"
+	for _, item := range sourceWorkbenchNav(activeView, 0, 0) {
+		if item.Active {
+			label = item.Label
+			break
+		}
+	}
+	return []sourceWorkbenchNavItem{
+		{Label: "Sources", Href: buildSourceWorkbenchHref(sourceWorkbenchViewPaste, "", ""), Active: false},
+		{Label: label, Active: true},
+	}
+}
+
+func defaultWorkspaceBackLink(raw, label string) sourceWorkbenchNavItem {
+	if safe := safeLocalReturnPath(raw); safe != "" {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			switch {
+			case strings.HasPrefix(safe, "/sources"):
+				label = "Sources"
+			default:
+				label = "Workbench"
+			}
+		}
+		return sourceWorkbenchNavItem{Label: label, Href: safe}
+	}
+	return sourceWorkbenchNavItem{Label: "Workbench", Href: buildWorkbenchHref("", "", "", "")}
+}
+
+func workspaceTitleRoot(returnTo string) string {
+	if strings.HasPrefix(strings.TrimSpace(returnTo), "/sources") {
+		return "Sources"
+	}
+	return "Workbench"
+}
+
 func (s *sourceWorkbenchServer) loadWorkItemWorkspaceForRequest(w http.ResponseWriter, r *http.Request, id string) (workItemWorkspacePage, bool) {
 	state := workItemRequestStateFromRequest(r)
-	page, err := s.loadWorkItemWorkspace(id, state.MemoMode, state.MemoKey, state.SourceKey)
+	page, err := s.loadWorkItemWorkspace(id, state.MemoMode, state.MemoKey, state.SourceKey, state.ReturnTo, state.ReturnLabel)
 	if err != nil {
 		respondWorkItemLoadError(w, r, err)
 		return workItemWorkspacePage{}, false
@@ -1286,7 +1356,7 @@ func (s *sourceWorkbenchServer) loadWorkItemWorkspaceForRequest(w http.ResponseW
 	return page, true
 }
 
-func (s *sourceWorkbenchServer) loadWorkItemWorkspace(id string, memoMode workItemMemoMode, selectedMemo, selectedSource string) (workItemWorkspacePage, error) {
+func (s *sourceWorkbenchServer) loadWorkItemWorkspace(id string, memoMode workItemMemoMode, selectedMemo, selectedSource, returnTo, returnLabel string) (workItemWorkspacePage, error) {
 	item, err := s.loadWorkItem(strings.TrimSpace(id))
 	if err != nil {
 		return workItemWorkspacePage{}, err
@@ -1309,13 +1379,25 @@ func (s *sourceWorkbenchServer) loadWorkItemWorkspace(id string, memoMode workIt
 	}
 	selectedMemoDoc := selectWorkspaceFile(memos, selectedMemo)
 	selectedSourceDoc := selectWorkspaceFile(sources, selectedSource)
+	backLink := defaultWorkspaceBackLink(returnTo, returnLabel)
+	titleRoot := workspaceTitleRoot(backLink.Href)
 	page := workItemWorkspacePage{
-		ID:                  item.ID,
-		Title:               item.Title,
-		WorkbenchHref:       buildWorkbenchHref("", "", "", ""),
-		SourcesHref:         buildSourceWorkbenchHref(sourceWorkbenchViewPaste, "", ""),
+		ID:            item.ID,
+		Title:         item.Title,
+		WorkbenchHref: buildWorkbenchHref("", "", "", ""),
+		SourcesHref:   buildSourceWorkbenchHref(sourceWorkbenchViewPaste, "", ""),
+		HeaderTitle:   titleRoot,
+		TitleNav: []sourceWorkbenchNavItem{
+			{Label: titleRoot, Href: backLink.Href},
+			{Label: item.Title, Active: true},
+		},
+		HeaderNav: buildGlobalHeaderNav(strings.ToLower(titleRoot)),
+		Breadcrumbs: []sourceWorkbenchNavItem{
+			backLink,
+			{Label: item.Title, Active: true},
+		},
 		CaptureAction:       "/workbench/add",
-		CaptureReturn:       buildWorkItemWorkspaceHref(item.ID, memoMode, selectedMemoDoc.Key, selectedSourceDoc.Key),
+		CaptureReturn:       buildWorkItemWorkspaceHref(item.ID, memoMode, selectedMemoDoc.Key, selectedSourceDoc.Key, backLink.Href, backLink.Label),
 		EntityType:          item.EntityType,
 		Status:              item.Status,
 		Stage:               string(item.Stage),
@@ -1323,27 +1405,27 @@ func (s *sourceWorkbenchServer) loadWorkItemWorkspace(id string, memoMode workIt
 		Refs:                append([]string(nil), item.Refs...),
 		MainBody:            mainBody,
 		MainPreviewHTML:     previewHTML,
-		SaveAction:          buildWorkItemSaveHref(item.ID, memoMode, selectedMemoDoc.Key, selectedSourceDoc.Key),
+		SaveAction:          buildWorkItemSaveHref(item.ID, memoMode, selectedMemoDoc.Key, selectedSourceDoc.Key, backLink.Href, backLink.Label),
 		PreviewAction:       buildWorkItemPreviewHref(item.ID),
 		AssetUploadAction:   buildWorkItemAssetUploadHref(item.ID),
 		IsMemoRecent:        memoMode == workItemMemoModeRecent,
 		IsMemoTree:          memoMode == workItemMemoModeTree,
-		MemoRecentHref:      buildWorkItemWorkspaceHref(item.ID, workItemMemoModeRecent, selectedMemoDoc.Key, selectedSourceDoc.Key),
-		MemoTreeHref:        buildWorkItemWorkspaceHref(item.ID, workItemMemoModeTree, selectedMemoDoc.Key, selectedSourceDoc.Key),
+		MemoRecentHref:      buildWorkItemWorkspaceHref(item.ID, workItemMemoModeRecent, selectedMemoDoc.Key, selectedSourceDoc.Key, backLink.Href, backLink.Label),
+		MemoTreeHref:        buildWorkItemWorkspaceHref(item.ID, workItemMemoModeTree, selectedMemoDoc.Key, selectedSourceDoc.Key, backLink.Href, backLink.Label),
 		SelectedMemoBody:    selectedMemoDoc.Body,
 		SelectedMemoLabel:   selectedMemoDoc.Label,
 		SelectedSourceBody:  selectedSourceDoc.Body,
 		SelectedSourceLabel: selectedSourceDoc.Label,
 		SelectedSourceMeta:  selectedSourceDoc.Meta,
-		AgentRefreshHref:    buildWorkItemAgentPaneHref(item.ID, memoMode, selectedMemoDoc.Key, selectedSourceDoc.Key),
+		AgentRefreshHref:    buildWorkItemAgentPaneHref(item.ID, memoMode, selectedMemoDoc.Key, selectedSourceDoc.Key, backLink.Href, backLink.Label),
 	}
 	for i := range memos {
 		memos[i].Active = memos[i].Key == selectedMemoDoc.Key
-		memos[i].Href = buildWorkItemWorkspaceHref(item.ID, memoMode, memos[i].Key, selectedSourceDoc.Key)
+		memos[i].Href = buildWorkItemWorkspaceHref(item.ID, memoMode, memos[i].Key, selectedSourceDoc.Key, backLink.Href, backLink.Label)
 	}
 	for i := range sources {
 		sources[i].Active = sources[i].Key == selectedSourceDoc.Key
-		sources[i].Href = buildWorkItemWorkspaceHref(item.ID, memoMode, selectedMemoDoc.Key, sources[i].Key)
+		sources[i].Href = buildWorkItemWorkspaceHref(item.ID, memoMode, selectedMemoDoc.Key, sources[i].Key, backLink.Href, backLink.Label)
 	}
 	page.Memos = memos
 	page.Sources = sources
@@ -1376,9 +1458,11 @@ func trimWorkItemRoutePath(raw string) string {
 
 func workItemRequestStateFromRequest(r *http.Request) workItemRequestState {
 	return workItemRequestState{
-		MemoMode:  normalizeWorkItemMemoMode(r.URL.Query().Get("memo_view")),
-		MemoKey:   r.URL.Query().Get("memo"),
-		SourceKey: r.URL.Query().Get("source"),
+		MemoMode:    normalizeWorkItemMemoMode(r.URL.Query().Get("memo_view")),
+		MemoKey:     r.URL.Query().Get("memo"),
+		SourceKey:   r.URL.Query().Get("source"),
+		ReturnTo:    r.URL.Query().Get("from"),
+		ReturnLabel: r.URL.Query().Get("from_label"),
 	}
 }
 
@@ -1720,7 +1804,7 @@ func buildWorkItemAssetPrefix(id string) string {
 	return "/work-items/" + url.PathEscape(strings.TrimSpace(id)) + "/assets"
 }
 
-func buildWorkItemSaveHref(id string, memoMode workItemMemoMode, memoKey, sourceKey string) string {
+func buildWorkItemSaveHref(id string, memoMode workItemMemoMode, memoKey, sourceKey, returnTo, returnLabel string) string {
 	values := url.Values{}
 	if memoMode != workItemMemoModeRecent {
 		values.Set("memo_view", string(memoMode))
@@ -1730,6 +1814,12 @@ func buildWorkItemSaveHref(id string, memoMode workItemMemoMode, memoKey, source
 	}
 	if strings.TrimSpace(sourceKey) != "" {
 		values.Set("source", filepath.ToSlash(strings.TrimSpace(sourceKey)))
+	}
+	if safe := safeLocalReturnPath(returnTo); safe != "" {
+		values.Set("from", safe)
+	}
+	if strings.TrimSpace(returnLabel) != "" {
+		values.Set("from_label", strings.TrimSpace(returnLabel))
 	}
 	path := buildWorkItemSavePath(id)
 	if len(values) == 0 {
@@ -1746,7 +1836,7 @@ func buildWorkItemAssetUploadHref(id string) string {
 	return buildWorkItemAssetUploadPath(id)
 }
 
-func buildWorkItemAgentPaneHref(id string, memoMode workItemMemoMode, memoKey, sourceKey string) string {
+func buildWorkItemAgentPaneHref(id string, memoMode workItemMemoMode, memoKey, sourceKey, returnTo, returnLabel string) string {
 	values := url.Values{}
 	if memoMode != workItemMemoModeRecent {
 		values.Set("memo_view", string(memoMode))
@@ -1756,6 +1846,12 @@ func buildWorkItemAgentPaneHref(id string, memoMode workItemMemoMode, memoKey, s
 	}
 	if strings.TrimSpace(sourceKey) != "" {
 		values.Set("source", filepath.ToSlash(strings.TrimSpace(sourceKey)))
+	}
+	if safe := safeLocalReturnPath(returnTo); safe != "" {
+		values.Set("from", safe)
+	}
+	if strings.TrimSpace(returnLabel) != "" {
+		values.Set("from_label", strings.TrimSpace(returnLabel))
 	}
 	path := buildWorkItemAgentPanePath(id)
 	if len(values) == 0 {
@@ -1787,7 +1883,7 @@ func extensionForImageContentType(contentType string) string {
 	}
 }
 
-func buildWorkItemWorkspaceHref(id string, memoMode workItemMemoMode, memoKey, sourceKey string) string {
+func buildWorkItemWorkspaceHref(id string, memoMode workItemMemoMode, memoKey, sourceKey, returnTo, returnLabel string) string {
 	values := url.Values{}
 	if memoMode != workItemMemoModeRecent {
 		values.Set("memo_view", string(memoMode))
@@ -1797,6 +1893,12 @@ func buildWorkItemWorkspaceHref(id string, memoMode workItemMemoMode, memoKey, s
 	}
 	if strings.TrimSpace(sourceKey) != "" {
 		values.Set("source", filepath.ToSlash(strings.TrimSpace(sourceKey)))
+	}
+	if safe := safeLocalReturnPath(returnTo); safe != "" {
+		values.Set("from", safe)
+	}
+	if strings.TrimSpace(returnLabel) != "" {
+		values.Set("from_label", strings.TrimSpace(returnLabel))
 	}
 	path := "/work-items/" + url.PathEscape(strings.TrimSpace(id))
 	if len(values) == 0 {
@@ -1833,36 +1935,76 @@ const workbenchHTML = `<!doctype html>
       background: var(--bg);
       color: var(--ink);
     }
+    .shell-header {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px 16px 0;
+    }
     main {
       max-width: 1280px;
       margin: 0 auto;
-      padding: 24px 16px 48px;
+      padding: 12px 16px 48px;
     }
     a { color: inherit; }
     .topbar {
       display: flex;
       justify-content: space-between;
-      gap: 12px;
-      align-items: center;
-      margin-bottom: 16px;
+      gap: 16px;
+      align-items: flex-start;
+      flex-wrap: wrap;
     }
-    .topbar nav {
+    .title-row {
+      margin-top: 8px;
+    }
+    .shell-title {
+      margin: 0;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: baseline;
+      font-size: 1.4rem;
+      line-height: 1.2;
+      font-weight: 600;
+    }
+    .shell-title .title-link,
+    .shell-title .title-current {
+      display: inline;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      font-size: inherit;
+      line-height: inherit;
+      font-weight: inherit;
+      color: inherit;
+      text-decoration: none;
+    }
+    .shell-title .crumb-sep {
+      color: var(--muted);
+      font-size: inherit;
+      font-weight: 400;
+    }
+    .topbar nav, .breadcrumbs {
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
+      align-items: center;
     }
-    .topbar a {
+    .topbar a, .breadcrumbs a, .breadcrumbs span {
       text-decoration: none;
       border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 8px 12px;
-      font-size: 0.92rem;
+      padding: 6px 10px;
+      font-size: 0.85rem;
       background: #fff;
     }
-    .topbar a.active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
+    .topbar a.active, .breadcrumbs span {
+      background: #f6f6f6;
+      font-weight: 600;
+    }
+    .crumb-sep {
+      color: var(--muted);
+      font-size: 0.85rem;
     }
     h1, h2, h3 {
       margin: 0;
@@ -1889,7 +2031,7 @@ const workbenchHTML = `<!doctype html>
       grid-template-columns: 280px minmax(0, 1fr);
       gap: 18px;
       align-items: start;
-      margin-top: 20px;
+      margin-top: 0;
     }
     .panel {
       border: 1px solid var(--line);
@@ -1976,41 +2118,91 @@ const workbenchHTML = `<!doctype html>
       gap: 12px;
       align-items: baseline;
     }
-    .items {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: grid;
-      gap: 12px;
-    }
-    .item {
-      border-top: 1px solid var(--line);
-      padding-top: 12px;
-    }
-    .item:first-child {
-      border-top: 0;
-      padding-top: 0;
-    }
     .item-title {
       font-weight: 600;
       text-decoration: none;
     }
+    .action-table-wrap {
+      overflow-x: auto;
+    }
+    .action-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .action-table th,
+    .action-table td {
+      padding: 12px 0;
+      border-top: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+    .action-table thead th {
+      padding-top: 0;
+      border-top: 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .action-table tbody tr:first-child td {
+      border-top: 1px solid var(--line);
+    }
+    .action-table th.item-col,
+    .action-table td.item-col {
+      width: 58%;
+      padding-right: 16px;
+    }
+    .action-table th.stage-col,
+    .action-table td.stage-col {
+      width: 22%;
+      padding-right: 16px;
+    }
+    .action-table th.done-col,
+    .action-table td.done-col {
+      width: 20%;
+    }
+    .item-stack {
+      display: grid;
+      gap: 4px;
+    }
     .actions {
       display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 10px;
+      flex-wrap: nowrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .actions.done-actions {
+      justify-content: flex-start;
     }
     .actions form {
       display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
+      gap: 6px;
+      flex-wrap: nowrap;
       align-items: center;
       margin: 0;
     }
     .actions select {
       width: auto;
       min-width: 110px;
+    }
+    .move-group {
+      border: 0;
+      border-radius: 0;
+      padding: 0;
+      background: transparent;
+    }
+    .move-group select,
+    .move-group button {
+      height: 32px;
+      min-height: 32px;
+      padding-top: 0;
+      padding-bottom: 0;
+    }
+    .move-group select {
+      padding-left: 10px;
+      padding-right: 28px;
+    }
+    .actions button {
+      white-space: nowrap;
     }
     dialog.capture-modal {
       border: 1px solid var(--line);
@@ -2050,15 +2242,23 @@ const workbenchHTML = `<!doctype html>
   </style>
 </head>
 <body>
-  <main>
+  <header class="shell-header">
     <div class="topbar">
       <nav>
-        <a href="{{.WorkbenchHref}}" class="active">Workbench</a>
-        <a href="{{.SourcesHref}}">Sources</a>
+        {{range .HeaderNav}}
+        <a href="{{.Href}}"{{if .Active}} class="active"{{end}}>{{.Label}}</a>
+        {{end}}
       </nav>
-      <button id="open-capture" class="toolbar-button" type="button">+ Capture</button>
+      <button id="open-capture" class="toolbar-button" type="button" title="Capture to Inbox (Shift+A)">+ Capture</button>
     </div>
-    <h1>Workbench</h1>
+    {{if .TitleNav}}<div class="title-row"><h1 class="shell-title" aria-label="Title navigation">
+      {{range $index, $crumb := .TitleNav}}
+      {{if $index}}<span class="crumb-sep">/</span>{{end}}
+      {{if $crumb.Active}}<span class="title-current">{{$crumb.Label}}</span>{{else}}<a class="title-link" href="{{$crumb.Href}}">{{$crumb.Label}}</a>{{end}}
+      {{end}}
+    </h1></div>{{end}}
+  </header>
+  <main>
     {{if .Status}}<div class="notice ok">{{.Status}}</div>{{end}}
     {{if .Error}}<div class="notice error">{{.Error}}</div>{{end}}
 
@@ -2078,56 +2278,69 @@ const workbenchHTML = `<!doctype html>
 
       <section class="content">
         <section class="panel">
-          <div class="header-row">
-            <h2>{{.CurrentTitle}}</h2>
-            <div class="count">{{.CurrentCount}}</div>
-          </div>
-        </section>
-
-        <section class="panel">
           {{if .Items}}
-          <ul class="items">
-            {{range .Items}}
-            <li class="item">
-              <a class="item-title" href="{{.WorkspaceHref}}">{{.Title}}</a>
-              <div class="meta">{{.Summary}}</div>
-              <div class="actions">
-                <a class="link-button" href="{{.WorkspaceHref}}">&gt; Open details</a>
-                {{if .CanMove}}
-                <form method="post" action="{{.MoveAction}}">
-                  <input type="hidden" name="q" value="{{$.Query}}">
-                  <input type="hidden" name="nav" value="{{$.Nav}}">
-                  <select name="to">
-                    {{range .MoveOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
-                  </select>
-                  <button type="submit">&rarr; Move</button>
-                </form>
+          <div class="action-table-wrap">
+            <table class="action-table">
+              <thead>
+                <tr>
+                  <th class="item-col">Work Item</th>
+                  <th class="stage-col">Stage</th>
+                  <th class="done-col">Done</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range .Items}}
+                <tr>
+                  <td class="item-col">
+                    <div class="item-stack">
+                      <a class="item-title" href="{{.WorkspaceHref}}">{{.Title}}</a>
+                      {{if .Summary}}<div class="meta">{{.Summary}}</div>{{end}}
+                    </div>
+                  </td>
+                  <td class="stage-col">
+                    <div class="actions">
+                      {{if .CanMove}}
+                      <form method="post" action="{{.MoveAction}}" class="move-group">
+                        <input type="hidden" name="q" value="{{$.Query}}">
+                        <input type="hidden" name="nav" value="{{$.Nav}}">
+                        <select name="to" aria-label="Set stage for {{.Title}}">
+                          {{range .MoveOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+                        </select>
+                        <button type="submit">Set</button>
+                      </form>
+                      {{end}}
+                    </div>
+                  </td>
+                  <td class="done-col">
+                    <div class="actions done-actions">
+                      {{if .CanDoneForDay}}
+                      <form method="post" action="{{.DoneForDayAction}}">
+                        <input type="hidden" name="q" value="{{$.Query}}">
+                        <input type="hidden" name="nav" value="{{$.Nav}}">
+                        <button type="submit">Done for day</button>
+                      </form>
+                      {{end}}
+                      {{if .CanComplete}}
+                      <form method="post" action="{{.CompleteAction}}">
+                        <input type="hidden" name="q" value="{{$.Query}}">
+                        <input type="hidden" name="nav" value="{{$.Nav}}">
+                        <button type="submit">x Done</button>
+                      </form>
+                      {{end}}
+                      {{if .CanReopen}}
+                      <form method="post" action="{{.ReopenAction}}">
+                        <input type="hidden" name="q" value="{{$.Query}}">
+                        <input type="hidden" name="nav" value="{{$.Nav}}">
+                        <button type="submit">{{if .CanReopenComplete}}&lt; Reopen{{else if .CanReopenDoneForDay}}&lt; Restore{{else}}&lt; Reopen{{end}}</button>
+                      </form>
+                      {{end}}
+                    </div>
+                  </td>
+                </tr>
                 {{end}}
-                {{if .CanDoneForDay}}
-                <form method="post" action="{{.DoneForDayAction}}">
-                  <input type="hidden" name="q" value="{{$.Query}}">
-                  <input type="hidden" name="nav" value="{{$.Nav}}">
-                  <button type="submit">~ Today</button>
-                </form>
-                {{end}}
-                {{if .CanComplete}}
-                <form method="post" action="{{.CompleteAction}}">
-                  <input type="hidden" name="q" value="{{$.Query}}">
-                  <input type="hidden" name="nav" value="{{$.Nav}}">
-                  <button type="submit">x Done</button>
-                </form>
-                {{end}}
-                {{if .CanReopen}}
-                <form method="post" action="{{.ReopenAction}}">
-                  <input type="hidden" name="q" value="{{$.Query}}">
-                  <input type="hidden" name="nav" value="{{$.Nav}}">
-                  <button type="submit">{{if .CanReopenComplete}}&lt; Reopen{{else if .CanReopenDoneForDay}}&lt; Restore{{else}}&lt; Reopen{{end}}</button>
-                </form>
-                {{end}}
-              </div>
-            </li>
-            {{end}}
-          </ul>
+              </tbody>
+            </table>
+          </div>
           {{else}}
           <div class="empty">No items.</div>
           {{end}}
@@ -2183,7 +2396,7 @@ const workbenchHTML = `<!doctype html>
       document.addEventListener("keydown", (event) => {
         const tag = event.target && event.target.tagName ? String(event.target.tagName).toLowerCase() : "";
         const editable = tag === "input" || tag === "textarea" || tag === "select" || event.target && event.target.isContentEditable;
-        if (!editable && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && String(event.key).toLowerCase() === "a") {
+        if (!editable && !event.metaKey && !event.ctrlKey && !event.altKey && event.shiftKey && String(event.key).toLowerCase() === "a") {
           event.preventDefault();
           openCapture();
           return;
@@ -2220,10 +2433,15 @@ const sourceWorkbenchHTML = `<!doctype html>
       background: var(--bg);
       color: var(--ink);
     }
+    .shell-header {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px 16px 0;
+    }
     main {
       max-width: 720px;
       margin: 0 auto;
-      padding: 24px 16px 48px;
+      padding: 12px 16px 48px;
     }
     h1 {
       margin: 0 0 6px;
@@ -2231,7 +2449,7 @@ const sourceWorkbenchHTML = `<!doctype html>
       font-weight: 600;
     }
     p.lead {
-      margin: 0 0 20px;
+      margin: 0 0 12px;
       color: var(--muted);
       font-size: 0.95rem;
     }
@@ -2275,23 +2493,55 @@ const sourceWorkbenchHTML = `<!doctype html>
     .topbar {
       display: flex;
       justify-content: space-between;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 16px;
+      gap: 16px;
+      align-items: flex-start;
+      flex-wrap: wrap;
     }
-    .topbar nav {
+    .title-row {
+      margin-top: 8px;
+    }
+    .shell-title {
+      margin: 0;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: baseline;
+      font-size: 1.4rem;
+      line-height: 1.2;
+      font-weight: 600;
+    }
+    .shell-title .title-link,
+    .shell-title .title-current {
+      display: inline;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      font-size: inherit;
+      line-height: inherit;
+      font-weight: inherit;
+      color: inherit;
+      text-decoration: none;
+    }
+    .shell-title .crumb-sep {
+      color: var(--muted);
+      font-size: inherit;
+      font-weight: 400;
+    }
+    .topbar nav, .breadcrumbs {
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
+      align-items: center;
     }
-    .topbar a {
+    .topbar a, .breadcrumbs a, .breadcrumbs span {
       display: inline-block;
-      padding: 8px 12px;
+      padding: 6px 10px;
       border: 1px solid var(--line);
       border-radius: 999px;
       color: var(--ink);
       text-decoration: none;
-      font-size: 0.92rem;
+      font-size: 0.85rem;
       background: #fff;
     }
     .topbar button,
@@ -2312,10 +2562,13 @@ const sourceWorkbenchHTML = `<!doctype html>
       color: var(--ink);
       cursor: pointer;
     }
-    .topbar a.active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
+    .topbar a.active, .breadcrumbs span {
+      background: #f6f6f6;
+      font-weight: 600;
+    }
+    .crumb-sep {
+      color: var(--muted);
+      font-size: 0.85rem;
     }
     .stats {
       display: flex;
@@ -2348,6 +2601,9 @@ const sourceWorkbenchHTML = `<!doctype html>
       background: var(--accent);
       border-color: var(--accent);
       color: #fff;
+    }
+    .topbar .toolbar-button {
+      width: auto;
     }
     .notice {
       padding: 10px 12px;
@@ -2393,20 +2649,56 @@ const sourceWorkbenchHTML = `<!doctype html>
     .actions {
       margin-top: 12px;
     }
+    dialog.capture-modal {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0;
+      max-width: min(520px, calc(100vw - 24px));
+      width: 100%;
+    }
+    dialog.capture-modal::backdrop {
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .capture-card {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    .capture-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+    .capture-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
     @media (max-width: 640px) {
       main { padding: 16px 12px 32px; }
     }
   </style>
 </head>
 <body>
-  <main>
+  <header class="shell-header">
     <div class="topbar">
       <nav>
-        <a href="{{.WorkbenchHref}}">Workbench</a>
-        <a href="{{.SourcesHref}}" class="active">Sources</a>
+        {{range .HeaderNav}}
+        <a href="{{.Href}}"{{if .Active}} class="active"{{end}}>{{.Label}}</a>
+        {{end}}
       </nav>
+      <button id="open-capture" class="toolbar-button" type="button" title="Capture to Inbox (Shift+A)">+ Capture</button>
     </div>
-    <h1>Source Inbox</h1>
+    {{if .TitleNav}}<div class="title-row"><h1 class="shell-title" aria-label="Title navigation">
+      {{range $index, $crumb := .TitleNav}}
+      {{if $index}}<span class="crumb-sep">/</span>{{end}}
+      {{if $crumb.Active}}<span class="title-current">{{$crumb.Label}}</span>{{else}}<a class="title-link" href="{{$crumb.Href}}">{{$crumb.Label}}</a>{{end}}
+      {{end}}
+    </h1></div>{{end}}
+  </header>
+  <main>
     <p class="lead">One workflow at a time: quick capture, file upload, existing source linking, or staged review.</p>
     {{if .Status}}<div class="notice ok">{{.Status}}</div>{{end}}
     {{if .Error}}<div class="notice error">{{.Error}}</div>{{end}}
@@ -2557,7 +2849,64 @@ const sourceWorkbenchHTML = `<!doctype html>
       </div>
       {{end}}
     </section>
+    <dialog id="capture-modal" class="capture-modal">
+      <div class="capture-card">
+        <div class="capture-head">
+          <strong>Capture to Inbox</strong>
+          <button id="close-capture" type="button">Close</button>
+        </div>
+        <form method="post" action="{{.CaptureAction}}" class="stack">
+          <input type="hidden" name="return_to" value="{{.CaptureReturn}}">
+          <input id="capture-title" type="text" name="title" placeholder="Capture a work item" required>
+          <div class="capture-actions">
+            <button type="submit">+ Add to Inbox</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
   </main>
+  <script>
+    (() => {
+      const dialog = document.getElementById("capture-modal");
+      const openButton = document.getElementById("open-capture");
+      const closeButton = document.getElementById("close-capture");
+      const titleInput = document.getElementById("capture-title");
+      const openCapture = () => {
+        if (!dialog || typeof dialog.showModal !== "function") {
+          return;
+        }
+        dialog.showModal();
+        window.setTimeout(() => {
+          if (titleInput) {
+            titleInput.focus();
+          }
+        }, 0);
+      };
+      const closeCapture = () => {
+        if (dialog && dialog.open) {
+          dialog.close();
+        }
+      };
+      if (openButton) {
+        openButton.addEventListener("click", openCapture);
+      }
+      if (closeButton) {
+        closeButton.addEventListener("click", closeCapture);
+      }
+      document.addEventListener("keydown", (event) => {
+        const tag = event.target && event.target.tagName ? String(event.target.tagName).toLowerCase() : "";
+        const editable = tag === "input" || tag === "textarea" || tag === "select" || event.target && event.target.isContentEditable;
+        if (!editable && !event.metaKey && !event.ctrlKey && !event.altKey && event.shiftKey && String(event.key).toLowerCase() === "a") {
+          event.preventDefault();
+          openCapture();
+          return;
+        }
+        if (event.key === "Escape" && dialog && dialog.open) {
+          closeCapture();
+        }
+      });
+    })();
+  </script>
 </body>
 </html>`
 
@@ -2584,32 +2933,77 @@ const workItemWorkspaceHTML = `<!doctype html>
       background: var(--bg);
       color: var(--ink);
     }
+    .shell-header {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px 16px 0;
+    }
     main {
       max-width: 1180px;
       margin: 0 auto;
-      padding: 24px 16px 48px;
+      padding: 12px 16px 48px;
     }
     .topbar {
       display: flex;
       justify-content: space-between;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 16px;
+      gap: 16px;
+      align-items: flex-start;
+      flex-wrap: wrap;
     }
-    .topbar nav {
+    .title-row {
+      margin-top: 8px;
+    }
+    .shell-title {
+      margin: 0;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: baseline;
+      font-size: 1.4rem;
+      line-height: 1.2;
+      font-weight: 600;
+    }
+    .shell-title .title-link,
+    .shell-title .title-current {
+      display: inline;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      font-size: inherit;
+      line-height: inherit;
+      font-weight: inherit;
+      color: inherit;
+      text-decoration: none;
+    }
+    .shell-title .crumb-sep {
+      color: var(--muted);
+      font-size: inherit;
+      font-weight: 400;
+    }
+    .topbar nav, .breadcrumbs {
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
+      align-items: center;
     }
-    .topbar a {
+    .topbar a, .breadcrumbs a, .breadcrumbs span {
       display: inline-block;
-      padding: 8px 12px;
+      padding: 6px 10px;
       border: 1px solid var(--line);
       border-radius: 999px;
       color: var(--ink);
       text-decoration: none;
-      font-size: 0.92rem;
+      font-size: 0.85rem;
       background: #fff;
+    }
+    .topbar a.active, .breadcrumbs span {
+      background: #f6f6f6;
+      font-weight: 600;
+    }
+    .crumb-sep {
+      color: var(--muted);
+      font-size: 0.85rem;
     }
     h1, h2, h3 {
       margin: 0;
@@ -2635,7 +3029,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       gap: 18px;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       align-items: stretch;
-      margin-top: 20px;
+      margin-top: 0;
       min-height: calc(100vh - 220px);
     }
     .agent-pane {
@@ -2918,17 +3312,24 @@ const workItemWorkspaceHTML = `<!doctype html>
     }
   </style>
 </head>
-  <body>
-  <main>
+<body>
+  <header class="shell-header">
     <div class="topbar">
       <nav>
-        <a href="{{.WorkbenchHref}}">Workbench</a>
-        <a href="{{.SourcesHref}}">Sources</a>
+        {{range .HeaderNav}}
+        <a href="{{.Href}}"{{if .Active}} class="active"{{end}}>{{.Label}}</a>
+        {{end}}
       </nav>
-      <button id="open-capture" type="button">+ Capture</button>
+      <button id="open-capture" class="toolbar-button" type="button" title="Capture to Inbox (Shift+A)">+ Capture</button>
     </div>
-    <h1 class="workspace-title">{{.Title}}</h1>
-
+    {{if .TitleNav}}<div class="title-row"><h1 class="shell-title" aria-label="Title navigation">
+      {{range $index, $crumb := .TitleNav}}
+      {{if $index}}<span class="crumb-sep">/</span>{{end}}
+      {{if $crumb.Active}}<span class="title-current">{{$crumb.Label}}</span>{{else}}<a class="title-link" href="{{$crumb.Href}}">{{$crumb.Label}}</a>{{end}}
+      {{end}}
+    </h1></div>{{end}}
+  </header>
+  <main>
     <div class="workspace">
       <section class="workspace-main">
         <div class="mode-actions">
@@ -3136,12 +3537,12 @@ const workItemWorkspaceHTML = `<!doctype html>
             void saveDocument({ openPreview: true });
             return;
           }
-          if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
-            return;
-          }
-          if (!editable && String(event.key).toLowerCase() === "a") {
+          if (!editable && !event.metaKey && !event.ctrlKey && !event.altKey && event.shiftKey && String(event.key).toLowerCase() === "a") {
             event.preventDefault();
             openCapture();
+            return;
+          }
+          if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
             return;
           }
           if (event.key !== "Escape") {

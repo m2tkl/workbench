@@ -372,8 +372,20 @@ func TestSourceWorkbenchIndexShowsStagedFiles(t *testing.T) {
 		t.Fatalf("index status = %d, want %d", res.Code, http.StatusOK)
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, "Source Inbox") {
+	if !strings.Contains(body, "Sources") {
 		t.Fatalf("expected page title in body: %s", body)
+	}
+	if !strings.Contains(body, `href="/"`) || !strings.Contains(body, `href="/sources?view=paste"`) || !strings.Contains(body, `aria-label="Title navigation"`) {
+		t.Fatalf("expected shared header navigation in body: %s", body)
+	}
+	if !strings.Contains(body, `class="shell-header"`) {
+		t.Fatalf("expected stable shared header wrapper in body: %s", body)
+	}
+	if !strings.Contains(body, `class="shell-title" aria-label="Title navigation"`) || !strings.Contains(body, `<span class="title-current">Sources</span>`) {
+		t.Fatalf("expected sources title in shared header: %s", body)
+	}
+	if !strings.Contains(body, `id="open-capture"`) || !strings.Contains(body, "Capture to Inbox") {
+		t.Fatalf("expected capture affordance in sources body: %s", body)
 	}
 	if !strings.Contains(body, "Quick Capture") || !strings.Contains(body, `action="/paste"`) {
 		t.Fatalf("expected quick capture view in body: %s", body)
@@ -561,14 +573,20 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 		t.Fatalf("workspace status = %d, want %d", res.Code, http.StatusOK)
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, "Investigate OTP copy") || !strings.Contains(body, `action="/work-items/issue-1/save?memo=generated%2Fnotes%2Fnewer.md`) {
+	if !strings.Contains(body, "Investigate OTP copy") || !strings.Contains(body, `action="/work-items/issue-1/save?from=%2F&amp;from_label=Workbench&amp;memo=generated%2Fnotes%2Fnewer.md&amp;source=sources%2Fdocuments%2Fbrief.md"`) {
 		t.Fatalf("expected workspace header and save action: %s", body)
 	}
 	if !strings.Contains(body, `class="workspace-main"`) || strings.Contains(body, `class="panel workspace-main"`) || !strings.Contains(body, `id="work-item-editor"`) || !strings.Contains(body, `id="toggle-preview-mode"`) || !strings.Contains(body, `>Preview</button>`) || !strings.Contains(body, `>+ Save</button>`) {
 		t.Fatalf("expected simplified editor controls in workspace: %s", body)
 	}
+	if !strings.Contains(body, `class="shell-header"`) {
+		t.Fatalf("expected stable shared header wrapper in workspace: %s", body)
+	}
 	if !strings.Contains(body, `id="open-capture"`) || !strings.Contains(body, "Capture to Inbox") {
 		t.Fatalf("expected workspace capture UI in body: %s", body)
+	}
+	if !strings.Contains(body, `aria-label="Title navigation"`) || !strings.Contains(body, `href="/">Workbench</a>`) || !strings.Contains(body, `<span class="title-current">Investigate OTP copy</span>`) {
+		t.Fatalf("expected workspace title navigation back to workbench: %s", body)
 	}
 	if strings.Contains(body, "Human-editable") || strings.Contains(body, "Agent Memos") || strings.Contains(body, "Main Document") || strings.Contains(body, "Source Documents") || strings.Contains(body, "Work item workspace") {
 		t.Fatalf("expected workspace copy to stay minimal: %s", body)
@@ -585,13 +603,13 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if !strings.Contains(body, `class="editor-footer"`) || !strings.Contains(body, `id="editor-feedback"`) {
 		t.Fatalf("expected inline editor feedback area in workspace: %s", body)
 	}
-	if !strings.Contains(body, `id="agent-pane"`) || !strings.Contains(body, `/work-items/issue-1/agent-pane?memo=generated%2Fnotes%2Fnewer.md`) {
+	if !strings.Contains(body, `id="agent-pane"`) || !strings.Contains(body, `/work-items/issue-1/agent-pane?from=%2F&amp;from_label=Workbench&amp;memo=generated%2Fnotes%2Fnewer.md&amp;source=sources%2Fdocuments%2Fbrief.md`) {
 		t.Fatalf("expected auto-refresh agent pane wiring in workspace: %s", body)
 	}
 	if !strings.Contains(body, `/work-items/issue-1/preview`) || !strings.Contains(body, `/work-items/issue-1/assets`) {
 		t.Fatalf("expected preview and asset upload wiring in workspace: %s", body)
 	}
-	if !strings.Contains(body, `--content-inset: 16px`) || !strings.Contains(body, `padding-top: var(--content-inset)`) || !strings.Contains(body, `padding: 0 var(--content-inset) 12px`) || !strings.Contains(body, `padding: 10px var(--content-inset)`) || !strings.Contains(body, `class="editor-footer"`) || !strings.Contains(body, `display: inline-flex;`) || !strings.Contains(body, `border-bottom: 1px solid var(--line)`) || !strings.Contains(body, `overflow: hidden`) || !strings.Contains(body, `border: 0;`) || !strings.Contains(body, `min-height: calc(100vh - 220px)`) || !strings.Contains(body, `resize: none`) || !strings.Contains(body, `class="workspace-main"`) || !strings.Contains(body, `data-mode="editor"`) || !strings.Contains(body, `const saveDocument = async (options = {}) =>`) || !strings.Contains(body, `!event.shiftKey && String(event.key).toLowerCase() === "s"`) || !strings.Contains(body, `void saveDocument();`) || !strings.Contains(body, `openPreview`) || !strings.Contains(body, `event.shiftKey && String(event.key).toLowerCase() === "s"`) || !strings.Contains(body, `void saveDocument({ openPreview: true })`) || !strings.Contains(body, `event.key !== "Escape"`) || !strings.Contains(body, `setPreviewMode(previewMode() === "preview" ? "editor" : "preview")`) || !strings.Contains(body, `preview.addEventListener("dblclick", async (event) =>`) || !strings.Contains(body, `focusEditorAt(offset)`) || !strings.Contains(body, `window.setInterval(refreshAgentPane, 5000)`) || !strings.Contains(body, `textarea.addEventListener("paste"`) || !strings.Contains(body, `navigator.clipboard.read`) || !strings.Contains(body, `clipboard.files`) || !strings.Contains(body, `data:image/`) {
+	if !strings.Contains(body, `--content-inset: 16px`) || !strings.Contains(body, `padding-top: var(--content-inset)`) || !strings.Contains(body, `padding: 0 var(--content-inset) 12px`) || !strings.Contains(body, `padding: 10px var(--content-inset)`) || !strings.Contains(body, `class="editor-footer"`) || !strings.Contains(body, `display: inline-flex;`) || !strings.Contains(body, `border-bottom: 1px solid var(--line)`) || !strings.Contains(body, `overflow: hidden`) || !strings.Contains(body, `border: 0;`) || !strings.Contains(body, `min-height: calc(100vh - 220px)`) || !strings.Contains(body, `resize: none`) || !strings.Contains(body, `class="workspace-main"`) || !strings.Contains(body, `data-mode="editor"`) || !strings.Contains(body, `const saveDocument = async (options = {}) =>`) || !strings.Contains(body, `!event.shiftKey && String(event.key).toLowerCase() === "s"`) || !strings.Contains(body, `void saveDocument();`) || !strings.Contains(body, `openPreview`) || !strings.Contains(body, `event.shiftKey && String(event.key).toLowerCase() === "s"`) || !strings.Contains(body, `void saveDocument({ openPreview: true })`) || !strings.Contains(body, `event.shiftKey && String(event.key).toLowerCase() === "a"`) || !strings.Contains(body, `event.key !== "Escape"`) || !strings.Contains(body, `setPreviewMode(previewMode() === "preview" ? "editor" : "preview")`) || !strings.Contains(body, `preview.addEventListener("dblclick", async (event) =>`) || !strings.Contains(body, `focusEditorAt(offset)`) || !strings.Contains(body, `window.setInterval(refreshAgentPane, 5000)`) || !strings.Contains(body, `textarea.addEventListener("paste"`) || !strings.Contains(body, `navigator.clipboard.read`) || !strings.Contains(body, `clipboard.files`) || !strings.Contains(body, `data:image/`) {
 		t.Fatalf("expected workspace scripts for save shortcut and polling: %s", body)
 	}
 	if !strings.Contains(body, "# Issue\n\nhuman notes") {
@@ -992,8 +1010,17 @@ func TestWorkbenchIndexShowsSidebarAndMainView(t *testing.T) {
 	if !strings.Contains(body, `id="open-capture"`) || !strings.Contains(body, "Capture to Inbox") {
 		t.Fatalf("expected global capture UI in body: %s", body)
 	}
+	if !strings.Contains(body, `class="toolbar-button"`) {
+		t.Fatalf("expected capture button styling to match shared header controls: %s", body)
+	}
 	if !strings.Contains(body, `href="/sources?view=paste"`) {
 		t.Fatalf("expected sources navigation in body: %s", body)
+	}
+	if !strings.Contains(body, `class="shell-header"`) {
+		t.Fatalf("expected stable shared header wrapper in body: %s", body)
+	}
+	if !strings.Contains(body, `class="shell-title" aria-label="Title navigation"`) || !strings.Contains(body, `<span class="title-current">Workbench</span>`) {
+		t.Fatalf("expected workbench title in shared header: %s", body)
 	}
 	for _, want := range []string{"Action", "Themes", `href="/?nav=auth-stepup"`, "Focus item", `/work-items/focus-1`, "No Theme"} {
 		if !strings.Contains(body, want) {
@@ -1012,8 +1039,14 @@ func TestWorkbenchIndexShowsSidebarAndMainView(t *testing.T) {
 	if strings.Contains(body, "Filter") || strings.Contains(body, "A TUI-like browser layout") {
 		t.Fatalf("expected workbench to avoid local filter and explainer copy: %s", body)
 	}
-	if !strings.Contains(body, "&gt; Open details") {
-		t.Fatalf("expected clearer open-details action: %s", body)
+	if strings.Contains(body, "Open details") || !strings.Contains(body, `<a class="item-title" href="/work-items/focus-1?from=%2F&amp;from_label=Now">Focus item</a>`) {
+		t.Fatalf("expected item title to be the detail link: %s", body)
+	}
+	if !strings.Contains(body, `class="action-table"`) || strings.Contains(body, ">State</th>") || !strings.Contains(body, ">Stage</th>") || !strings.Contains(body, ">Done</th>") || strings.Contains(body, "Move to") || !strings.Contains(body, ">Set</button>") || !strings.Contains(body, ">Done for day</button>") || !strings.Contains(body, `height: 32px;`) || !strings.Contains(body, `flex-wrap: nowrap;`) {
+		t.Fatalf("expected grouped move control and clearer action labels: %s", body)
+	}
+	if strings.Contains(body, "focus-1 ·") || strings.Contains(body, "theme:auth-stepup") || strings.Contains(body, " · now") {
+		t.Fatalf("expected internal ids to stay out of visible state copy: %s", body)
 	}
 }
 
