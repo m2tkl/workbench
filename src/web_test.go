@@ -579,6 +579,9 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if !strings.Contains(body, `class="workspace-main"`) || strings.Contains(body, `class="panel workspace-main"`) || !strings.Contains(body, `id="work-item-editor"`) || !strings.Contains(body, `id="toggle-preview-mode"`) || !strings.Contains(body, `>Preview</button>`) || !strings.Contains(body, `>+ Save</button>`) {
 		t.Fatalf("expected simplified editor controls in workspace: %s", body)
 	}
+	if !strings.Contains(body, `data-sidebar-collapsed="false"`) || !strings.Contains(body, `data-sidebar-hovered="false"`) || !strings.Contains(body, `id="toggle-sidebar"`) || !strings.Contains(body, `class="sidebar-toolbar"`) || !strings.Contains(body, `id="agent-pane-content"`) {
+		t.Fatalf("expected collapsible workspace sidebar controls: %s", body)
+	}
 	if !strings.Contains(body, `class="shell-header"`) {
 		t.Fatalf("expected stable shared header wrapper in workspace: %s", body)
 	}
@@ -591,8 +594,14 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if strings.Contains(body, "Human-editable") || strings.Contains(body, "Agent Memos") || strings.Contains(body, "Main Document") || strings.Contains(body, "Source Documents") || strings.Contains(body, "Work item workspace") {
 		t.Fatalf("expected workspace copy to stay minimal: %s", body)
 	}
-	if !strings.Contains(body, `class="section-label">Work item`) || !strings.Contains(body, `class="section-label">Memos`) || !strings.Contains(body, `class="section-label">Resources`) {
+	if !strings.Contains(body, `class="section-label">Main`) || !strings.Contains(body, `class="section-label">Context`) || !strings.Contains(body, `class="section-label">Resources`) {
 		t.Fatalf("expected subtle workspace labels: %s", body)
+	}
+	if strings.Contains(body, `class="section-label">Details`) {
+		t.Fatalf("expected workspace to avoid metadata details panel: %s", body)
+	}
+	if strings.Contains(body, `class="section-label">Work item`) || strings.Contains(body, `class="section-label">Issue`) || strings.Contains(body, `class="section-label">Task`) {
+		t.Fatalf("expected workspace to use unified work-item label: %s", body)
 	}
 	if strings.Contains(body, `class="notice ok">saved work item document`) || strings.Contains(body, `class="notice error"`) {
 		t.Fatalf("expected workspace to avoid persistent top notice: %s", body)
@@ -609,8 +618,8 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if !strings.Contains(body, `/work-items/issue-1/preview`) || !strings.Contains(body, `/work-items/issue-1/assets`) {
 		t.Fatalf("expected preview and asset upload wiring in workspace: %s", body)
 	}
-	if !strings.Contains(body, `--content-inset: 16px`) || !strings.Contains(body, `padding-top: var(--content-inset)`) || !strings.Contains(body, `padding: 0 var(--content-inset) 12px`) || !strings.Contains(body, `padding: 10px var(--content-inset)`) || !strings.Contains(body, `class="editor-footer"`) || !strings.Contains(body, `display: inline-flex;`) || !strings.Contains(body, `border-bottom: 1px solid var(--line)`) || !strings.Contains(body, `overflow: hidden`) || !strings.Contains(body, `border: 0;`) || !strings.Contains(body, `min-height: calc(100vh - 220px)`) || !strings.Contains(body, `resize: none`) || !strings.Contains(body, `class="workspace-main"`) || !strings.Contains(body, `data-mode="editor"`) || !strings.Contains(body, `const saveDocument = async (options = {}) =>`) || !strings.Contains(body, `!event.shiftKey && String(event.key).toLowerCase() === "s"`) || !strings.Contains(body, `void saveDocument();`) || !strings.Contains(body, `openPreview`) || !strings.Contains(body, `event.shiftKey && String(event.key).toLowerCase() === "s"`) || !strings.Contains(body, `void saveDocument({ openPreview: true })`) || !strings.Contains(body, `event.shiftKey && String(event.key).toLowerCase() === "a"`) || !strings.Contains(body, `event.key !== "Escape"`) || !strings.Contains(body, `setPreviewMode(previewMode() === "preview" ? "editor" : "preview")`) || !strings.Contains(body, `preview.addEventListener("dblclick", async (event) =>`) || !strings.Contains(body, `focusEditorAt(offset)`) || !strings.Contains(body, `window.setInterval(refreshAgentPane, 5000)`) || !strings.Contains(body, `textarea.addEventListener("paste"`) || !strings.Contains(body, `navigator.clipboard.read`) || !strings.Contains(body, `clipboard.files`) || !strings.Contains(body, `data:image/`) {
-		t.Fatalf("expected workspace scripts for save shortcut and polling: %s", body)
+	if !strings.Contains(body, `--content-inset: 16px`) || !strings.Contains(body, `padding-top: var(--content-inset)`) || !strings.Contains(body, `padding: 0 var(--content-inset) 12px`) || !strings.Contains(body, `padding: 10px var(--content-inset)`) || !strings.Contains(body, `class="editor-footer"`) || !strings.Contains(body, `display: inline-flex;`) || !strings.Contains(body, `background: var(--accent);`) || !strings.Contains(body, `.topbar .toolbar-button,`) || !strings.Contains(body, `.sidebar-toggle {`) || !strings.Contains(body, `border-color: var(--line);`) || !strings.Contains(body, `.workspace[data-sidebar-collapsed="true"]`) || !strings.Contains(body, `.workspace[data-sidebar-collapsed="true"][data-sidebar-hovered="true"] .agent-pane`) || !strings.Contains(body, `width: min(320px, calc(100vw - 32px));`) || !strings.Contains(body, `box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);`) || !strings.Contains(body, `#agent-pane-content`) || !strings.Contains(body, `.sidebar-toolbar`) || !strings.Contains(body, `input[type="text"],`) || !strings.Contains(body, `.preview-panel {`) || !strings.Contains(body, `flex-direction: column;`) || !strings.Contains(body, `border-bottom: 1px solid var(--line)`) || !strings.Contains(body, `overflow: hidden`) || !strings.Contains(body, `overflow: auto;`) || !strings.Contains(body, `min-height: 100dvh;`) || !strings.Contains(body, `flex: 1 1 auto;`) || !strings.Contains(body, `height: 100%;`) || !strings.Contains(body, `border: 0;`) || !strings.Contains(body, `min-height: 0;`) || !strings.Contains(body, `resize: none`) || !strings.Contains(body, `class="workspace-main"`) || !strings.Contains(body, `data-mode="editor"`) || !strings.Contains(body, `const sidebarStateKey = "workbench.sidebar.collapsed";`) || !strings.Contains(body, `const sidebarCollapsed = () => workspace && workspace.dataset.sidebarCollapsed === "true";`) || !strings.Contains(body, `const syncSidebarState = () =>`) || !strings.Contains(body, `const setSidebarCollapsed = (collapsed) =>`) || !strings.Contains(body, `const setSidebarHovered = (hovered) =>`) || !strings.Contains(body, `workspace.dataset.sidebarCollapsed = collapsed ? "true" : "false"`) || !strings.Contains(body, `window.localStorage.setItem(sidebarStateKey, collapsed ? "true" : "false");`) || !strings.Contains(body, `const persistedSidebarState = window.localStorage.getItem(sidebarStateKey);`) || !strings.Contains(body, `workspace.dataset.sidebarCollapsed = persistedSidebarState;`) || !strings.Contains(body, `workspace.dataset.sidebarHovered = sidebarCollapsed() && hovered ? "true" : "false"`) || !strings.Contains(body, `setSidebarCollapsed(!sidebarCollapsed());`) || !strings.Contains(body, `toggleSidebarButton.innerHTML = expanded ? "&#9664;" : "&#9654;"`) || !strings.Contains(body, `agentPane.addEventListener("mouseenter", () => setSidebarHovered(true))`) || !strings.Contains(body, `agentPane.addEventListener("mouseleave", () => setSidebarHovered(false))`) || !strings.Contains(body, `const agentPaneContent = document.getElementById("agent-pane-content");`) || !strings.Contains(body, `if (html !== agentPaneContent.innerHTML)`) || !strings.Contains(body, `agentPaneContent.innerHTML = html;`) || !strings.Contains(body, `const saveDocument = async (options = {}) =>`) || !strings.Contains(body, `!event.shiftKey && String(event.key).toLowerCase() === "s"`) || !strings.Contains(body, `void saveDocument();`) || !strings.Contains(body, `openPreview`) || !strings.Contains(body, `event.shiftKey && String(event.key).toLowerCase() === "s"`) || !strings.Contains(body, `void saveDocument({ openPreview: true })`) || !strings.Contains(body, `event.shiftKey && String(event.key).toLowerCase() === "a"`) || !strings.Contains(body, `event.key !== "Escape"`) || !strings.Contains(body, `setPreviewMode(previewMode() === "preview" ? "editor" : "preview")`) || !strings.Contains(body, `preview.addEventListener("dblclick", async (event) =>`) || !strings.Contains(body, `focusEditorAt(offset)`) || !strings.Contains(body, `window.setInterval(refreshAgentPane, 5000)`) || !strings.Contains(body, `textarea.addEventListener("paste"`) || !strings.Contains(body, `navigator.clipboard.read`) || !strings.Contains(body, `clipboard.files`) || !strings.Contains(body, `data:image/`) || strings.Contains(body, `grid-template-columns: 1fr;`) || strings.Contains(body, `min-height: 520px`) {
+		t.Fatalf("expected workspace scripts for save shortcut, polling, and persisted sidebar state: %s", body)
 	}
 	if !strings.Contains(body, "# Issue\n\nhuman notes") {
 		t.Fatalf("expected main document body in workspace: %s", body)
@@ -626,6 +635,43 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	}
 	if strings.Contains(body, "Ignore") {
 		t.Fatalf("expected unreferenced source document to stay out of workspace: %s", body)
+	}
+}
+
+func TestWorkItemWorkspaceShowsContextEmptyState(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	if err := vault.SaveWorkItem(WorkDoc{
+		Metadata: Metadata{
+			ID:      "work-1",
+			Title:   "Plan rollout",
+			Status:  "open",
+			Triage:  TriageStock,
+			Stage:   StageNext,
+			Created: "2025-01-01",
+			Updated: "2025-01-02",
+		},
+		Body: "# Work item\n\nplan details",
+	}); err != nil {
+		t.Fatalf("SaveWorkItem returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodGet, "/work-items/work-1", nil)
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("workspace status = %d, want %d", res.Code, http.StatusOK)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, `class="section-label">Context`) || !strings.Contains(body, "No context files yet.") {
+		t.Fatalf("expected context empty state in workspace: %s", body)
+	}
+	if strings.Contains(body, "No memos yet.") {
+		t.Fatalf("expected memo wording to stay out of workspace: %s", body)
 	}
 }
 
@@ -1019,6 +1065,9 @@ func TestWorkbenchIndexShowsSidebarAndMainView(t *testing.T) {
 	if !strings.Contains(body, `class="shell-header"`) {
 		t.Fatalf("expected stable shared header wrapper in body: %s", body)
 	}
+	if !strings.Contains(body, `data-sidebar-collapsed="false"`) || !strings.Contains(body, `data-sidebar-hovered="false"`) || !strings.Contains(body, `id="toggle-sidebar"`) || !strings.Contains(body, `class="sidebar-toolbar"`) || !strings.Contains(body, `id="workbench-sidebar-content"`) {
+		t.Fatalf("expected collapsible workbench sidebar shell: %s", body)
+	}
 	if !strings.Contains(body, `class="shell-title" aria-label="Title navigation"`) || !strings.Contains(body, `<span class="title-current">Workbench</span>`) {
 		t.Fatalf("expected workbench title in shared header: %s", body)
 	}
@@ -1044,6 +1093,9 @@ func TestWorkbenchIndexShowsSidebarAndMainView(t *testing.T) {
 	}
 	if !strings.Contains(body, `class="action-table"`) || strings.Contains(body, ">State</th>") || !strings.Contains(body, ">Stage</th>") || !strings.Contains(body, ">Done</th>") || strings.Contains(body, "Move to") || !strings.Contains(body, ">Set</button>") || !strings.Contains(body, ">Done for day</button>") || !strings.Contains(body, `height: 32px;`) || !strings.Contains(body, `flex-wrap: nowrap;`) {
 		t.Fatalf("expected grouped move control and clearer action labels: %s", body)
+	}
+	if !strings.Contains(body, `.layout[data-sidebar-collapsed="true"]`) || !strings.Contains(body, `.layout[data-sidebar-collapsed="true"][data-sidebar-hovered="true"] .sidebar`) || !strings.Contains(body, `width: min(280px, calc(100vw - 32px));`) || !strings.Contains(body, `box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);`) || !strings.Contains(body, `.sidebar-content .nav-group:first-child .nav-list a`) || !strings.Contains(body, `.sidebar-content .nav-group:last-child .nav-list`) || !strings.Contains(body, `.sidebar-toggle {`) || !strings.Contains(body, `width: 32px;`) || !strings.Contains(body, `height: 32px;`) || !strings.Contains(body, `justify-content: flex-start;`) || !strings.Contains(body, `const sidebarStateKey = "workbench.sidebar.collapsed";`) || !strings.Contains(body, `const sidebarCollapsed = () => layout && layout.dataset.sidebarCollapsed === "true";`) || !strings.Contains(body, `const syncSidebarState = () =>`) || !strings.Contains(body, `const setSidebarCollapsed = (collapsed) =>`) || !strings.Contains(body, `const setSidebarHovered = (hovered) =>`) || !strings.Contains(body, `layout.dataset.sidebarCollapsed = collapsed ? "true" : "false"`) || !strings.Contains(body, `window.localStorage.setItem(sidebarStateKey, collapsed ? "true" : "false");`) || !strings.Contains(body, `const persistedSidebarState = window.localStorage.getItem(sidebarStateKey);`) || !strings.Contains(body, `layout.dataset.sidebarCollapsed = persistedSidebarState;`) || !strings.Contains(body, `layout.dataset.sidebarHovered = sidebarCollapsed() && hovered ? "true" : "false"`) || !strings.Contains(body, `setSidebarCollapsed(!sidebarCollapsed());`) || !strings.Contains(body, `toggleSidebarButton.innerHTML = expanded ? "&#9664;" : "&#9654;"`) || !strings.Contains(body, `sidebar.addEventListener("mouseenter", () => setSidebarHovered(true))`) || !strings.Contains(body, `sidebar.addEventListener("mouseleave", () => setSidebarHovered(false))`) || strings.Contains(body, `grid-template-columns: 1fr;`) || strings.Contains(body, `padding: 10px 8px;`) {
+		t.Fatalf("expected persisted overlay hover sidebar and compact action section styles: %s", body)
 	}
 	if strings.Contains(body, "focus-1 ·") || strings.Contains(body, "theme:auth-stepup") || strings.Contains(body, " · now") {
 		t.Fatalf("expected internal ids to stay out of visible state copy: %s", body)

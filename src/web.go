@@ -1931,18 +1931,23 @@ const workbenchHTML = `<!doctype html>
     * { box-sizing: border-box; }
     body {
       margin: 0;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--ink);
     }
     .shell-header {
-      max-width: 1280px;
-      margin: 0 auto;
+      width: 100%;
       padding: 24px 16px 0;
     }
     main {
-      max-width: 1280px;
-      margin: 0 auto;
+      width: 100%;
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
       padding: 12px 16px 48px;
     }
     a { color: inherit; }
@@ -2030,8 +2035,13 @@ const workbenchHTML = `<!doctype html>
       display: grid;
       grid-template-columns: 280px minmax(0, 1fr);
       gap: 18px;
-      align-items: start;
+      align-items: stretch;
       margin-top: 0;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .layout[data-sidebar-collapsed="true"] {
+      grid-template-columns: 52px minmax(0, 1fr);
     }
     .panel {
       border: 1px solid var(--line);
@@ -2042,12 +2052,83 @@ const workbenchHTML = `<!doctype html>
     .sidebar {
       position: sticky;
       top: 16px;
-      display: grid;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      padding: 0;
+      min-height: 0;
+      height: calc(100dvh - 104px);
+      overflow: hidden;
+    }
+    .sidebar-toolbar {
+      display: flex;
+      justify-content: flex-start;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .sidebar-title {
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .sidebar-content {
+      display: flex;
+      flex-direction: column;
       gap: 16px;
+      min-height: 0;
+      padding: 16px;
+      overflow: auto;
     }
     .nav-group + .nav-group {
       border-top: 1px solid var(--line);
       padding-top: 16px;
+    }
+    .sidebar-content .nav-group:first-child {
+      padding-bottom: 10px;
+      margin-bottom: 2px;
+    }
+    .sidebar-content .nav-group:first-child h2 {
+      margin-bottom: 6px;
+      font-size: 0.88rem;
+    }
+    .sidebar-content .nav-group:first-child .nav-list a {
+      padding: 6px 8px;
+    }
+    .sidebar-content .nav-group:last-child {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .sidebar-content .nav-group:last-child .nav-list {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      align-content: start;
+    }
+    .layout[data-sidebar-collapsed="true"]:not([data-sidebar-hovered="true"]) .sidebar-title,
+    .layout[data-sidebar-collapsed="true"]:not([data-sidebar-hovered="true"]) .sidebar-content {
+      display: none;
+    }
+    .layout[data-sidebar-collapsed="true"]:not([data-sidebar-hovered="true"]) .sidebar-toolbar {
+      border-bottom: 0;
+    }
+    .layout[data-sidebar-collapsed="true"][data-sidebar-hovered="true"] .sidebar {
+      width: min(280px, calc(100vw - 32px));
+      z-index: 3;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+    }
+    .sidebar-toggle {
+      width: 32px;
+      min-width: 32px;
+      height: 32px;
+      padding: 0;
+      flex: 0 0 32px;
     }
     .nav-group h2 {
       font-size: 0.92rem;
@@ -2078,7 +2159,7 @@ const workbenchHTML = `<!doctype html>
       display: grid;
       gap: 12px;
     }
-    .toolbar-button, .link-button, button {
+    .toolbar-button, .link-button, .sidebar-toggle, button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -2111,6 +2192,7 @@ const workbenchHTML = `<!doctype html>
     .content {
       display: grid;
       gap: 16px;
+      min-height: 0;
     }
     .header-row {
       display: flex;
@@ -2233,10 +2315,7 @@ const workbenchHTML = `<!doctype html>
     }
     @media (max-width: 920px) {
       .layout {
-        grid-template-columns: 1fr;
-      }
-      .sidebar {
-        position: static;
+        grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
       }
     }
   </style>
@@ -2262,18 +2341,24 @@ const workbenchHTML = `<!doctype html>
     {{if .Status}}<div class="notice ok">{{.Status}}</div>{{end}}
     {{if .Error}}<div class="notice error">{{.Error}}</div>{{end}}
 
-    <div class="layout">
+    <div class="layout" data-sidebar-collapsed="false" data-sidebar-hovered="false">
       <aside class="panel sidebar">
-        {{range .NavGroups}}
-        <section class="nav-group">
-          <h2>{{.Label}}</h2>
-          <ul class="nav-list">
-            {{range .Entries}}
-            <li><a href="{{.Href}}"{{if .Active}} class="active"{{end}}><span>{{.Title}}</span><span class="count">{{.Count}}</span></a></li>
-            {{end}}
-          </ul>
-        </section>
-        {{end}}
+        <div class="sidebar-toolbar">
+          <button id="toggle-sidebar" class="sidebar-toggle" type="button" aria-expanded="true" aria-controls="workbench-sidebar-content" title="Toggle sidebar">&#9664;</button>
+          <div class="sidebar-title">Explorer</div>
+        </div>
+        <div id="workbench-sidebar-content" class="sidebar-content">
+          {{range .NavGroups}}
+          <section class="nav-group">
+            <h2>{{.Label}}</h2>
+            <ul class="nav-list">
+              {{range .Entries}}
+              <li><a href="{{.Href}}"{{if .Active}} class="active"{{end}}><span>{{.Title}}</span><span class="count">{{.Count}}</span></a></li>
+              {{end}}
+            </ul>
+          </section>
+          {{end}}
+        </div>
       </aside>
 
       <section class="content">
@@ -2367,10 +2452,43 @@ const workbenchHTML = `<!doctype html>
   </main>
   <script>
     (() => {
+      const layout = document.querySelector(".layout");
+      const sidebar = document.querySelector(".sidebar");
+      const toggleSidebarButton = document.getElementById("toggle-sidebar");
+      const sidebarStateKey = "workbench.sidebar.collapsed";
       const dialog = document.getElementById("capture-modal");
       const openButton = document.getElementById("open-capture");
       const closeButton = document.getElementById("close-capture");
       const titleInput = document.getElementById("capture-title");
+      const sidebarCollapsed = () => layout && layout.dataset.sidebarCollapsed === "true";
+      const syncSidebarState = () => {
+        if (!layout || !toggleSidebarButton) {
+          return;
+        }
+        const collapsed = sidebarCollapsed();
+        const hovered = layout.dataset.sidebarHovered === "true";
+        const expanded = !collapsed || hovered;
+        toggleSidebarButton.setAttribute("aria-expanded", expanded ? "true" : "false");
+        toggleSidebarButton.innerHTML = expanded ? "&#9664;" : "&#9654;";
+      };
+      const setSidebarCollapsed = (collapsed) => {
+        if (!layout) {
+          return;
+        }
+        layout.dataset.sidebarCollapsed = collapsed ? "true" : "false";
+        window.localStorage.setItem(sidebarStateKey, collapsed ? "true" : "false");
+        if (!collapsed) {
+          layout.dataset.sidebarHovered = "false";
+        }
+        syncSidebarState();
+      };
+      const setSidebarHovered = (hovered) => {
+        if (!layout) {
+          return;
+        }
+        layout.dataset.sidebarHovered = sidebarCollapsed() && hovered ? "true" : "false";
+        syncSidebarState();
+      };
       const openCapture = () => {
         if (!dialog || typeof dialog.showModal !== "function") {
           return;
@@ -2393,6 +2511,20 @@ const workbenchHTML = `<!doctype html>
       if (closeButton) {
         closeButton.addEventListener("click", closeCapture);
       }
+      if (toggleSidebarButton) {
+        toggleSidebarButton.addEventListener("click", () => {
+          setSidebarCollapsed(!sidebarCollapsed());
+        });
+      }
+      if (sidebar) {
+        sidebar.addEventListener("mouseenter", () => setSidebarHovered(true));
+        sidebar.addEventListener("mouseleave", () => setSidebarHovered(false));
+      }
+      const persistedSidebarState = window.localStorage.getItem(sidebarStateKey);
+      if (persistedSidebarState === "true" || persistedSidebarState === "false") {
+        layout.dataset.sidebarCollapsed = persistedSidebarState;
+      }
+      syncSidebarState();
       document.addEventListener("keydown", (event) => {
         const tag = event.target && event.target.tagName ? String(event.target.tagName).toLowerCase() : "";
         const editable = tag === "input" || tag === "textarea" || tag === "select" || event.target && event.target.isContentEditable;
@@ -2429,18 +2561,21 @@ const sourceWorkbenchHTML = `<!doctype html>
     * { box-sizing: border-box; }
     body {
       margin: 0;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--ink);
     }
     .shell-header {
-      max-width: 1280px;
-      margin: 0 auto;
+      width: 100%;
       padding: 24px 16px 0;
     }
     main {
-      max-width: 720px;
-      margin: 0 auto;
+      width: 100%;
+      flex: 1 1 auto;
+      min-height: 0;
       padding: 12px 16px 48px;
     }
     h1 {
@@ -2929,18 +3064,23 @@ const workItemWorkspaceHTML = `<!doctype html>
     * { box-sizing: border-box; }
     body {
       margin: 0;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--ink);
     }
     .shell-header {
-      max-width: 1280px;
-      margin: 0 auto;
+      width: 100%;
       padding: 24px 16px 0;
     }
     main {
-      max-width: 1180px;
-      margin: 0 auto;
+      width: 100%;
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
       padding: 12px 16px 48px;
     }
     .topbar {
@@ -3027,31 +3167,115 @@ const workItemWorkspaceHTML = `<!doctype html>
     .workspace {
       display: grid;
       gap: 18px;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
       align-items: stretch;
       margin-top: 0;
-      min-height: calc(100vh - 220px);
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .workspace[data-sidebar-collapsed="true"] {
+      grid-template-columns: 52px minmax(0, 1fr);
     }
     .agent-pane {
-      display: grid;
-      gap: 18px;
-      align-content: start;
-    }
-    .panel {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 16px;
       background: #fff;
+      overflow: auto;
+    }
+    .sidebar-toolbar {
+      display: flex;
+      justify-content: flex-start;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      background: #fff;
+      z-index: 1;
+    }
+    .sidebar-title {
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .sidebar-section {
+      padding: 14px var(--content-inset);
+      border-top: 1px solid var(--line);
       min-width: 0;
     }
-    .panel-head {
+    .sidebar-section:first-child {
+      border-top: 0;
+    }
+    .sidebar-head {
       display: flex;
       justify-content: space-between;
       gap: 12px;
       align-items: center;
-      margin-bottom: 12px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--line);
+      margin-bottom: 10px;
+    }
+    .topbar button,
+    .mode-toggle,
+    .save-button,
+    .capture-actions button,
+    .capture-head button,
+    button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      padding: 6px 10px;
+      font: inherit;
+      font-size: 0.85rem;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+    }
+    input[type="text"],
+    button {
+      width: 100%;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
+    }
+    button {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .topbar .toolbar-button,
+    .sidebar-toggle {
+      background: #fff;
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .topbar .toolbar-button,
+    .sidebar-toolbar button,
+    .mode-toggle,
+    .save-button,
+    .capture-head button,
+    .capture-actions button {
+      width: auto;
+      min-width: 0;
+    }
+    .sidebar-toggle {
+      width: 32px;
+      min-width: 32px;
+      height: 32px;
+      padding: 0;
+      flex: 0 0 32px;
     }
     .stack {
       display: grid;
@@ -3068,6 +3292,8 @@ const workItemWorkspaceHTML = `<!doctype html>
       display: flex;
       flex-direction: column;
       min-width: 0;
+      min-height: 0;
+      height: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
       background: #fff;
@@ -3090,12 +3316,14 @@ const workItemWorkspaceHTML = `<!doctype html>
     .editor-stack[data-mode="preview"] .editor-only {
       display: none;
     }
-    .editor-stack[data-mode="preview"] .preview-panel {
-      display: grid;
-      gap: 16px;
+    .preview-panel {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
     }
-    .editor-stack[data-mode="preview"] .preview-surface {
-      min-height: 520px;
+    .editor-stack[data-mode="preview"] .preview-panel {
+      display: flex;
     }
     .stats {
       display: flex;
@@ -3105,7 +3333,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       font-size: 0.9rem;
       margin-top: 8px;
     }
-    .tabs, .list {
+    .tabs, .list, .tree-list {
       list-style: none;
       padding: 0;
       margin: 0;
@@ -3114,7 +3342,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       display: flex;
       gap: 8px;
     }
-    .tabs a, .list a {
+    .tabs a, .list a, .tree-list a {
       color: inherit;
       text-decoration: none;
     }
@@ -3148,6 +3376,45 @@ const workItemWorkspaceHTML = `<!doctype html>
       margin-top: 4px;
       font-size: 0.84rem;
     }
+    .tree-list {
+      display: grid;
+      gap: 4px;
+    }
+    .tree-list a,
+    .tree-list .active-item {
+      display: block;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .tree-list a.active,
+    .tree-list .active-item {
+      background: #f6f6f6;
+      font-weight: 600;
+    }
+    .tree-meta {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      word-break: break-word;
+    }
+    .sidebar-preview {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .workspace[data-sidebar-collapsed="true"]:not([data-sidebar-hovered="true"]) .sidebar-title,
+    .workspace[data-sidebar-collapsed="true"]:not([data-sidebar-hovered="true"]) #agent-pane-content {
+      display: none;
+    }
+    .workspace[data-sidebar-collapsed="true"]:not([data-sidebar-hovered="true"]) .sidebar-toolbar {
+      border-bottom: 0;
+    }
+    .workspace[data-sidebar-collapsed="true"][data-sidebar-hovered="true"] .agent-pane {
+      width: min(320px, calc(100vw - 32px));
+      z-index: 3;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+    }
     textarea {
       width: 100%;
       border-radius: 6px;
@@ -3168,10 +3435,6 @@ const workItemWorkspaceHTML = `<!doctype html>
     .preview-panel {
       border-top: 1px solid var(--line);
       padding-top: 16px;
-      display: flex;
-      flex: 1;
-      min-height: 0;
-      flex-direction: column;
     }
     .editor-stack[data-mode="preview"] .preview-panel {
       border-top: 0;
@@ -3211,13 +3474,9 @@ const workItemWorkspaceHTML = `<!doctype html>
       border-bottom: 1px solid var(--line);
     }
     .mode-toggle {
-      width: auto;
-      min-width: 0;
       margin-left: auto;
     }
     .save-button {
-      width: auto;
-      min-width: 0;
       margin: 0;
     }
     dialog.capture-modal {
@@ -3298,11 +3557,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       padding: 0 var(--content-inset);
       flex-wrap: wrap;
     }
-    @media (max-width: 980px) {
-      .workspace {
-        grid-template-columns: 1fr;
-        min-height: 0;
-      }
+    @media (max-width: 720px) {
       textarea {
         min-height: 320px;
       }
@@ -3330,10 +3585,17 @@ const workItemWorkspaceHTML = `<!doctype html>
     </h1></div>{{end}}
   </header>
   <main>
-    <div class="workspace">
+    <div class="workspace" data-sidebar-collapsed="false" data-sidebar-hovered="false">
+      <aside id="agent-pane" class="agent-pane" data-refresh-url="{{.AgentRefreshHref}}">
+        <div class="sidebar-toolbar">
+          <button id="toggle-sidebar" class="sidebar-toggle" type="button" aria-expanded="true" aria-controls="agent-pane" title="Toggle sidebar">&#9664;</button>
+          <div class="sidebar-title">Explorer</div>
+        </div>
+        <div id="agent-pane-content">{{.AgentPaneHTML}}</div>
+      </aside>
       <section class="workspace-main">
         <div class="mode-actions">
-          <div class="section-label">{{if eq .EntityType "issue"}}Issue{{else if eq .EntityType "task"}}Task{{else}}Work item{{end}}</div>
+          <div class="section-label">Main</div>
           <button id="toggle-preview-mode" class="mode-toggle" type="button" aria-pressed="false">Preview</button>
         </div>
         <form id="work-item-editor" method="post" action="{{.SaveAction}}" data-preview-url="{{.PreviewAction}}" data-asset-upload-url="{{.AssetUploadAction}}">
@@ -3351,8 +3613,6 @@ const workItemWorkspaceHTML = `<!doctype html>
           </div>
         </form>
       </section>
-
-      <aside id="agent-pane" class="agent-pane" data-refresh-url="{{.AgentRefreshHref}}">{{.AgentPaneHTML}}</aside>
     </div>
     <dialog id="capture-modal" class="capture-modal">
       <div class="capture-card">
@@ -3378,6 +3638,11 @@ const workItemWorkspaceHTML = `<!doctype html>
       const preview = document.getElementById("main-preview");
       const feedback = document.getElementById("editor-feedback");
       const togglePreviewButton = document.getElementById("toggle-preview-mode");
+      const workspace = document.querySelector(".workspace");
+      const toggleSidebarButton = document.getElementById("toggle-sidebar");
+      const agentPane = document.getElementById("agent-pane");
+      const agentPaneContent = document.getElementById("agent-pane-content");
+      const sidebarStateKey = "workbench.sidebar.collapsed";
       const captureDialog = document.getElementById("capture-modal");
       const openCaptureButton = document.getElementById("open-capture");
       const closeCaptureButton = document.getElementById("close-capture");
@@ -3414,6 +3679,35 @@ const workItemWorkspaceHTML = `<!doctype html>
           window.clearTimeout(saveTimer);
         }
         saveTimer = window.setTimeout(() => setFeedback("", ""), 1500);
+      };
+      const sidebarCollapsed = () => workspace && workspace.dataset.sidebarCollapsed === "true";
+      const syncSidebarState = () => {
+        if (!workspace || !toggleSidebarButton) {
+          return;
+        }
+        const collapsed = sidebarCollapsed();
+        const hovered = workspace.dataset.sidebarHovered === "true";
+        const expanded = !collapsed || hovered;
+        toggleSidebarButton.setAttribute("aria-expanded", expanded ? "true" : "false");
+        toggleSidebarButton.innerHTML = expanded ? "&#9664;" : "&#9654;";
+      };
+      const setSidebarCollapsed = (collapsed) => {
+        if (!workspace) {
+          return;
+        }
+        workspace.dataset.sidebarCollapsed = collapsed ? "true" : "false";
+        window.localStorage.setItem(sidebarStateKey, collapsed ? "true" : "false");
+        if (!collapsed) {
+          workspace.dataset.sidebarHovered = "false";
+        }
+        syncSidebarState();
+      };
+      const setSidebarHovered = (hovered) => {
+        if (!workspace) {
+          return;
+        }
+        workspace.dataset.sidebarHovered = sidebarCollapsed() && hovered ? "true" : "false";
+        syncSidebarState();
       };
       const saveDocument = async (options = {}) => {
         if (!form) {
@@ -3595,6 +3889,20 @@ const workItemWorkspaceHTML = `<!doctype html>
           setPreviewMode(previewMode() === "preview" ? "editor" : "preview");
         });
       }
+      if (toggleSidebarButton) {
+        toggleSidebarButton.addEventListener("click", () => {
+          setSidebarCollapsed(!sidebarCollapsed());
+        });
+      }
+      if (agentPane) {
+        agentPane.addEventListener("mouseenter", () => setSidebarHovered(true));
+        agentPane.addEventListener("mouseleave", () => setSidebarHovered(false));
+      }
+      const persistedSidebarState = window.localStorage.getItem(sidebarStateKey);
+      if (persistedSidebarState === "true" || persistedSidebarState === "false") {
+        workspace.dataset.sidebarCollapsed = persistedSidebarState;
+      }
+      syncSidebarState();
       if (preview) {
         preview.addEventListener("dblclick", async (event) => {
           const selection = window.getSelection ? String(window.getSelection() || "") : "";
@@ -3729,8 +4037,7 @@ const workItemWorkspaceHTML = `<!doctype html>
         });
       }
 
-      const agentPane = document.getElementById("agent-pane");
-      if (!agentPane || !agentPane.dataset.refreshUrl) {
+      if (!agentPane || !agentPaneContent || !agentPane.dataset.refreshUrl) {
         return;
       }
       let refreshing = false;
@@ -3748,8 +4055,8 @@ const workItemWorkspaceHTML = `<!doctype html>
             return;
           }
           const html = await response.text();
-          if (html !== agentPane.innerHTML) {
-            agentPane.innerHTML = html;
+          if (html !== agentPaneContent.innerHTML) {
+            agentPaneContent.innerHTML = html;
           }
         } catch (_) {
         } finally {
@@ -3764,53 +4071,67 @@ const workItemWorkspaceHTML = `<!doctype html>
 </html>`
 
 const workItemAgentPaneHTML = `
-<section class="panel">
-  <div class="panel-head">
-    <div class="section-label">Memos</div>
+<section class="sidebar-section">
+  <div class="sidebar-head">
+    <div class="section-label">Main</div>
+  </div>
+  <ul class="tree-list">
+    <li>
+      <div class="active-item">
+        <div>{{.Title}}</div>
+        <div class="tree-meta">main document</div>
+      </div>
+    </li>
+  </ul>
+</section>
+
+<section class="sidebar-section">
+  <div class="sidebar-head">
+    <div class="section-label">Context</div>
     <ul class="tabs">
       <li><a href="{{.MemoRecentHref}}"{{if .IsMemoRecent}} class="active"{{end}}>Recent</a></li>
       <li><a href="{{.MemoTreeHref}}"{{if .IsMemoTree}} class="active"{{end}}>Tree</a></li>
     </ul>
   </div>
   {{if .Memos}}
-  <ul class="list">
+  <ul class="tree-list">
     {{range .Memos}}
     <li>
       <a href="{{.Href}}"{{if .Active}} class="active"{{end}}>
         <div>{{.Label}}</div>
-        <div class="meta">{{.Meta}}{{if .Modified}} · {{.Modified}}{{end}}</div>
+        <div class="tree-meta">{{.Meta}}{{if .Modified}} · {{.Modified}}{{end}}</div>
       </a>
     </li>
     {{end}}
   </ul>
   {{if .SelectedMemoLabel}}
-  <div class="stack" style="margin-top:16px;">
+  <div class="sidebar-preview stack">
     <h3>{{.SelectedMemoLabel}}</h3>
     <pre class="viewer">{{.SelectedMemoBody}}</pre>
   </div>
   {{end}}
   {{else}}
-  <p class="empty">No memos yet.</p>
+  <p class="empty">No context files yet.</p>
   {{end}}
 </section>
 
-<section class="panel">
-  <div class="panel-head">
+<section class="sidebar-section">
+  <div class="sidebar-head">
     <div class="section-label">Resources</div>
   </div>
   {{if .Sources}}
-  <ul class="list">
+  <ul class="tree-list">
     {{range .Sources}}
     <li>
       <a href="{{.Href}}"{{if .Active}} class="active"{{end}}>
         <div>{{.Label}}</div>
-        <div class="meta"><code>{{.Meta}}</code></div>
+        <div class="tree-meta"><code>{{.Meta}}</code></div>
       </a>
     </li>
     {{end}}
   </ul>
   {{if .SelectedSourceLabel}}
-  <div class="stack" style="margin-top:16px;">
+  <div class="sidebar-preview stack">
     <h3>{{.SelectedSourceLabel}}</h3>
     <div class="meta"><code>{{.SelectedSourceMeta}}</code></div>
     <pre class="viewer">{{.SelectedSourceBody}}</pre>
