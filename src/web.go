@@ -183,8 +183,9 @@ type sourceWorkbenchServer struct {
 }
 
 type sourceWorkbenchOption struct {
-	Value string
-	Label string
+	Value    string
+	Label    string
+	Selected bool
 }
 
 type sourceWorkbenchNavItem struct {
@@ -251,7 +252,17 @@ type webWorkbenchPage struct {
 	NavGroups     []webWorkbenchNavGroup
 	CurrentTitle  string
 	CurrentCount  int
+	CurrentCountLabel string
 	Items         []webWorkbenchItem
+	ThemeTabs     []sourceWorkbenchNavItem
+	ShowThemeComposer bool
+	ThemeComposerAction string
+	ThemeComposerPlaceholder string
+	ThemeComposerThemeID string
+	ThemeAddSourcesHref string
+	ShowThemeSources bool
+	ThemeSources  []webWorkbenchSourceEntry
+	EmptyState    string
 }
 
 type webWorkbenchNavGroup struct {
@@ -271,13 +282,18 @@ type webWorkbenchItem struct {
 	ID                  string
 	Title               string
 	Theme               string
+	ThemeLabel          string
+	StageLabel          string
 	Summary             string
 	WorkspaceHref       string
+	ThemeAction         string
 	MoveAction          string
 	DoneForDayAction    string
 	CompleteAction      string
 	ReopenAction        string
-	MoveOptions         []webWorkbenchMoveOption
+	ThemeOptions        []webWorkbenchSelectOption
+	MoveOptions         []webWorkbenchSelectOption
+	CanSetTheme         bool
 	CanMove             bool
 	CanDoneForDay       bool
 	CanComplete         bool
@@ -286,10 +302,15 @@ type webWorkbenchItem struct {
 	CanReopenDoneForDay bool
 }
 
-type webWorkbenchMoveOption struct {
+type webWorkbenchSelectOption struct {
 	Value    string
 	Label    string
 	Selected bool
+}
+
+type webWorkbenchSourceEntry struct {
+	Title string
+	Ref   string
 }
 
 type workItemMemoMode string
@@ -394,6 +415,7 @@ func (s *sourceWorkbenchServer) handleWorkbenchIndex(w http.ResponseWriter, r *h
 	}
 	page, err := s.loadWorkbenchPage(
 		strings.TrimSpace(r.URL.Query().Get("nav")),
+		strings.TrimSpace(r.URL.Query().Get("tab")),
 		strings.TrimSpace(r.URL.Query().Get("q")),
 		strings.TrimSpace(r.URL.Query().Get("status")),
 		strings.TrimSpace(r.URL.Query().Get("error")),
@@ -413,6 +435,7 @@ func (s *sourceWorkbenchServer) handleSourceIndex(w http.ResponseWriter, r *http
 		return
 	}
 	activeView := normalizeSourceWorkbenchView(r.URL.Query().Get("view"))
+	preferredThemeID := strings.TrimSpace(r.URL.Query().Get("theme_id"))
 	stagedFiles, err := s.vault.ListStagedSourceFiles()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -440,7 +463,7 @@ func (s *sourceWorkbenchServer) handleSourceIndex(w http.ResponseWriter, r *http
 	}
 	page := sourceWorkbenchPage{
 		WorkbenchHref: buildWorkbenchHref("", "", "", ""),
-		SourcesHref:   buildSourceWorkbenchHref(activeView, "", ""),
+		SourcesHref:   buildSourceWorkbenchHrefForTheme(activeView, preferredThemeID, "", ""),
 		HeaderTitle:   "Sources",
 		TitleNav: []sourceWorkbenchNavItem{{
 			Label:  "Sources",
@@ -449,9 +472,9 @@ func (s *sourceWorkbenchServer) handleSourceIndex(w http.ResponseWriter, r *http
 		HeaderNav:       buildGlobalHeaderNav("sources"),
 		Breadcrumbs:     buildSourceBreadcrumbs(activeView),
 		CaptureAction:   "/workbench/add",
-		CaptureReturn:   buildSourceWorkbenchHref(activeView, "", ""),
+		CaptureReturn:   buildSourceWorkbenchHrefForTheme(activeView, preferredThemeID, "", ""),
 		ActiveView:      string(activeView),
-		Nav:             sourceWorkbenchNav(activeView, len(sourceDocs), len(stagedFiles)),
+		Nav:             sourceWorkbenchNav(activeView, preferredThemeID, len(sourceDocs), len(stagedFiles)),
 		StagedFiles:     stagedFiles,
 		StagedItems:     make([]sourceWorkbenchStagedItem, 0, len(stagedFiles)),
 		SourceDocuments: make([]sourceWorkbenchOption, 0, len(sourceDocs)),
@@ -476,7 +499,7 @@ func (s *sourceWorkbenchServer) handleSourceIndex(w http.ResponseWriter, r *http
 	themeLabels := map[string]string{}
 	for _, theme := range themes {
 		label := fmt.Sprintf("%s (%s)", theme.Title, theme.ID)
-		page.Themes = append(page.Themes, sourceWorkbenchOption{Value: theme.ID, Label: label})
+		page.Themes = append(page.Themes, sourceWorkbenchOption{Value: theme.ID, Label: label, Selected: theme.ID == preferredThemeID})
 		themeLabels[theme.ID] = label
 	}
 	issueLabels := map[string]string{}
@@ -501,12 +524,16 @@ func (s *sourceWorkbenchServer) handleSourceIndex(w http.ResponseWriter, r *http
 	}
 }
 
-func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, query, status, errMsg string) (webWorkbenchPage, error) {
+func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, selectedTab, query, status, errMsg string) (webWorkbenchPage, error) {
 	state, err := LoadVaultState(s.vault)
 	if err != nil {
 		return webWorkbenchPage{}, err
 	}
 	themes, err := s.vault.LoadThemes()
+	if err != nil {
+		return webWorkbenchPage{}, err
+	}
+	sourceDocs, err := s.vault.LoadSourceDocuments()
 	if err != nil {
 		return webWorkbenchPage{}, err
 	}
@@ -516,15 +543,16 @@ func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, query, status, er
 		now:    time.Now,
 	}
 	selectedNav = normalizeWorkbenchNav(selectedNav, themes)
+	selectedTab = normalizeWorkbenchThemeTab(selectedTab)
 	items := workbenchItemsForNav(app, selectedNav)
 	currentTitle := workbenchTitleForNav(selectedNav, themes)
 	page := webWorkbenchPage{
-		WorkbenchHref: buildWorkbenchHref(selectedNav, "", "", ""),
+		WorkbenchHref: buildWorkbenchHrefForTab(selectedNav, selectedTab, "", "", ""),
 		SourcesHref:   buildSourceWorkbenchHref(sourceWorkbenchViewPaste, "", ""),
 		HeaderTitle:   "Workbench",
 		TitleNav: []sourceWorkbenchNavItem{{
 			Label:  "Workbench",
-			Href:   buildWorkbenchHref(selectedNav, query, "", ""),
+			Href:   buildWorkbenchHrefForTab(selectedNav, selectedTab, query, "", ""),
 			Active: true,
 		}},
 		HeaderNav:     buildGlobalHeaderNav("workbench"),
@@ -535,27 +563,51 @@ func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, query, status, er
 		Status:        strings.TrimSpace(status),
 		Error:         strings.TrimSpace(errMsg),
 		CaptureAction: "/workbench/add",
-		CaptureReturn: buildWorkbenchHref(selectedNav, query, "", ""),
-		NavGroups:     buildWorkbenchNavGroups(app, themes, selectedNav),
+		CaptureReturn: buildWorkbenchHrefForTab(selectedNav, selectedTab, query, "", ""),
+		NavGroups:     buildWorkbenchNavGroups(app, themes, selectedNav, selectedTab),
 		CurrentTitle:  currentTitle,
 		CurrentCount:  len(items),
+		CurrentCountLabel: workbenchCountLabel("item", len(items)),
 		Items:         make([]webWorkbenchItem, 0, len(items)),
+		ThemeSources:  nil,
+		EmptyState:    "No items.",
+	}
+	if theme, ok := findWorkbenchTheme(selectedNav, themes); ok {
+		page.ShowThemeComposer = true
+		page.ThemeComposerAction = "/workbench/add"
+		page.ThemeComposerPlaceholder = "Add a work item to " + theme.Title
+		page.ThemeComposerThemeID = theme.ID
+		page.ThemeAddSourcesHref = buildSourceWorkbenchHrefForTheme(sourceWorkbenchViewPaste, theme.ID, "", "")
+		page.ThemeTabs = []sourceWorkbenchNavItem{
+			{Label: "Work items", Href: buildWorkbenchHrefForTab(theme.ID, "work-items", query, "", ""), Active: selectedTab != "sources"},
+			{Label: "Sources", Href: buildWorkbenchHrefForTab(theme.ID, "sources", query, "", ""), Active: selectedTab == "sources"},
+		}
+		if selectedTab == "sources" {
+			page.ShowThemeSources = true
+			page.ThemeSources = buildWorkbenchThemeSourceEntries(s.vault, theme, sourceDocs)
+			page.CurrentCount = len(page.ThemeSources)
+			page.CurrentCountLabel = workbenchCountLabel("source", len(page.ThemeSources))
+			page.EmptyState = "No sources."
+			return page, nil
+		}
+		page.CurrentCountLabel = workbenchCountLabel("work item", len(items))
 	}
 	now := time.Now()
-	returnTo := buildWorkbenchHref(selectedNav, query, "", "")
+	returnTo := buildWorkbenchHrefForTab(selectedNav, selectedTab, query, "", "")
 	for _, ref := range items {
-		page.Items = append(page.Items, webWorkbenchItemFromItem(ref.item, now, returnTo, currentTitle))
+		page.Items = append(page.Items, webWorkbenchItemFromItem(ref.item, now, returnTo, currentTitle, themes))
 	}
 	return page, nil
 }
 
-func webWorkbenchItemFromItem(item Item, now time.Time, returnTo, returnLabel string) webWorkbenchItem {
-	moveOptions := []webWorkbenchMoveOption{
+func webWorkbenchItemFromItem(item Item, now time.Time, returnTo, returnLabel string, themes []ThemeDoc) webWorkbenchItem {
+	moveOptions := []webWorkbenchSelectOption{
 		{Value: "inbox", Label: "Inbox", Selected: item.Triage == TriageInbox},
 		{Value: "now", Label: "Now", Selected: item.Triage == TriageStock && item.Stage == StageNow},
 		{Value: "next", Label: "Next", Selected: item.Triage == TriageStock && item.Stage == StageNext},
 		{Value: "later", Label: "Later", Selected: item.Triage == TriageStock && item.Stage == StageLater},
 	}
+	themeOptions := buildWorkbenchThemeOptions(item.Theme, themes)
 	summaryParts := []string{}
 	switch {
 	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled && item.ScheduledFor != "":
@@ -567,13 +619,18 @@ func webWorkbenchItemFromItem(item Item, now time.Time, returnTo, returnLabel st
 		ID:                  item.ID,
 		Title:               item.Title,
 		Theme:               item.Theme,
+		ThemeLabel:          workbenchThemeLabel(item.Theme, themes),
+		StageLabel:          workbenchStageLabel(item, now),
 		Summary:             strings.Join(summaryParts, " · "),
 		WorkspaceHref:       buildWorkItemWorkspaceHref(item.ID, workItemMemoModeRecent, "", "", returnTo, returnLabel),
+		ThemeAction:         "/workbench/items/" + url.PathEscape(item.ID) + "/theme",
 		MoveAction:          "/workbench/items/" + url.PathEscape(item.ID) + "/move",
 		DoneForDayAction:    "/workbench/items/" + url.PathEscape(item.ID) + "/done-for-day",
 		CompleteAction:      "/workbench/items/" + url.PathEscape(item.ID) + "/complete",
 		ReopenAction:        "/workbench/items/" + url.PathEscape(item.ID) + "/reopen",
+		ThemeOptions:        themeOptions,
 		MoveOptions:         moveOptions,
+		CanSetTheme:         item.Status == "open",
 		CanMove:             item.Status == "open",
 		CanDoneForDay:       item.IsVisibleToday(now),
 		CanComplete:         item.Status == "open",
@@ -581,6 +638,71 @@ func webWorkbenchItemFromItem(item Item, now time.Time, returnTo, returnLabel st
 		CanReopenComplete:   item.Status == "done",
 		CanReopenDoneForDay: item.IsClosedForToday(now),
 	}
+}
+
+func workbenchThemeLabel(themeID string, themes []ThemeDoc) string {
+	themeID = strings.TrimSpace(themeID)
+	if themeID == "" {
+		return ""
+	}
+	for _, theme := range themes {
+		if theme.ID == themeID {
+			return theme.Title
+		}
+	}
+	return themeID
+}
+
+func workbenchStageLabel(item Item, now time.Time) string {
+	switch {
+	case item.Status == "done":
+		return "Complete"
+	case item.IsClosedForToday(now):
+		return "Done for today"
+	case item.Triage == TriageInbox:
+		return "Inbox"
+	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindScheduled:
+		return ""
+	case item.Triage == TriageDeferred && item.DeferredKind == DeferredKindRecurring:
+		return ""
+	case item.Triage == TriageStock && item.Stage == StageNow:
+		return "Now"
+	case item.Triage == TriageStock && item.Stage == StageNext:
+		return "Next"
+	case item.Triage == TriageStock && item.Stage == StageLater:
+		return "Later"
+	default:
+		return "Open"
+	}
+}
+
+func buildWorkbenchThemeOptions(selectedTheme string, themes []ThemeDoc) []webWorkbenchSelectOption {
+	selectedTheme = strings.TrimSpace(selectedTheme)
+	options := []webWorkbenchSelectOption{{
+		Value:    "",
+		Label:    "No Theme",
+		Selected: selectedTheme == "",
+	}}
+	found := selectedTheme == ""
+	for _, theme := range themes {
+		selected := theme.ID == selectedTheme
+		options = append(options, webWorkbenchSelectOption{
+			Value:    theme.ID,
+			Label:    fmt.Sprintf("%s (%s)", theme.Title, theme.ID),
+			Selected: selected,
+		})
+		if selected {
+			found = true
+		}
+	}
+	if !found {
+		options = append(options, webWorkbenchSelectOption{
+			Value:    selectedTheme,
+			Label:    fmt.Sprintf("Missing Theme (%s)", selectedTheme),
+			Selected: true,
+		})
+	}
+	return options
 }
 
 func normalizeWorkbenchNav(selected string, themes []ThemeDoc) string {
@@ -600,7 +722,55 @@ func normalizeWorkbenchNav(selected string, themes []ThemeDoc) string {
 	return "__now__"
 }
 
-func buildWorkbenchNavGroups(app *App, themes []ThemeDoc, selectedNav string) []webWorkbenchNavGroup {
+func normalizeWorkbenchThemeTab(selected string) string {
+	switch strings.TrimSpace(selected) {
+	case "sources":
+		return "sources"
+	default:
+		return "work-items"
+	}
+}
+
+func findWorkbenchTheme(selectedNav string, themes []ThemeDoc) (ThemeDoc, bool) {
+	for _, theme := range themes {
+		if theme.ID == selectedNav {
+			return theme, true
+		}
+	}
+	return ThemeDoc{}, false
+}
+
+func workbenchCountLabel(noun string, count int) string {
+	if count == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
+}
+
+func buildWorkbenchThemeSourceEntries(vault VaultFS, theme ThemeDoc, sourceDocs []SourceDocument) []webWorkbenchSourceEntry {
+	sourceTitles := map[string]string{}
+	for _, doc := range sourceDocs {
+		sourceTitles[sourceDocumentRef(vault, doc.Path)] = doc.Title
+	}
+	entries := make([]webWorkbenchSourceEntry, 0, len(theme.SourceRefs))
+	for _, ref := range theme.SourceRefs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		title := sourceTitles[ref]
+		if title == "" {
+			title = strings.TrimSuffix(filepath.Base(ref), filepath.Ext(ref))
+		}
+		entries = append(entries, webWorkbenchSourceEntry{
+			Title: title,
+			Ref:   ref,
+		})
+	}
+	return entries
+}
+
+func buildWorkbenchNavGroups(app *App, themes []ThemeDoc, selectedNav, selectedTab string) []webWorkbenchNavGroup {
 	actionEntries := []webWorkbenchNavEntry{
 		{Key: "__inbox__", Title: "Inbox", Count: len(app.itemsForSection(sectionInbox)), Active: selectedNav == "__inbox__"},
 		{Key: "__now__", Title: "Now", Count: len(app.itemsForSection(sectionToday)), Active: selectedNav == "__now__"},
@@ -627,7 +797,7 @@ func buildWorkbenchNavGroups(app *App, themes []ThemeDoc, selectedNav string) []
 			Title:  theme.Title,
 			Count:  countThemeItems(openItems, theme.ID),
 			Active: selectedNav == theme.ID,
-			Href:   buildWorkbenchHref(theme.ID, app.filter, "", ""),
+			Href:   buildWorkbenchHrefForTab(theme.ID, selectedTab, app.filter, "", ""),
 		})
 	}
 	return []webWorkbenchNavGroup{
@@ -731,16 +901,25 @@ func (s *sourceWorkbenchServer) handleWorkbenchAdd(w http.ResponseWriter, r *htt
 	}
 	title := strings.TrimSpace(r.FormValue("title"))
 	query := strings.TrimSpace(r.FormValue("q"))
+	themeID := strings.TrimSpace(r.FormValue("theme_id"))
 	if title == "" {
 		http.Redirect(w, r, buildWorkbenchHref(strings.TrimSpace(r.FormValue("nav")), query, "", "title is required"), http.StatusSeeOther)
 		return
+	}
+	if themeID != "" {
+		if _, err := readThemeDoc(s.vault.ThemeMetaPath(themeID)); err != nil {
+			http.Redirect(w, r, buildWorkbenchHref(strings.TrimSpace(r.FormValue("nav")), query, "", "unknown theme"), http.StatusSeeOther)
+			return
+		}
 	}
 	state, err := LoadVaultState(s.vault)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	state.AddItem(NewInboxItem(time.Now(), title))
+	item := NewInboxItem(time.Now(), title)
+	item.Theme = themeID
+	state.AddItem(item)
 	state.Sort()
 	if err := SaveVaultState(s.vault, state); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -781,6 +960,15 @@ func (s *sourceWorkbenchServer) handleWorkbenchItemAction(w http.ResponseWriter,
 	}
 	now := time.Now()
 	switch action {
+	case "theme":
+		themeID := strings.TrimSpace(r.FormValue("theme_id"))
+		if themeID != "" {
+			if _, err := readThemeDoc(s.vault.ThemeMetaPath(themeID)); err != nil {
+				http.Redirect(w, r, buildWorkbenchHref(nav, query, "", "unknown theme"), http.StatusSeeOther)
+				return
+			}
+		}
+		item.Theme = themeID
 	case "move":
 		switch strings.TrimSpace(r.FormValue("to")) {
 		case "inbox":
@@ -1221,7 +1409,7 @@ func normalizeSourceWorkbenchView(raw string) sourceWorkbenchView {
 	}
 }
 
-func sourceWorkbenchNav(active sourceWorkbenchView, importedCount, stagedCount int) []sourceWorkbenchNavItem {
+func sourceWorkbenchNav(active sourceWorkbenchView, themeID string, importedCount, stagedCount int) []sourceWorkbenchNavItem {
 	items := []struct {
 		view  sourceWorkbenchView
 		label string
@@ -1235,7 +1423,7 @@ func sourceWorkbenchNav(active sourceWorkbenchView, importedCount, stagedCount i
 	for _, item := range items {
 		nav = append(nav, sourceWorkbenchNavItem{
 			Label:  item.label,
-			Href:   buildSourceWorkbenchHref(item.view, "", ""),
+			Href:   buildSourceWorkbenchHrefForTheme(item.view, themeID, "", ""),
 			Active: item.view == active,
 		})
 	}
@@ -1251,9 +1439,16 @@ func (s *sourceWorkbenchServer) redirectToWorkItem(w http.ResponseWriter, r *htt
 }
 
 func buildWorkbenchHref(nav, query, status, errMsg string) string {
+	return buildWorkbenchHrefForTab(nav, "", query, status, errMsg)
+}
+
+func buildWorkbenchHrefForTab(nav, tab, query, status, errMsg string) string {
 	values := url.Values{}
 	if strings.TrimSpace(nav) != "" && strings.TrimSpace(nav) != "__now__" {
 		values.Set("nav", strings.TrimSpace(nav))
+	}
+	if strings.TrimSpace(tab) != "" && strings.TrimSpace(tab) != "work-items" {
+		values.Set("tab", strings.TrimSpace(tab))
 	}
 	if strings.TrimSpace(query) != "" {
 		values.Set("q", strings.TrimSpace(query))
@@ -1268,6 +1463,21 @@ func buildWorkbenchHref(nav, query, status, errMsg string) string {
 		return "/?" + encoded
 	}
 	return "/"
+}
+
+func buildSourceWorkbenchHrefForTheme(view sourceWorkbenchView, themeID, status, errMsg string) string {
+	values := url.Values{}
+	values.Set("view", string(view))
+	if strings.TrimSpace(themeID) != "" {
+		values.Set("theme_id", strings.TrimSpace(themeID))
+	}
+	if strings.TrimSpace(status) != "" {
+		values.Set("status", strings.TrimSpace(status))
+	}
+	if strings.TrimSpace(errMsg) != "" {
+		values.Set("error", strings.TrimSpace(errMsg))
+	}
+	return "/sources?" + values.Encode()
 }
 
 func buildSourceWorkbenchHref(view sourceWorkbenchView, status, errMsg string) string {
@@ -1313,7 +1523,7 @@ func buildGlobalHeaderNav(active string) []sourceWorkbenchNavItem {
 
 func buildSourceBreadcrumbs(activeView sourceWorkbenchView) []sourceWorkbenchNavItem {
 	label := "Sources"
-	for _, item := range sourceWorkbenchNav(activeView, 0, 0) {
+	for _, item := range sourceWorkbenchNav(activeView, "", 0, 0) {
 		if item.Active {
 			label = item.Label
 			break
@@ -1943,17 +2153,27 @@ const workbenchHTML = `<!doctype html>
   <title>Workbench</title>
   <style>
     :root {
-      --bg: #ffffff;
-      --ink: #111111;
-      --muted: #666666;
-      --line: #dddddd;
-      --accent: #111111;
-      --error: #b00020;
-      --panel: #ffffff;
-      --sidebar-expanded-width: 300px;
-      --pane-header-height: 53px;
+      --bg: #f5f5f7;
+      --surface: #ffffff;
+      --surface-soft: #fafafa;
+      --surface-muted: #f8fafc;
+      --ink: #111827;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --line-strong: #d1d5db;
+      --accent: #111827;
+      --accent-soft: #eef2f7;
+      --error: #b42318;
+      --error-bg: #fef3f2;
+      --ok-bg: #f8fafc;
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 12px 30px rgba(15, 23, 42, 0.05);
+      --shadow-popover: 0 18px 40px rgba(15, 23, 42, 0.12);
+      --content-width: 1480px;
+      --sidebar-expanded-width: 280px;
+      --pane-header-height: 56px;
     }
     * { box-sizing: border-box; }
+    html { background: var(--bg); }
     body {
       margin: 0;
       min-height: 100dvh;
@@ -1961,29 +2181,33 @@ const workbenchHTML = `<!doctype html>
       display: flex;
       flex-direction: column;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
+      background: radial-gradient(circle at top, #fbfbfc 0%, var(--bg) 42%);
       color: var(--ink);
       overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; }
+    .shell-header,
+    main {
+      width: min(100%, var(--content-width));
+      margin: 0 auto;
     }
     .shell-header {
-      width: 100%;
-      padding: 28px 16px 8px;
+      padding: 18px 20px 10px;
     }
     main {
-      width: 100%;
       flex: 1 1 auto;
       min-height: 0;
       display: flex;
       flex-direction: column;
-      padding: 12px 16px;
+      padding: 0 20px 20px;
       overflow: hidden;
     }
-    a { color: inherit; }
     .topbar {
       display: flex;
       justify-content: space-between;
       gap: 16px;
-      align-items: flex-start;
+      align-items: center;
       flex-wrap: wrap;
     }
     .title-row {
@@ -1995,16 +2219,16 @@ const workbenchHTML = `<!doctype html>
       gap: 10px;
       flex-wrap: wrap;
       align-items: baseline;
-      font-size: 1.4rem;
+      font-size: 1.5rem;
       line-height: 1.2;
       font-weight: 600;
+      letter-spacing: -0.02em;
     }
     .shell-title .title-link,
     .shell-title .title-current {
       display: inline;
       padding: 0;
       border: 0;
-      border-radius: 0;
       background: transparent;
       font-size: inherit;
       line-height: inherit;
@@ -2012,9 +2236,11 @@ const workbenchHTML = `<!doctype html>
       color: inherit;
       text-decoration: none;
     }
-    .shell-title .crumb-sep {
+    .shell-title .title-link { color: var(--muted); }
+    .shell-title .crumb-sep,
+    .crumb-sep {
       color: var(--muted);
-      font-size: inherit;
+      font-size: 0.88rem;
       font-weight: 400;
     }
     .topbar nav, .breadcrumbs {
@@ -2024,68 +2250,81 @@ const workbenchHTML = `<!doctype html>
       align-items: center;
     }
     .topbar a, .breadcrumbs a, .breadcrumbs span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       text-decoration: none;
-      border: 1px solid var(--line);
+      border: 1px solid transparent;
       border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 0.85rem;
-      background: #fff;
+      padding: 8px 12px;
+      font-size: 0.86rem;
+      color: var(--muted);
+      background: transparent;
+      transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+    }
+    .topbar a:hover, .breadcrumbs a:hover {
+      background: rgba(255, 255, 255, 0.72);
+      border-color: var(--line);
+      color: var(--ink);
     }
     .topbar a.active, .breadcrumbs span {
-      background: #f6f6f6;
+      background: rgba(255, 255, 255, 0.9);
+      border-color: var(--line);
+      color: var(--ink);
       font-weight: 600;
-    }
-    .crumb-sep {
-      color: var(--muted);
-      font-size: 0.85rem;
+      box-shadow: 0 1px 1px rgba(15, 23, 42, 0.03);
     }
     h1, h2, h3 {
       margin: 0;
       font-weight: 600;
-    }
-    h1 {
-      margin-bottom: 6px;
-      font-size: 1.4rem;
+      letter-spacing: -0.01em;
     }
     .meta, .empty, .count {
       color: var(--muted);
       font-size: 0.92rem;
     }
     .notice {
-      padding: 10px 12px;
-      border-radius: 4px;
-      margin: 0 0 12px;
+      padding: 11px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      margin: 0 0 14px;
       font-size: 0.92rem;
+      background: var(--ok-bg);
+      box-shadow: 0 1px 1px rgba(15, 23, 42, 0.02);
     }
-    .notice.ok { background: #f6f6f6; }
-    .notice.error { color: var(--error); background: #fff7f8; }
+    .notice.ok { color: var(--ink); }
+    .notice.error {
+      color: var(--error);
+      background: var(--error-bg);
+      border-color: #f3d0cc;
+    }
     .layout {
       display: grid;
       grid-template-columns: var(--sidebar-expanded-width) minmax(0, 1fr);
-      gap: 18px;
+      gap: 16px;
       align-items: stretch;
-      margin-top: 0;
       flex: 1 1 auto;
       min-height: 0;
     }
     .layout[data-sidebar-collapsed="true"] {
-      grid-template-columns: 52px minmax(0, 1fr);
+      grid-template-columns: 56px minmax(0, 1fr);
     }
     .panel {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: var(--panel);
-      padding: 16px;
+      border: 1px solid rgba(229, 231, 235, 0.9);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
     }
     .sidebar {
       position: relative;
       display: flex;
       flex-direction: column;
-      gap: 0;
-      padding: 0;
       min-height: 0;
       height: 100%;
       overflow: hidden;
+      padding: 0;
+      background: rgba(255, 255, 255, 0.78);
     }
     .sidebar-toolbar {
       display: flex;
@@ -2093,40 +2332,30 @@ const workbenchHTML = `<!doctype html>
       align-items: center;
       gap: 10px;
       min-height: var(--pane-header-height);
-      box-sizing: border-box;
-      padding: 10px;
-      border-bottom: 1px solid var(--line);
-      background: var(--panel);
+      padding: 12px 12px 10px;
+      border-bottom: 1px solid rgba(229, 231, 235, 0.8);
+      background: rgba(255, 255, 255, 0.72);
+      backdrop-filter: blur(8px);
     }
-    .sidebar-title {
-      font-size: 0.84rem;
+    .sidebar-title,
+    .pane-header .section-label {
+      font-size: 0.74rem;
       font-weight: 600;
       color: var(--muted);
-      letter-spacing: 0.04em;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
     }
     .sidebar-content {
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 18px;
       min-height: 0;
-      padding: 16px;
+      padding: 14px;
       overflow: auto;
     }
     .nav-group + .nav-group {
-      border-top: 1px solid var(--line);
+      border-top: 1px solid rgba(229, 231, 235, 0.8);
       padding-top: 16px;
-    }
-    .sidebar-content .nav-group:first-child {
-      padding-bottom: 10px;
-      margin-bottom: 2px;
-    }
-    .sidebar-content .nav-group:first-child h2 {
-      margin-bottom: 6px;
-      font-size: 0.88rem;
-    }
-    .sidebar-content .nav-group:first-child .nav-list a {
-      padding: 6px 8px;
     }
     .sidebar-content .nav-group:last-child {
       flex: 1 1 auto;
@@ -2150,12 +2379,17 @@ const workbenchHTML = `<!doctype html>
     .layout[data-sidebar-collapsed="true"][data-sidebar-hovered="true"] .sidebar {
       width: min(var(--sidebar-expanded-width), calc(100vw - 32px));
       z-index: 3;
-      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+      box-shadow: var(--shadow-popover);
     }
+    .content,
     .content-panel {
       display: flex;
+      flex: 1 1 auto;
       flex-direction: column;
       min-height: 0;
+    }
+    .content { gap: 16px; }
+    .content-panel {
       padding: 0;
       overflow: hidden;
     }
@@ -2165,22 +2399,192 @@ const workbenchHTML = `<!doctype html>
       align-items: center;
       gap: 12px;
       min-height: var(--pane-header-height);
-      box-sizing: border-box;
-      padding: 10px 16px;
-      border-bottom: 1px solid var(--line);
-    }
-    .pane-header .section-label {
-      font-size: 0.78rem;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--muted);
+      padding: 14px 18px 12px;
+      border-bottom: 1px solid rgba(229, 231, 235, 0.8);
     }
     .content-panel-body {
       flex: 1 1 auto;
       min-height: 0;
-      padding: 16px;
+      padding: 10px 18px 14px;
       overflow: auto;
+    }
+    .content-tabs {
+      display: flex;
+      align-items: flex-end;
+      gap: 22px;
+      padding: 0 4px;
+      border-bottom: 1px solid rgba(226, 232, 240, 0.96);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .content-tabs::-webkit-scrollbar {
+      display: none;
+    }
+    .content-tabs a {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 0 12px;
+      border-radius: 0;
+      color: #64748b;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      white-space: nowrap;
+      background: transparent;
+    }
+    .content-tabs a::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -1px;
+      height: 2px;
+      border-radius: 999px;
+      background: transparent;
+    }
+    .content-tabs a:hover {
+      color: var(--ink);
+    }
+    .content-tabs a.active {
+      color: var(--ink);
+    }
+    .content-tabs a.active::after {
+      background: rgba(17, 24, 39, 0.96);
+    }
+    .theme-project-shell {
+      display: grid;
+      gap: 18px;
+      width: min(100%, 880px);
+      margin: 0 auto;
+      padding: 6px 0 10px;
+    }
+    .theme-composer {
+      display: grid;
+      gap: 14px;
+      padding: 18px 18px 14px;
+      border: 1px solid rgba(226, 232, 240, 0.96);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05), 0 2px 8px rgba(15, 23, 42, 0.03);
+    }
+    .theme-composer input[type="text"] {
+      border: 0;
+      padding: 0;
+      min-height: 34px;
+      background: transparent;
+      box-shadow: none;
+      font-size: 1rem;
+      line-height: 1.5;
+    }
+    .theme-composer input[type="text"]::placeholder {
+      color: #94a3b8;
+    }
+    .theme-composer input[type="text"]:focus {
+      border: 0;
+      box-shadow: none;
+    }
+    .theme-composer-footer {
+      display: flex;
+      justify-content: flex-start;
+      align-items: center;
+      gap: 12px;
+      padding-top: 2px;
+    }
+    .theme-composer button {
+      width: auto;
+      min-width: 0;
+      min-height: 34px;
+      padding: 0 14px;
+      border-radius: 999px;
+      background: rgba(17, 24, 39, 0.96);
+      border-color: rgba(17, 24, 39, 0.96);
+      color: #fff;
+      box-shadow: none;
+      white-space: nowrap;
+      font-size: 0.88rem;
+      font-weight: 600;
+    }
+    .theme-composer button:hover {
+      background: #0f172a;
+      border-color: #0f172a;
+    }
+    .theme-sources-toolbar {
+      display: flex;
+      justify-content: flex-start;
+      gap: 12px;
+      align-items: center;
+      padding: 2px 2px 4px;
+      flex-wrap: wrap;
+    }
+    .theme-sources-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      width: auto;
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .theme-sources-cta::before {
+      content: "+";
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      background: rgba(241, 245, 249, 0.96);
+      color: #0f172a;
+      font-size: 0.95rem;
+      line-height: 1;
+    }
+    .theme-sources-cta:hover {
+      color: #0f172a;
+    }
+    .sidebar-toggle,
+    .toolbar-button,
+    .link-button,
+    button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font: inherit;
+      font-size: 0.86rem;
+      font-weight: 500;
+      text-decoration: none;
+      background: rgba(255, 255, 255, 0.94);
+      color: var(--ink);
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+    }
+    .toolbar-button:hover,
+    .link-button:hover,
+    .sidebar-toggle:hover,
+    button:hover {
+      border-color: var(--line-strong);
+      background: #ffffff;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .toolbar-button {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+    }
+    .toolbar-button:hover {
+      background: #0f172a;
+      border-color: #0f172a;
     }
     .sidebar-toggle {
       width: 32px;
@@ -2190,11 +2594,37 @@ const workbenchHTML = `<!doctype html>
       flex: 0 0 32px;
       font-size: 14px;
       line-height: 1;
+      border-radius: 9px;
+      box-shadow: none;
     }
+    form.inline {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    input[type="text"], select {
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      padding: 9px 12px;
+      font: inherit;
+      background: rgba(255, 255, 255, 0.98);
+      color: var(--ink);
+      transition: border-color 120ms ease, box-shadow 120ms ease;
+    }
+    input[type="text"]:focus, select:focus {
+      outline: none;
+      border-color: #c7d2fe;
+      box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.08);
+    }
+    input[type="text"] { width: 100%; }
     .nav-group h2 {
-      font-size: 0.92rem;
       margin-bottom: 10px;
       color: var(--muted);
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
     }
     .nav-list {
       list-style: none;
@@ -2207,168 +2637,290 @@ const workbenchHTML = `<!doctype html>
       display: flex;
       justify-content: space-between;
       gap: 12px;
-      align-items: baseline;
-      padding: 8px 10px;
-      border-radius: 8px;
+      align-items: center;
+      padding: 9px 10px;
+      border-radius: 12px;
       text-decoration: none;
+      color: var(--muted);
+      transition: background 120ms ease, color 120ms ease;
+    }
+    .nav-list a:hover {
+      background: var(--surface-muted);
+      color: var(--ink);
     }
     .nav-list a.active {
-      background: var(--accent);
-      color: #fff;
-    }
-    .stack {
-      display: grid;
-      gap: 12px;
-    }
-    .toolbar-button, .link-button, .sidebar-toggle, button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      padding: 6px 10px;
-      font: inherit;
-      font-size: 0.85rem;
-      text-decoration: none;
-      background: #fff;
+      background: var(--accent-soft);
       color: var(--ink);
-      cursor: pointer;
+      font-weight: 600;
     }
-    form.inline {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-    input[type="text"], select {
-      border-radius: 6px;
-      border: 1px solid var(--line);
-      padding: 9px 12px;
-      font: inherit;
-      background: #fff;
-      color: var(--ink);
-    }
-    input[type="text"] { width: 100%; }
-    .content {
-      display: flex;
-      flex: 1 1 auto;
-      flex-direction: column;
-      gap: 16px;
-      min-height: 0;
-    }
-    .header-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: baseline;
+    .nav-list .count {
+      font-size: 0.84rem;
     }
     .item-title {
       font-weight: 600;
       text-decoration: none;
+      letter-spacing: -0.01em;
     }
-    .action-table-wrap {
-      overflow-x: auto;
+    .item-title:hover {
+      text-decoration: underline;
+      text-decoration-color: rgba(17, 24, 39, 0.28);
     }
-    .action-table {
-      width: 100%;
-      border-collapse: collapse;
+    .workbench-list {
+      display: grid;
+      gap: 0;
+      padding: 2px 0 0;
     }
-    .action-table th,
-    .action-table td {
-      padding: 12px 0;
-      border-top: 1px solid var(--line);
-      vertical-align: top;
-      text-align: left;
+    .workbench-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      padding: 14px 6px;
+      border-top: 1px solid rgba(229, 231, 235, 0.8);
+      background: transparent;
+      transition: background 120ms ease;
     }
-    .action-table thead th {
-      padding-top: 0;
+    .workbench-row:first-child {
       border-top: 0;
-      color: var(--muted);
-      font-size: 0.82rem;
+    }
+    .workbench-row:hover {
+      background: rgba(255, 255, 255, 0.56);
+    }
+    .source-list {
+      display: grid;
+      gap: 0;
+      padding: 2px 0 0;
+    }
+    .source-row {
+      display: grid;
+      gap: 6px;
+      padding: 14px 6px;
+      border-top: 1px solid rgba(229, 231, 235, 0.8);
+    }
+    .source-row:first-child {
+      border-top: 0;
+    }
+    .source-title {
       font-weight: 600;
+      letter-spacing: -0.01em;
     }
-    .action-table tbody tr:first-child td {
-      border-top: 1px solid var(--line);
+    .source-ref {
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.5;
+      word-break: break-all;
     }
-    .action-table th.item-col,
-    .action-table td.item-col {
-      width: 58%;
-      padding-right: 16px;
-    }
-    .action-table th.stage-col,
-    .action-table td.stage-col {
-      width: 22%;
-      padding-right: 16px;
-    }
-    .action-table th.done-col,
-    .action-table td.done-col {
-      width: 20%;
+    .workbench-row-main {
+      min-width: 0;
+      display: grid;
+      gap: 8px;
     }
     .item-stack {
       display: grid;
-      gap: 4px;
-    }
-    .actions {
-      display: flex;
-      flex-wrap: nowrap;
       gap: 6px;
+      min-width: 0;
+    }
+    .item-stack .meta {
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    .row-meta-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
       align-items: center;
     }
-    .actions.done-actions {
-      justify-content: flex-start;
-    }
-    .actions form {
-      display: flex;
-      gap: 6px;
-      flex-wrap: nowrap;
-      align-items: center;
-      margin: 0;
-    }
-    .actions select {
-      width: auto;
-      min-width: 110px;
-    }
-    .move-group {
-      border: 0;
-      border-radius: 0;
-      padding: 0;
-      background: transparent;
-    }
-    .move-group select,
-    .move-group button {
-      height: 32px;
-      min-height: 32px;
-      padding-top: 0;
-      padding-bottom: 0;
-    }
-    .move-group select {
-      padding-left: 10px;
-      padding-right: 28px;
-    }
-    .actions button {
+    .theme-inline,
+    .row-summary,
+    .stage-inline {
+      color: var(--muted);
+      font-size: 0.85rem;
+      line-height: 1.5;
       white-space: nowrap;
     }
-    dialog.capture-modal {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 0;
-      max-width: min(520px, calc(100vw - 24px));
+    .theme-inline {
+      color: var(--ink);
+    }
+    .stage-inline {
+      display: inline-flex;
+      align-items: center;
+    }
+    .row-summary {
+      white-space: normal;
+    }
+    .workbench-row-side {
+      display: flex;
+      align-items: center;
+      justify-content: end;
+      align-self: start;
+      width: 30px;
+      min-width: 0;
+      padding-top: 2px;
+    }
+    .row-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      width: 30px;
+    }
+    .menu-form-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .menu-form-grid form {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+    }
+    .menu-divider {
+      height: 1px;
+      margin: 2px 0 0;
+      background: rgba(229, 231, 235, 0.9);
+    }
+    .menu-form-grid select {
       width: 100%;
+      min-width: 0;
+      min-height: 34px;
+      padding: 8px 10px;
+      border-color: rgba(226, 232, 240, 0.96);
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: none;
+      color: var(--ink);
+      font-size: 0.84rem;
+    }
+    .menu-form-grid button {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 10px;
+      justify-self: stretch;
+      width: 100%;
+      min-height: 32px;
+      padding: 7px 10px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      border-color: transparent;
+      color: var(--ink);
+      box-shadow: none;
+      white-space: nowrap;
+      text-align: left;
+      font-size: 0.88rem;
+      font-weight: 500;
+    }
+    .menu-action-icon {
+      width: 15px;
+      height: 15px;
+      flex: 0 0 15px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: 0.82;
+    }
+    .menu-action-label {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .menu-form-grid button:hover {
+      background: rgba(241, 245, 249, 0.92);
+    }
+    .row-menu {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      grid-column: 2;
+    }
+    .row-menu summary {
+      list-style: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      line-height: 0;
+    }
+    .row-menu summary::-webkit-details-marker { display: none; }
+    .row-menu-icon {
+      display: block;
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+    .row-menu[open] summary {
+      background: rgba(255, 255, 255, 0.86);
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .row-menu-popover {
+      position: fixed;
+      left: 0;
+      top: 0;
+      z-index: 40;
+      min-width: 232px;
+      max-width: min(280px, calc(100vw - 24px));
+      max-height: calc(100vh - 24px);
+      padding: 10px;
+      border: 1px solid rgba(229, 231, 235, 0.96);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.97);
+      box-shadow: var(--shadow-popover);
+      display: none;
+      gap: 6px;
+      overflow: auto;
+      backdrop-filter: blur(10px);
+    }
+    .row-menu-popover.row-menu-popover-mounted {
+      display: grid;
+    }
+    .row-menu-popover .meta-label {
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .row-menu-popover select {
+      width: 100%;
+      min-width: 0;
+    }
+    .empty {
+      padding: 18px 2px 6px;
+      line-height: 1.5;
+    }
+    .capture-modal {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 0;
+      max-width: min(560px, calc(100vw - 24px));
+      width: 100%;
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: var(--shadow-popover);
     }
     dialog.capture-modal::backdrop {
-      background: rgba(0, 0, 0, 0.2);
+      background: rgba(15, 23, 42, 0.28);
+      backdrop-filter: blur(4px);
     }
     .capture-card {
-      padding: 16px;
+      padding: 18px;
       display: grid;
-      gap: 12px;
+      gap: 14px;
     }
     .capture-head {
       display: flex;
       justify-content: space-between;
       gap: 12px;
       align-items: center;
+    }
+    .capture-head button,
+    .capture-actions button {
+      width: auto;
     }
     .capture-actions {
       display: flex;
@@ -2377,8 +2929,51 @@ const workbenchHTML = `<!doctype html>
       flex-wrap: wrap;
     }
     @media (max-width: 920px) {
+      .shell-header { padding: 14px 14px 10px; }
+      main { padding: 0 14px 14px; }
       .layout {
         grid-template-columns: minmax(220px, var(--sidebar-expanded-width)) minmax(0, 1fr);
+      }
+      .workbench-row {
+        gap: 12px;
+        padding: 10px 4px;
+      }
+      .theme-composer {
+        padding: 16px 16px 12px;
+      }
+      .source-row {
+        padding: 10px 4px;
+      }
+      .item-stack {
+        gap: 4px;
+      }
+      .row-meta-line {
+        gap: 8px;
+      }
+      .workbench-row-side {
+        align-self: center;
+        padding-top: 0;
+      }
+      .row-actions {
+        width: 30px;
+      }
+    }
+    @media (max-width: 720px) {
+      .workbench-row {
+        grid-template-columns: 1fr;
+        align-items: start;
+      }
+      .content-tabs {
+        gap: 18px;
+      }
+      .theme-composer {
+        padding: 14px 14px 12px;
+      }
+      .theme-composer-footer {
+        padding-top: 0;
+      }
+      .workbench-row-side {
+        align-self: start;
       }
     }
   </style>
@@ -2428,75 +3023,129 @@ const workbenchHTML = `<!doctype html>
         <section class="panel content-panel">
           <div class="pane-header">
             <div class="section-label">{{.CurrentTitle}}</div>
-            <div class="count">{{.CurrentCount}} item{{if ne .CurrentCount 1}}s{{end}}</div>
+            <div class="count">{{.CurrentCountLabel}}</div>
           </div>
           <div class="content-panel-body">
-          {{if .Items}}
-          <div class="action-table-wrap">
-            <table class="action-table">
-              <thead>
-                <tr>
-                  <th class="item-col">Work Item</th>
-                  <th class="stage-col">Stage</th>
-                  <th class="done-col">Done</th>
-                </tr>
-              </thead>
-              <tbody>
-                {{range .Items}}
-                <tr>
-                  <td class="item-col">
-                    <div class="item-stack">
-                      <a class="item-title" href="{{.WorkspaceHref}}">{{.Title}}</a>
-                      {{if .Summary}}<div class="meta">{{.Summary}}</div>{{end}}
-                    </div>
-                  </td>
-                  <td class="stage-col">
-                    <div class="actions">
-                      {{if .CanMove}}
-                      <form method="post" action="{{.MoveAction}}" class="move-group">
-                        <input type="hidden" name="q" value="{{$.Query}}">
-                        <input type="hidden" name="nav" value="{{$.Nav}}">
-                        <select name="to" aria-label="Set stage for {{.Title}}">
-                          {{range .MoveOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
-                        </select>
-                        <button type="submit">Set</button>
-                      </form>
-                      {{end}}
-                    </div>
-                  </td>
-                  <td class="done-col">
-                    <div class="actions done-actions">
-                      {{if .CanDoneForDay}}
-                      <form method="post" action="{{.DoneForDayAction}}">
-                        <input type="hidden" name="q" value="{{$.Query}}">
-                        <input type="hidden" name="nav" value="{{$.Nav}}">
-                        <button type="submit">Done for day</button>
-                      </form>
-                      {{end}}
-                      {{if .CanComplete}}
-                      <form method="post" action="{{.CompleteAction}}">
-                        <input type="hidden" name="q" value="{{$.Query}}">
-                        <input type="hidden" name="nav" value="{{$.Nav}}">
-                        <button type="submit">x Done</button>
-                      </form>
-                      {{end}}
-                      {{if .CanReopen}}
-                      <form method="post" action="{{.ReopenAction}}">
-                        <input type="hidden" name="q" value="{{$.Query}}">
-                        <input type="hidden" name="nav" value="{{$.Nav}}">
-                        <button type="submit">{{if .CanReopenComplete}}&lt; Reopen{{else if .CanReopenDoneForDay}}&lt; Restore{{else}}&lt; Reopen{{end}}</button>
-                      </form>
-                      {{end}}
-                    </div>
-                  </td>
-                </tr>
-                {{end}}
-              </tbody>
-            </table>
+          {{if .ThemeTabs}}<div class="theme-project-shell">
+          {{if .ShowThemeComposer}}
+          <form method="post" action="{{.ThemeComposerAction}}" class="theme-composer">
+            <input type="hidden" name="nav" value="{{.Nav}}">
+            <input type="hidden" name="q" value="{{.Query}}">
+            <input type="hidden" name="theme_id" value="{{.ThemeComposerThemeID}}">
+            <input type="hidden" name="return_to" value="{{.CaptureReturn}}">
+            <input type="text" name="title" placeholder="{{.ThemeComposerPlaceholder}}" aria-label="Add work item" required>
+            <div class="theme-composer-footer">
+              <button type="submit">Add work item</button>
+            </div>
+          </form>
+          {{end}}
+          <nav class="content-tabs" aria-label="Theme view">
+            {{range .ThemeTabs}}
+            <a href="{{.Href}}"{{if .Active}} class="active"{{end}}>{{.Label}}</a>
+            {{end}}
+          </nav>
+          {{end}}
+          {{if .ShowThemeSources}}
+          <div class="theme-sources-toolbar">
+            <a class="theme-sources-cta" href="{{.ThemeAddSourcesHref}}">Add Sources</a>
+          </div>
+          {{if .ThemeSources}}
+          <div class="source-list">
+            {{range .ThemeSources}}
+            <article class="source-row">
+              <div class="source-title">{{.Title}}</div>
+              <div class="source-ref">{{.Ref}}</div>
+            </article>
+            {{end}}
           </div>
           {{else}}
-          <div class="empty">No items.</div>
+          <div class="empty">{{.EmptyState}}</div>
           {{end}}
+          {{else if .Items}}
+          <div class="workbench-list">
+            {{range .Items}}
+            <article class="workbench-row">
+              <div class="workbench-row-main">
+                <div class="item-stack">
+                  <a class="item-title" href="{{.WorkspaceHref}}">{{.Title}}</a>
+                  <div class="row-meta-line">
+                    {{if .ThemeLabel}}<span class="theme-inline">{{.ThemeLabel}}</span>{{end}}
+                    {{if .StageLabel}}<span class="stage-inline">{{.StageLabel}}</span>{{end}}
+                    {{if .Summary}}<span class="row-summary">{{.Summary}}</span>{{end}}
+                  </div>
+                </div>
+              </div>
+              <div class="workbench-row-side">
+                <div class="row-actions">
+                  <details class="row-menu">
+                    <summary aria-label="More actions for {{.Title}}"><svg class="row-menu-icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1.25"></circle><circle cx="8" cy="8" r="1.25"></circle><circle cx="13" cy="8" r="1.25"></circle></svg></summary>
+                    <div class="row-menu-popover">
+                      <div class="menu-form-grid">
+                        {{if .CanMove}}
+                        <form method="post" action="{{.MoveAction}}">
+                          <input type="hidden" name="q" value="{{$.Query}}">
+                          <input type="hidden" name="nav" value="{{$.Nav}}">
+                          <div class="meta-label">Stage</div>
+                          <select name="to" aria-label="Set stage for {{.Title}}">
+                            {{range .MoveOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+                          </select>
+                          <button type="submit"><svg class="menu-action-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M3 4.5h10"></path><path d="M3 8h7"></path><path d="M3 11.5h4"></path></svg><span class="menu-action-label">Update stage</span></button>
+                        </form>
+                        {{end}}
+                        {{if .CanSetTheme}}
+                        <form method="post" action="{{.ThemeAction}}">
+                          <input type="hidden" name="q" value="{{$.Query}}">
+                          <input type="hidden" name="nav" value="{{$.Nav}}">
+                          <div class="meta-label">Theme</div>
+                          <select name="theme_id" aria-label="Set theme for {{.Title}}">
+                            {{range .ThemeOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+                          </select>
+                          <button type="submit"><svg class="menu-action-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M8 2.5l1.5 3 3.3.5-2.4 2.3.6 3.2L8 9.9l-3 1.6.6-3.2L3.2 6l3.3-.5z"></path></svg><span class="menu-action-label">Set theme</span></button>
+                        </form>
+                        {{end}}
+                        {{if or .CanDoneForDay .CanComplete .CanReopen}}
+                        <div class="menu-divider" aria-hidden="true"></div>
+                        {{end}}
+                        {{if .CanDoneForDay}}
+                        <form method="post" action="{{.DoneForDayAction}}">
+                          <input type="hidden" name="q" value="{{$.Query}}">
+                          <input type="hidden" name="nav" value="{{$.Nav}}">
+                          <button type="submit"><svg class="menu-action-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M5.25 2.75v2"></path><path d="M10.75 2.75v2"></path><path d="M3 6.25h10"></path><rect x="3" y="4.25" width="10" height="8.75" rx="2"></rect><path d="M6 9l1.4 1.4L10.25 7.5"></path></svg><span class="menu-action-label">Done for today</span></button>
+                        </form>
+                        {{end}}
+                        {{if .CanComplete}}
+                        <form method="post" action="{{.CompleteAction}}">
+                          <input type="hidden" name="q" value="{{$.Query}}">
+                          <input type="hidden" name="nav" value="{{$.Nav}}">
+                          <button type="submit"><svg class="menu-action-icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.25"></circle><path d="M5.8 8.1l1.45 1.45L10.4 6.4"></path></svg><span class="menu-action-label">Done</span></button>
+                        </form>
+                        {{end}}
+                        {{if and .CanReopen .CanReopenDoneForDay}}
+                        <form method="post" action="{{.ReopenAction}}">
+                          <input type="hidden" name="q" value="{{$.Query}}">
+                          <input type="hidden" name="nav" value="{{$.Nav}}">
+                          <button type="submit"><svg class="menu-action-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M5 5H2.75v2.25"></path><path d="M3 7.25a5 5 0 1 0 1.7-3.75"></path></svg><span class="menu-action-label">Restore for today</span></button>
+                        </form>
+                        {{end}}
+                        {{if and .CanReopen .CanReopenComplete}}
+                        <form method="post" action="{{.ReopenAction}}">
+                          <input type="hidden" name="q" value="{{$.Query}}">
+                          <input type="hidden" name="nav" value="{{$.Nav}}">
+                          <button type="submit"><svg class="menu-action-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M5 5H2.75v2.25"></path><path d="M3 7.25a5 5 0 1 0 1.7-3.75"></path></svg><span class="menu-action-label">Reopen item</span></button>
+                        </form>
+                        {{end}}
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              </div>
+            </article>
+            {{end}}
+          </div>
+          {{else}}
+          <div class="empty">{{.EmptyState}}</div>
+          {{end}}
+          {{if .ThemeTabs}}</div>{{end}}
           </div>
         </section>
       </section>
@@ -2529,6 +3178,10 @@ const workbenchHTML = `<!doctype html>
       const openButton = document.getElementById("open-capture");
       const closeButton = document.getElementById("close-capture");
       const titleInput = document.getElementById("capture-title");
+      const rowMenus = Array.from(document.querySelectorAll(".row-menu"));
+      let activeRowMenu = null;
+      let activeRowMenuPopover = null;
+      let activeRowMenuPlaceholder = null;
       const sidebarCollapsed = () => layout && layout.dataset.sidebarCollapsed === "true";
       const syncSidebarState = () => {
         if (!layout || !toggleSidebarButton) {
@@ -2574,6 +3227,71 @@ const workbenchHTML = `<!doctype html>
           dialog.close();
         }
       };
+      const unmountRowMenu = () => {
+        if (!activeRowMenu || !activeRowMenuPopover || !activeRowMenuPlaceholder) {
+          return;
+        }
+        activeRowMenuPlaceholder.replaceWith(activeRowMenuPopover);
+        activeRowMenuPopover.classList.remove("row-menu-popover-mounted");
+        activeRowMenuPopover.style.left = "0px";
+        activeRowMenuPopover.style.top = "0px";
+        activeRowMenuPopover.style.removeProperty("max-height");
+        activeRowMenu = null;
+        activeRowMenuPopover = null;
+        activeRowMenuPlaceholder = null;
+      };
+      const closeActiveRowMenu = () => {
+        if (!activeRowMenu) {
+          return;
+        }
+        const details = activeRowMenu;
+        details.open = false;
+        unmountRowMenu();
+      };
+      const positionActiveRowMenu = () => {
+        if (!activeRowMenu || !activeRowMenuPopover) {
+          return;
+        }
+        const summary = activeRowMenu.querySelector("summary");
+        if (!summary) {
+          return;
+        }
+        const rect = summary.getBoundingClientRect();
+        const gap = 8;
+        const margin = 12;
+        activeRowMenuPopover.style.left = "0px";
+        activeRowMenuPopover.style.top = "0px";
+        activeRowMenuPopover.style.maxHeight = "calc(100vh - " + (margin*2) + "px)";
+        const popoverRect = activeRowMenuPopover.getBoundingClientRect();
+        const width = popoverRect.width;
+        const height = popoverRect.height;
+        const left = Math.max(margin, rect.left - gap - width);
+        const top = Math.max(margin, Math.min(rect.top, window.innerHeight - height - margin));
+        activeRowMenuPopover.style.left = Math.round(left) + "px";
+        activeRowMenuPopover.style.top = Math.round(top) + "px";
+      };
+      const mountRowMenu = (details) => {
+        const popover = details.querySelector(".row-menu-popover");
+        if (!popover) {
+          return;
+        }
+        if (activeRowMenu && activeRowMenu !== details) {
+          closeActiveRowMenu();
+        }
+        if (activeRowMenu === details && activeRowMenuPopover === popover) {
+          positionActiveRowMenu();
+          return;
+        }
+        const placeholder = document.createElement("span");
+        placeholder.hidden = true;
+        popover.before(placeholder);
+        document.body.appendChild(popover);
+        popover.classList.add("row-menu-popover-mounted");
+        activeRowMenu = details;
+        activeRowMenuPopover = popover;
+        activeRowMenuPlaceholder = placeholder;
+        positionActiveRowMenu();
+      };
       if (openButton) {
         openButton.addEventListener("click", openCapture);
       }
@@ -2589,12 +3307,39 @@ const workbenchHTML = `<!doctype html>
         sidebar.addEventListener("mouseenter", () => setSidebarHovered(true));
         sidebar.addEventListener("mouseleave", () => setSidebarHovered(false));
       }
+      rowMenus.forEach((details) => {
+        details.addEventListener("toggle", () => {
+          if (details.open) {
+            mountRowMenu(details);
+            return;
+          }
+          if (activeRowMenu === details) {
+            unmountRowMenu();
+          }
+        });
+      });
       const persistedSidebarState = window.localStorage.getItem(sidebarStateKey);
       if (persistedSidebarState === "true" || persistedSidebarState === "false") {
         layout.dataset.sidebarCollapsed = persistedSidebarState;
       }
       syncSidebarState();
+      document.addEventListener("click", (event) => {
+        if (!activeRowMenu || !activeRowMenuPopover) {
+          return;
+        }
+        const target = event.target;
+        if (target instanceof Node && (activeRowMenu.contains(target) || activeRowMenuPopover.contains(target))) {
+          return;
+        }
+        closeActiveRowMenu();
+      });
+      window.addEventListener("resize", positionActiveRowMenu);
+      window.addEventListener("scroll", positionActiveRowMenu, true);
       document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && activeRowMenu) {
+          closeActiveRowMenu();
+          return;
+        }
         const tag = event.target && event.target.tagName ? String(event.target.tagName).toLowerCase() : "";
         const editable = tag === "input" || tag === "textarea" || tag === "select" || event.target && event.target.isContentEditable;
         if (!editable && !event.metaKey && !event.ctrlKey && !event.altKey && event.shiftKey && String(event.key).toLowerCase() === "a") {
@@ -2619,90 +3364,70 @@ const sourceWorkbenchHTML = `<!doctype html>
   <title>Workbench Sources</title>
   <style>
     :root {
-      --bg: #ffffff;
-      --ink: #111111;
-      --muted: #666666;
-      --line: #dddddd;
-      --accent: #111111;
-      --error: #b00020;
-      --content-inset: 16px;
-      --sidebar-expanded-width: 300px;
-      --pane-header-height: 53px;
+      --bg: #f5f5f7;
+      --surface: #ffffff;
+      --surface-soft: #fafafa;
+      --surface-muted: #f8fafc;
+      --ink: #111827;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --line-strong: #d1d5db;
+      --accent: #111827;
+      --accent-soft: #eef2f7;
+      --error: #b42318;
+      --error-bg: #fef3f2;
+      --ok-bg: #f8fafc;
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 12px 30px rgba(15, 23, 42, 0.05);
+      --shadow-popover: 0 18px 40px rgba(15, 23, 42, 0.12);
+      --content-width: 1180px;
     }
     * { box-sizing: border-box; }
+    html { background: var(--bg); }
     body {
       margin: 0;
       min-height: 100dvh;
-      height: 100dvh;
       display: flex;
       flex-direction: column;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
+      background: radial-gradient(circle at top, #fbfbfc 0%, var(--bg) 42%);
       color: var(--ink);
-      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    .shell-header,
+    main {
+      width: min(100%, var(--content-width));
+      margin: 0 auto;
     }
     .shell-header {
-      width: 100%;
-      padding: 28px 16px 8px;
+      padding: 18px 20px 10px;
     }
     main {
-      width: 100%;
       flex: 1 1 auto;
       min-height: 0;
-      padding: 12px 16px;
+      padding: 0 20px 28px;
     }
     h1 {
-      margin: 0 0 6px;
-      font-size: 1.4rem;
+      margin: 0;
+      font-size: 1.5rem;
       font-weight: 600;
+      letter-spacing: -0.02em;
     }
-    p.lead {
-      margin: 0 0 12px;
+    h2 {
+      margin: 0;
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    p.lead, .meta, .empty {
       color: var(--muted);
-      font-size: 0.95rem;
-    }
-    .section {
-      padding: 0;
-      margin-bottom: 24px;
-    }
-    .panel {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 18px 16px;
-      background: #fff;
-    }
-    .stack {
-      display: grid;
-      gap: 12px;
-    }
-    .tabs {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin: 0 0 18px;
-      padding: 0;
-      list-style: none;
-    }
-    .tabs a {
-      display: inline-block;
-      padding: 8px 12px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      color: var(--ink);
-      text-decoration: none;
-      font-size: 0.92rem;
-      background: #fff;
-    }
-    .tabs a.active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
+      font-size: 0.93rem;
+      line-height: 1.6;
     }
     .topbar {
       display: flex;
       justify-content: space-between;
       gap: 16px;
-      align-items: flex-start;
+      align-items: center;
       flex-wrap: wrap;
     }
     .title-row {
@@ -2714,16 +3439,16 @@ const sourceWorkbenchHTML = `<!doctype html>
       gap: 10px;
       flex-wrap: wrap;
       align-items: baseline;
-      font-size: 1.4rem;
+      font-size: 1.5rem;
       line-height: 1.2;
       font-weight: 600;
+      letter-spacing: -0.02em;
     }
     .shell-title .title-link,
     .shell-title .title-current {
       display: inline;
       padding: 0;
       border: 0;
-      border-radius: 0;
       background: transparent;
       font-size: inherit;
       line-height: inherit;
@@ -2731,9 +3456,11 @@ const sourceWorkbenchHTML = `<!doctype html>
       color: inherit;
       text-decoration: none;
     }
-    .shell-title .crumb-sep {
+    .shell-title .title-link { color: var(--muted); }
+    .shell-title .crumb-sep,
+    .crumb-sep {
       color: var(--muted);
-      font-size: inherit;
+      font-size: 0.88rem;
       font-weight: 400;
     }
     .topbar nav, .breadcrumbs {
@@ -2742,141 +3469,193 @@ const sourceWorkbenchHTML = `<!doctype html>
       flex-wrap: wrap;
       align-items: center;
     }
-    .topbar a, .breadcrumbs a, .breadcrumbs span {
-      display: inline-block;
-      padding: 6px 10px;
-      border: 1px solid var(--line);
+    .topbar a, .breadcrumbs a, .breadcrumbs span, .tabs a {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid transparent;
       border-radius: 999px;
-      color: var(--ink);
+      color: var(--muted);
       text-decoration: none;
-      font-size: 0.85rem;
-      background: #fff;
+      font-size: 0.86rem;
+      background: transparent;
+      transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+    }
+    .topbar a:hover, .breadcrumbs a:hover, .tabs a:hover {
+      background: rgba(255, 255, 255, 0.72);
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .topbar a.active, .breadcrumbs span, .tabs a.active {
+      background: rgba(255, 255, 255, 0.92);
+      border-color: var(--line);
+      color: var(--ink);
+      font-weight: 600;
+      box-shadow: 0 1px 1px rgba(15, 23, 42, 0.03);
+    }
+    .section {
+      padding: 0;
+      margin-bottom: 18px;
+    }
+    .panel {
+      border: 1px solid rgba(229, 231, 235, 0.9);
+      border-radius: 20px;
+      padding: 20px;
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 18px;
+      padding: 0;
+      list-style: none;
     }
     .topbar button,
-    .tabs a,
-    .mode-toggle,
-    .save-button,
     button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
-      border-radius: 6px;
+      border-radius: 10px;
       border: 1px solid var(--line);
-      padding: 6px 10px;
+      padding: 10px 12px;
       font: inherit;
-      font-size: 0.85rem;
-      background: #fff;
+      font-size: 0.86rem;
+      font-weight: 500;
+      background: rgba(255, 255, 255, 0.96);
       color: var(--ink);
       cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
     }
-    .topbar a.active, .breadcrumbs span {
-      background: #f6f6f6;
-      font-weight: 600;
+    .topbar button:hover, button:hover {
+      border-color: var(--line-strong);
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
     }
-    .crumb-sep {
-      color: var(--muted);
-      font-size: 0.85rem;
+    .topbar .toolbar-button,
+    button[type="submit"] {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+    }
+    .topbar .toolbar-button:hover,
+    button[type="submit"]:hover {
+      background: #0f172a;
+      border-color: #0f172a;
+    }
+    .topbar .toolbar-button {
+      width: auto;
     }
     .stats {
       display: flex;
-      gap: 12px;
+      gap: 10px;
       flex-wrap: wrap;
       margin: 0 0 16px;
       color: var(--muted);
       font-size: 0.9rem;
     }
+    .stats > div {
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.72);
+    }
     label {
       display: block;
-      font-size: 0.85rem;
-      margin-bottom: 4px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
     }
     select, input[type="file"], input[type="text"], textarea, button {
       width: 100%;
-      border-radius: 6px;
+      border-radius: 12px;
       border: 1px solid var(--line);
-      padding: 10px 12px;
+      padding: 11px 13px;
       font: inherit;
-      background: #fff;
+      background: rgba(255, 255, 255, 0.98);
       color: var(--ink);
     }
+    select:focus, input[type="text"]:focus, textarea:focus {
+      outline: none;
+      border-color: #c7d2fe;
+      box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.08);
+    }
     textarea {
-      min-height: 220px;
+      min-height: 240px;
       resize: vertical;
-    }
-    button {
-      cursor: pointer;
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
-    .topbar .toolbar-button {
-      width: auto;
+      line-height: 1.6;
     }
     .notice {
-      padding: 10px 12px;
-      border-radius: 4px;
-      margin-bottom: 12px;
+      padding: 11px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      margin-bottom: 14px;
       font-size: 0.92rem;
-    }
-    .notice.ok {
-      background: #f6f6f6;
+      background: var(--ok-bg);
     }
     .notice.error {
       color: var(--error);
-      background: #fff7f8;
+      background: var(--error-bg);
+      border-color: #f3d0cc;
     }
     ul.files {
       list-style: none;
       padding: 0;
-      margin: 0;
+      margin: 14px 0 0;
+      display: grid;
+      gap: 10px;
     }
     ul.files li {
       display: flex;
       gap: 12px;
       align-items: flex-start;
-      padding: 10px 0;
-      border-top: 1px solid var(--line);
-    }
-    ul.files li:first-child {
-      border-top: 0;
-      padding-top: 0;
-    }
-    .meta {
-      color: var(--muted);
-      font-size: 0.86rem;
-    }
-    .empty {
-      color: var(--muted);
-    }
-    h2 {
-      margin: 0 0 10px;
-      font-size: 1rem;
-      font-weight: 600;
+      padding: 14px 16px;
+      border: 1px solid rgba(229, 231, 235, 0.9);
+      border-radius: 14px;
+      background: var(--surface-soft);
     }
     .actions {
-      margin-top: 12px;
+      margin-top: 14px;
     }
-    dialog.capture-modal {
+    .capture-modal {
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 20px;
       padding: 0;
-      max-width: min(520px, calc(100vw - 24px));
+      max-width: min(560px, calc(100vw - 24px));
       width: 100%;
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: var(--shadow-popover);
     }
     dialog.capture-modal::backdrop {
-      background: rgba(0, 0, 0, 0.2);
+      background: rgba(15, 23, 42, 0.28);
+      backdrop-filter: blur(4px);
     }
     .capture-card {
-      padding: 16px;
+      padding: 18px;
       display: grid;
-      gap: 12px;
+      gap: 14px;
     }
     .capture-head {
       display: flex;
       justify-content: space-between;
       gap: 12px;
       align-items: center;
+    }
+    .capture-head button,
+    .capture-actions button {
+      width: auto;
     }
     .capture-actions {
       display: flex;
@@ -2885,7 +3664,9 @@ const sourceWorkbenchHTML = `<!doctype html>
       flex-wrap: wrap;
     }
     @media (max-width: 640px) {
-      main { padding: 16px 12px 32px; }
+      .shell-header { padding: 14px 14px 10px; }
+      main { padding: 0 14px 20px; }
+      .panel { padding: 16px; }
     }
   </style>
 </head>
@@ -2939,7 +3720,7 @@ const sourceWorkbenchHTML = `<!doctype html>
             <label for="paste-theme">Theme</label>
             <select id="paste-theme" name="theme_id">
               <option value="">Leave unlinked</option>
-              {{range .Themes}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+              {{range .Themes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
             </select>
           </div>
           <div>
@@ -2970,7 +3751,7 @@ const sourceWorkbenchHTML = `<!doctype html>
             <label for="upload-theme">Theme</label>
             <select id="upload-theme" name="theme_id">
               <option value="">Leave unlinked</option>
-              {{range .Themes}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+              {{range .Themes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
             </select>
           </div>
           <div>
@@ -3004,7 +3785,7 @@ const sourceWorkbenchHTML = `<!doctype html>
             <label for="link-theme">Theme</label>
             <select id="link-theme" name="theme_id">
               <option value="">Do not link to a theme</option>
-              {{range .Themes}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+              {{range .Themes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
             </select>
           </div>
           <div>
@@ -3126,17 +3907,27 @@ const workItemWorkspaceHTML = `<!doctype html>
   <title>{{.Title}} · Workbench</title>
   <style>
     :root {
-      --bg: #ffffff;
-      --ink: #111111;
-      --muted: #666666;
-      --line: #dddddd;
-      --accent: #111111;
-      --error: #b00020;
-      --content-inset: 16px;
-      --sidebar-expanded-width: 300px;
-      --pane-header-height: 53px;
+      --bg: #f5f5f7;
+      --surface: #ffffff;
+      --surface-soft: #fafafa;
+      --surface-muted: #f8fafc;
+      --ink: #111827;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --line-strong: #d1d5db;
+      --accent: #111827;
+      --accent-soft: #eef2f7;
+      --error: #b42318;
+      --error-bg: #fef3f2;
+      --content-inset: 18px;
+      --content-width: 1480px;
+      --sidebar-expanded-width: 280px;
+      --pane-header-height: 58px;
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 12px 30px rgba(15, 23, 42, 0.05);
+      --shadow-popover: 0 18px 40px rgba(15, 23, 42, 0.12);
     }
     * { box-sizing: border-box; }
+    html { background: var(--bg); }
     body {
       margin: 0;
       min-height: 100dvh;
@@ -3144,28 +3935,32 @@ const workItemWorkspaceHTML = `<!doctype html>
       display: flex;
       flex-direction: column;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
+      background: radial-gradient(circle at top, #fbfbfc 0%, var(--bg) 42%);
       color: var(--ink);
       overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    .shell-header,
+    main {
+      width: min(100%, var(--content-width));
+      margin: 0 auto;
     }
     .shell-header {
-      width: 100%;
-      padding: 28px 16px 8px;
+      padding: 18px 20px 10px;
     }
     main {
-      width: 100%;
       flex: 1 1 auto;
       min-height: 0;
       display: flex;
       flex-direction: column;
-      padding: 12px 16px;
+      padding: 0 20px 20px;
       overflow: hidden;
     }
     .topbar {
       display: flex;
       justify-content: space-between;
       gap: 16px;
-      align-items: flex-start;
+      align-items: center;
       flex-wrap: wrap;
     }
     .title-row {
@@ -3177,16 +3972,16 @@ const workItemWorkspaceHTML = `<!doctype html>
       gap: 10px;
       flex-wrap: wrap;
       align-items: baseline;
-      font-size: 1.4rem;
+      font-size: 1.5rem;
       line-height: 1.2;
       font-weight: 600;
+      letter-spacing: -0.02em;
     }
     .shell-title .title-link,
     .shell-title .title-current {
       display: inline;
       padding: 0;
       border: 0;
-      border-radius: 0;
       background: transparent;
       font-size: inherit;
       line-height: inherit;
@@ -3194,9 +3989,11 @@ const workItemWorkspaceHTML = `<!doctype html>
       color: inherit;
       text-decoration: none;
     }
-    .shell-title .crumb-sep {
+    .shell-title .title-link { color: var(--muted); }
+    .shell-title .crumb-sep,
+    .crumb-sep {
       color: var(--muted);
-      font-size: inherit;
+      font-size: 0.88rem;
       font-weight: 400;
     }
     .topbar nav, .breadcrumbs {
@@ -3205,56 +4002,64 @@ const workItemWorkspaceHTML = `<!doctype html>
       flex-wrap: wrap;
       align-items: center;
     }
-    .topbar a, .breadcrumbs a, .breadcrumbs span {
-      display: inline-block;
-      padding: 6px 10px;
-      border: 1px solid var(--line);
+    .topbar a, .breadcrumbs a, .breadcrumbs span, .tabs a {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid transparent;
       border-radius: 999px;
-      color: var(--ink);
-      text-decoration: none;
-      font-size: 0.85rem;
-      background: #fff;
-    }
-    .topbar a.active, .breadcrumbs span {
-      background: #f6f6f6;
-      font-weight: 600;
-    }
-    .crumb-sep {
       color: var(--muted);
-      font-size: 0.85rem;
+      text-decoration: none;
+      font-size: 0.86rem;
+      background: transparent;
+      transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+    }
+    .topbar a:hover, .breadcrumbs a:hover, .tabs a:hover {
+      background: rgba(255, 255, 255, 0.72);
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .topbar a.active, .breadcrumbs span, .tabs a.active {
+      background: rgba(255, 255, 255, 0.92);
+      border-color: var(--line);
+      color: var(--ink);
+      font-weight: 600;
+      box-shadow: 0 1px 1px rgba(15, 23, 42, 0.03);
     }
     h1, h2, h3 {
       margin: 0;
       font-weight: 600;
+      letter-spacing: -0.01em;
     }
-    h1 { font-size: 1.4rem; margin-bottom: 6px; }
+    h1 { font-size: 1.5rem; }
     h2 { font-size: 1rem; margin-bottom: 12px; }
     h3 { font-size: 0.92rem; margin-bottom: 8px; }
     p.lead, .meta {
       color: var(--muted);
       font-size: 0.92rem;
+      line-height: 1.6;
     }
-    .notice {
-      padding: 10px 12px;
-      border-radius: 4px;
-      margin: 12px 0 0;
-      font-size: 0.92rem;
-    }
-    .notice.ok { background: #f6f6f6; }
-    .notice.error { color: var(--error); background: #fff7f8; }
     .workspace {
       display: grid;
-      gap: 18px;
+      gap: 16px;
       grid-template-columns: var(--sidebar-expanded-width) minmax(0, 1fr);
       align-items: stretch;
-      margin-top: 0;
       flex: 1 1 auto;
       min-height: 0;
       height: 100%;
       overflow: hidden;
     }
     .workspace[data-sidebar-collapsed="true"] {
-      grid-template-columns: 52px minmax(0, 1fr);
+      grid-template-columns: 56px minmax(0, 1fr);
+    }
+    .agent-pane,
+    .workspace-main {
+      border: 1px solid rgba(229, 231, 235, 0.9);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
     }
     .agent-pane {
       display: flex;
@@ -3262,9 +4067,6 @@ const workItemWorkspaceHTML = `<!doctype html>
       min-width: 0;
       min-height: 0;
       height: 100%;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #fff;
       overflow: auto;
     }
     .sidebar-toolbar {
@@ -3273,29 +4075,28 @@ const workItemWorkspaceHTML = `<!doctype html>
       align-items: center;
       gap: 10px;
       min-height: var(--pane-header-height);
-      box-sizing: border-box;
-      padding: 10px;
-      border-bottom: 1px solid var(--line);
+      padding: 12px;
+      border-bottom: 1px solid rgba(229, 231, 235, 0.8);
       position: sticky;
       top: 0;
-      background: #fff;
+      background: rgba(255, 255, 255, 0.72);
+      backdrop-filter: blur(8px);
       z-index: 1;
     }
-    .sidebar-title {
-      font-size: 0.84rem;
+    .sidebar-title,
+    .section-label {
+      font-size: 0.74rem;
       font-weight: 600;
       color: var(--muted);
-      letter-spacing: 0.04em;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
     }
     .sidebar-section {
       padding: 14px var(--content-inset);
-      border-top: 1px solid var(--line);
+      border-top: 1px solid rgba(229, 231, 235, 0.8);
       min-width: 0;
     }
-    .sidebar-section:first-child {
-      border-top: 0;
-    }
+    .sidebar-section:first-child { border-top: 0; }
     .sidebar-head {
       display: flex;
       justify-content: space-between;
@@ -3313,34 +4114,44 @@ const workItemWorkspaceHTML = `<!doctype html>
       align-items: center;
       justify-content: center;
       gap: 6px;
-      border-radius: 6px;
+      border-radius: 10px;
       border: 1px solid var(--line);
-      padding: 6px 10px;
+      padding: 8px 12px;
       font: inherit;
-      font-size: 0.85rem;
-      background: #fff;
+      font-size: 0.86rem;
+      font-weight: 500;
+      background: rgba(255, 255, 255, 0.96);
       color: var(--ink);
       cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
     }
-    input[type="text"],
-    button {
-      width: 100%;
-      border-radius: 6px;
-      border: 1px solid var(--line);
-      padding: 10px 12px;
-      font: inherit;
+    .topbar button:hover,
+    .mode-toggle:hover,
+    .save-button:hover,
+    .capture-actions button:hover,
+    .capture-head button:hover,
+    button:hover {
+      border-color: var(--line-strong);
       background: #fff;
-      color: var(--ink);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
     }
-    button {
+    .save-button {
       background: var(--accent);
       border-color: var(--accent);
       color: #fff;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
     }
-    .topbar .toolbar-button,
-    .sidebar-toggle {
-      background: #fff;
-      border-color: var(--line);
+    .save-button:hover {
+      background: #0f172a;
+      border-color: #0f172a;
+    }
+    input[type="text"] {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      padding: 11px 13px;
+      font: inherit;
+      background: rgba(255, 255, 255, 0.98);
       color: var(--ink);
     }
     .topbar .toolbar-button,
@@ -3352,6 +4163,12 @@ const workItemWorkspaceHTML = `<!doctype html>
       width: auto;
       min-width: 0;
     }
+    .topbar .toolbar-button {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+    }
     .sidebar-toggle {
       width: 32px;
       min-width: 32px;
@@ -3360,6 +4177,8 @@ const workItemWorkspaceHTML = `<!doctype html>
       flex: 0 0 32px;
       font-size: 14px;
       line-height: 1;
+      border-radius: 9px;
+      box-shadow: none;
     }
     .stack {
       display: grid;
@@ -3371,6 +4190,7 @@ const workItemWorkspaceHTML = `<!doctype html>
       gap: 16px;
       flex: 1;
       min-height: 0;
+      background: linear-gradient(180deg, rgba(248, 250, 252, 0.55) 0%, rgba(255, 255, 255, 0) 100%);
     }
     .workspace-main {
       display: flex;
@@ -3378,9 +4198,6 @@ const workItemWorkspaceHTML = `<!doctype html>
       min-width: 0;
       min-height: 0;
       height: 100%;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #fff;
       overflow: hidden;
     }
     .workspace-main form {
@@ -3409,14 +4226,6 @@ const workItemWorkspaceHTML = `<!doctype html>
     .editor-stack[data-mode="preview"] .preview-panel {
       display: flex;
     }
-    .stats {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      color: var(--muted);
-      font-size: 0.9rem;
-      margin-top: 8px;
-    }
     .tabs, .list, .tree-list {
       list-style: none;
       padding: 0;
@@ -3426,36 +4235,16 @@ const workItemWorkspaceHTML = `<!doctype html>
       display: flex;
       gap: 8px;
     }
-    .tabs a, .list a, .tree-list a {
-      color: inherit;
-      text-decoration: none;
-    }
-    .tabs a {
-      display: inline-block;
-      padding: 6px 10px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      font-size: 0.86rem;
-      background: #fff;
-    }
-    .tabs a.active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
+    .list a, .tree-list a { color: inherit; text-decoration: none; }
     .list li {
-      border-top: 1px solid var(--line);
+      border-top: 1px solid rgba(229, 231, 235, 0.8);
     }
-    .list li:first-child {
-      border-top: 0;
-    }
+    .list li:first-child { border-top: 0; }
     .list a {
       display: block;
-      padding: 10px 0;
+      padding: 12px 0;
     }
-    .list a.active {
-      font-weight: 600;
-    }
+    .list a.active { font-weight: 600; }
     .list .meta {
       margin-top: 4px;
       font-size: 0.84rem;
@@ -3467,13 +4256,13 @@ const workItemWorkspaceHTML = `<!doctype html>
     .tree-list a,
     .tree-list .active-item {
       display: block;
-      padding: 8px 10px;
-      border-radius: 6px;
+      padding: 9px 10px;
+      border-radius: 12px;
       font-size: 0.9rem;
     }
     .tree-list a.active,
     .tree-list .active-item {
-      background: #f6f6f6;
+      background: var(--accent-soft);
       font-weight: 600;
     }
     .tree-meta {
@@ -3485,7 +4274,7 @@ const workItemWorkspaceHTML = `<!doctype html>
     .sidebar-preview {
       margin-top: 12px;
       padding-top: 12px;
-      border-top: 1px solid var(--line);
+      border-top: 1px solid rgba(229, 231, 235, 0.8);
     }
     .workspace[data-sidebar-collapsed="true"]:not([data-sidebar-hovered="true"]) .sidebar-title,
     .workspace[data-sidebar-collapsed="true"]:not([data-sidebar-hovered="true"]) #agent-pane-content {
@@ -3497,7 +4286,7 @@ const workItemWorkspaceHTML = `<!doctype html>
     .workspace[data-sidebar-collapsed="true"][data-sidebar-hovered="true"] .agent-pane {
       width: min(var(--sidebar-expanded-width), calc(100vw - 32px));
       z-index: 3;
-      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+      box-shadow: var(--shadow-popover);
     }
     textarea {
       width: 100%;
@@ -3506,19 +4295,16 @@ const workItemWorkspaceHTML = `<!doctype html>
       resize: none;
       border: 0;
       border-radius: 0;
-      padding: 10px var(--content-inset);
+      padding: 18px var(--content-inset);
       font: inherit;
-      background: #fff;
+      line-height: 1.65;
+      background: transparent;
       color: var(--ink);
     }
+    textarea:focus { outline: none; }
     .preview-panel {
-      display: flex;
-      flex: 1;
-      min-height: 0;
-      flex-direction: column;
-      overflow: hidden;
-      border-top: 1px solid var(--line);
-      padding-top: 16px;
+      border-top: 1px solid rgba(229, 231, 235, 0.8);
+      padding-top: 10px;
     }
     .editor-stack[data-mode="preview"] .preview-panel {
       border-top: 0;
@@ -3526,69 +4312,67 @@ const workItemWorkspaceHTML = `<!doctype html>
     }
     .preview-surface {
       border: 0;
-      border-radius: 0;
-      padding: 10px var(--content-inset);
+      padding: 18px var(--content-inset);
       min-height: 0;
       flex: 1;
       height: 100%;
       background: transparent;
       overflow: auto;
+      line-height: 1.7;
     }
     .preview-surface img {
       max-width: 100%;
       height: auto;
+      border-radius: 12px;
     }
     .preview-surface pre {
       overflow: auto;
-      padding: 10px;
-      border-radius: 6px;
-      background: #f6f6f6;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: var(--surface-soft);
+      border: 1px solid rgba(229, 231, 235, 0.8);
     }
-    .preview-surface code {
+    .preview-surface code,
+    pre.viewer {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     .mode-actions {
       display: flex;
       align-items: center;
       gap: 10px;
-      flex-wrap: nowrap;
       justify-content: space-between;
       min-height: var(--pane-header-height);
-      box-sizing: border-box;
-      padding: 10px var(--content-inset);
-      margin-bottom: 0;
-      border-bottom: 1px solid var(--line);
+      padding: 12px var(--content-inset);
+      border-bottom: 1px solid rgba(229, 231, 235, 0.8);
+      background: rgba(255, 255, 255, 0.72);
+      backdrop-filter: blur(8px);
     }
     .mode-toggle-group {
       display: inline-flex;
       align-items: center;
       gap: 0;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 12px;
       overflow: hidden;
-      background: #fff;
+      background: rgba(255, 255, 255, 0.96);
     }
     .mode-toggle {
       margin-left: 0;
       border: 0;
       border-right: 1px solid var(--line);
       border-radius: 0;
-      background: #fff;
-      color: var(--ink);
+      background: transparent;
+      color: var(--muted);
+      box-shadow: none;
     }
-    .mode-toggle:last-child {
-      border-right: 0;
-    }
+    .mode-toggle:last-child { border-right: 0; }
     .mode-toggle[aria-pressed="true"] {
-      background: var(--accent);
-      color: #fff;
+      background: var(--accent-soft);
+      color: var(--ink);
+      font-weight: 600;
     }
-    .save-button {
-      margin: 0;
-    }
-    #work-item-save-button[hidden] {
-      display: none;
-    }
+    .save-button { margin: 0; }
+    #work-item-save-button[hidden] { display: none; }
     .mode-actions-right {
       display: flex;
       align-items: center;
@@ -3598,20 +4382,23 @@ const workItemWorkspaceHTML = `<!doctype html>
       min-width: 0;
       flex-wrap: wrap;
     }
-    dialog.capture-modal {
+    .capture-modal {
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 20px;
       padding: 0;
-      max-width: min(520px, calc(100vw - 24px));
+      max-width: min(560px, calc(100vw - 24px));
       width: 100%;
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: var(--shadow-popover);
     }
     dialog.capture-modal::backdrop {
-      background: rgba(0, 0, 0, 0.2);
+      background: rgba(15, 23, 42, 0.28);
+      backdrop-filter: blur(4px);
     }
     .capture-card {
-      padding: 16px;
+      padding: 18px;
       display: grid;
-      gap: 12px;
+      gap: 14px;
     }
     .capture-head {
       display: flex;
@@ -3625,13 +4412,6 @@ const workItemWorkspaceHTML = `<!doctype html>
       justify-content: flex-end;
       flex-wrap: wrap;
     }
-    .section-label {
-      color: var(--muted);
-      font-size: 0.78rem;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }
     .workspace-title {
       padding-left: var(--content-inset);
     }
@@ -3639,9 +4419,8 @@ const workItemWorkspaceHTML = `<!doctype html>
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 0.88rem;
-      line-height: 1.5;
+      line-height: 1.6;
     }
     .empty {
       color: var(--muted);
@@ -3654,28 +4433,33 @@ const workItemWorkspaceHTML = `<!doctype html>
     .editor-feedback {
       display: none;
       padding: 8px 10px;
-      border-radius: 6px;
-      font-size: 0.84rem;
+      border-radius: 999px;
+      font-size: 0.82rem;
       width: auto;
       max-width: min(480px, 100%);
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.9);
     }
     .editor-feedback.error {
       display: inline-flex;
       color: var(--error);
-      background: #fff7f8;
+      background: var(--error-bg);
+      border-color: #f3d0cc;
     }
     .editor-feedback.success {
       display: inline-flex;
       color: #0f6b46;
       background: #f2fbf6;
+      border-color: #cfe9d9;
+    }
+    @media (max-width: 920px) {
+      .shell-header { padding: 14px 14px 10px; }
+      main { padding: 0 14px 14px; }
     }
     @media (max-width: 720px) {
-      textarea {
-        min-height: 320px;
-      }
-      .preview-surface {
-        min-height: 320px;
-      }
+      .shell-header { padding: 14px 14px 10px; }
+      textarea { min-height: 320px; }
+      .preview-surface { min-height: 320px; }
     }
   </style>
 </head>
