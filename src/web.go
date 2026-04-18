@@ -266,8 +266,16 @@ type webWorkbenchPage struct {
 }
 
 type webWorkbenchNavGroup struct {
-	Label   string
-	Entries []webWorkbenchNavEntry
+	Label                string
+	Entries              []webWorkbenchNavEntry
+	ShowCreateControl    bool
+	CreateAction         string
+	CreateOpen           bool
+	CreatePlaceholder    string
+	CreateButtonLabel    string
+	CreateNav            string
+	CreateTab            string
+	CreateQuery          string
 }
 
 type webWorkbenchNavEntry struct {
@@ -403,6 +411,7 @@ func (s *sourceWorkbenchServer) routes() http.Handler {
 	mux.HandleFunc("/paste", s.handlePaste)
 	mux.HandleFunc("/link", s.handleLink)
 	mux.HandleFunc("/workbench/add", s.handleWorkbenchAdd)
+	mux.HandleFunc("/workbench/themes/create", s.handleWorkbenchThemeCreate)
 	mux.HandleFunc("/workbench/items/", s.handleWorkbenchItemAction)
 	mux.HandleFunc("/work-items/", s.handleWorkItem)
 	return mux
@@ -419,6 +428,7 @@ func (s *sourceWorkbenchServer) handleWorkbenchIndex(w http.ResponseWriter, r *h
 		strings.TrimSpace(r.URL.Query().Get("q")),
 		strings.TrimSpace(r.URL.Query().Get("status")),
 		strings.TrimSpace(r.URL.Query().Get("error")),
+		strings.TrimSpace(r.URL.Query().Get("new_theme")) == "open",
 	)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -524,7 +534,7 @@ func (s *sourceWorkbenchServer) handleSourceIndex(w http.ResponseWriter, r *http
 	}
 }
 
-func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, selectedTab, query, status, errMsg string) (webWorkbenchPage, error) {
+func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, selectedTab, query, status, errMsg string, themeCreateOpen bool) (webWorkbenchPage, error) {
 	state, err := LoadVaultState(s.vault)
 	if err != nil {
 		return webWorkbenchPage{}, err
@@ -564,7 +574,7 @@ func (s *sourceWorkbenchServer) loadWorkbenchPage(selectedNav, selectedTab, quer
 		Error:         strings.TrimSpace(errMsg),
 		CaptureAction: "/workbench/add",
 		CaptureReturn: buildWorkbenchHrefForTab(selectedNav, selectedTab, query, "", ""),
-		NavGroups:     buildWorkbenchNavGroups(app, themes, selectedNav, selectedTab),
+		NavGroups:     buildWorkbenchNavGroups(app, themes, selectedNav, selectedTab, themeCreateOpen),
 		CurrentTitle:  currentTitle,
 		CurrentCount:  len(items),
 		CurrentCountLabel: workbenchCountLabel("item", len(items)),
@@ -770,7 +780,7 @@ func buildWorkbenchThemeSourceEntries(vault VaultFS, theme ThemeDoc, sourceDocs 
 	return entries
 }
 
-func buildWorkbenchNavGroups(app *App, themes []ThemeDoc, selectedNav, selectedTab string) []webWorkbenchNavGroup {
+func buildWorkbenchNavGroups(app *App, themes []ThemeDoc, selectedNav, selectedTab string, themeCreateOpen bool) []webWorkbenchNavGroup {
 	actionEntries := []webWorkbenchNavEntry{
 		{Key: "__inbox__", Title: "Inbox", Count: len(app.itemsForSection(sectionInbox)), Active: selectedNav == "__inbox__"},
 		{Key: "__now__", Title: "Now", Count: len(app.itemsForSection(sectionToday)), Active: selectedNav == "__now__"},
@@ -802,7 +812,18 @@ func buildWorkbenchNavGroups(app *App, themes []ThemeDoc, selectedNav, selectedT
 	}
 	return []webWorkbenchNavGroup{
 		{Label: "Action", Entries: actionEntries},
-		{Label: "Themes", Entries: themeEntries},
+		{
+			Label:             "Themes",
+			Entries:           themeEntries,
+			ShowCreateControl: true,
+			CreateAction:      "/workbench/themes/create",
+			CreateOpen:        themeCreateOpen,
+			CreatePlaceholder: "New theme",
+			CreateButtonLabel: "Create",
+			CreateNav:         selectedNav,
+			CreateTab:         selectedTab,
+			CreateQuery:       app.filter,
+		},
 	}
 }
 
@@ -926,6 +947,36 @@ func (s *sourceWorkbenchServer) handleWorkbenchAdd(w http.ResponseWriter, r *htt
 		return
 	}
 	http.Redirect(w, r, captureReturnHref(strings.TrimSpace(r.FormValue("return_to")), strings.TrimSpace(r.FormValue("nav")), query), http.StatusSeeOther)
+}
+
+func (s *sourceWorkbenchServer) handleWorkbenchThemeCreate(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, fmt.Sprintf("theme form parse failed: %v", err), http.StatusBadRequest)
+		return
+	}
+	title := strings.TrimSpace(r.FormValue("title"))
+	nav := strings.TrimSpace(r.FormValue("nav"))
+	tab := strings.TrimSpace(r.FormValue("tab"))
+	query := strings.TrimSpace(r.FormValue("q"))
+	if title == "" {
+		http.Redirect(w, r, buildWorkbenchHrefForTabAndThemeCreator(nav, tab, query, "", "title is required", true), http.StatusSeeOther)
+		return
+	}
+	now := time.Now()
+	theme := ThemeDoc{
+		ID:      newID(),
+		Title:   title,
+		Created: dateKey(now),
+		Updated: dateKey(now),
+	}
+	if err := s.vault.SaveTheme(theme); err != nil {
+		http.Redirect(w, r, buildWorkbenchHrefForTabAndThemeCreator(nav, tab, query, "", err.Error(), true), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, buildWorkbenchHrefForTab(theme.ID, "work-items", "", "created theme", ""), http.StatusSeeOther)
 }
 
 func (s *sourceWorkbenchServer) handleWorkbenchItemAction(w http.ResponseWriter, r *http.Request) {
@@ -1285,15 +1336,16 @@ func (s *sourceWorkbenchServer) handleLink(w http.ResponseWriter, r *http.Reques
 }
 
 func markdownPasteFilename(raw string) string {
-	name := strings.TrimSpace(raw)
-	if name == "" {
-		return "pasted.md"
+	name := filepath.Base(strings.TrimSpace(raw))
+	id := newID()
+	if name == "" || name == "." {
+		return id + ".md"
 	}
 	ext := strings.ToLower(filepath.Ext(name))
-	if ext != ".md" && ext != ".markdown" {
-		name += ".md"
+	if ext == ".md" || ext == ".markdown" {
+		name = strings.TrimSpace(strings.TrimSuffix(name, ext))
 	}
-	return name
+	return sluggedMarkdownName(id, name)
 }
 
 func isMarkdownSourceFilename(name string) bool {
@@ -1414,7 +1466,7 @@ func sourceWorkbenchNav(active sourceWorkbenchView, themeID string, importedCoun
 		view  sourceWorkbenchView
 		label string
 	}{
-		{view: sourceWorkbenchViewPaste, label: "Quick Capture"},
+		{view: sourceWorkbenchViewPaste, label: "Capture Notes"},
 		{view: sourceWorkbenchViewUpload, label: "Upload File"},
 		{view: sourceWorkbenchViewLink, label: fmt.Sprintf("Link Source (%d)", importedCount)},
 		{view: sourceWorkbenchViewStaged, label: fmt.Sprintf("Staged Files (%d)", stagedCount)},
@@ -1439,10 +1491,14 @@ func (s *sourceWorkbenchServer) redirectToWorkItem(w http.ResponseWriter, r *htt
 }
 
 func buildWorkbenchHref(nav, query, status, errMsg string) string {
-	return buildWorkbenchHrefForTab(nav, "", query, status, errMsg)
+	return buildWorkbenchHrefForTabAndThemeCreator(nav, "", query, status, errMsg, false)
 }
 
 func buildWorkbenchHrefForTab(nav, tab, query, status, errMsg string) string {
+	return buildWorkbenchHrefForTabAndThemeCreator(nav, tab, query, status, errMsg, false)
+}
+
+func buildWorkbenchHrefForTabAndThemeCreator(nav, tab, query, status, errMsg string, themeCreatorOpen bool) string {
 	values := url.Values{}
 	if strings.TrimSpace(nav) != "" && strings.TrimSpace(nav) != "__now__" {
 		values.Set("nav", strings.TrimSpace(nav))
@@ -1458,6 +1514,9 @@ func buildWorkbenchHrefForTab(nav, tab, query, status, errMsg string) string {
 	}
 	if strings.TrimSpace(errMsg) != "" {
 		values.Set("error", strings.TrimSpace(errMsg))
+	}
+	if themeCreatorOpen {
+		values.Set("new_theme", "open")
 	}
 	if encoded := values.Encode(); encoded != "" {
 		return "/?" + encoded
@@ -2357,18 +2416,6 @@ const workbenchHTML = `<!doctype html>
       border-top: 1px solid rgba(229, 231, 235, 0.8);
       padding-top: 16px;
     }
-    .sidebar-content .nav-group:last-child {
-      flex: 1 1 auto;
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-    }
-    .sidebar-content .nav-group:last-child .nav-list {
-      flex: 1 1 auto;
-      min-height: 0;
-      overflow: auto;
-      align-content: start;
-    }
     .layout[data-sidebar-collapsed="true"]:not([data-sidebar-hovered="true"]) .sidebar-title,
     .layout[data-sidebar-collapsed="true"]:not([data-sidebar-hovered="true"]) .sidebar-content {
       display: none;
@@ -2618,13 +2665,74 @@ const workbenchHTML = `<!doctype html>
       box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.08);
     }
     input[type="text"] { width: 100%; }
-    .nav-group h2 {
+    .nav-group-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
       margin-bottom: 10px;
+    }
+    .nav-group h2 {
+      margin: 0;
+      padding-left: 10px;
       color: var(--muted);
       font-size: 0.8rem;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.06em;
+    }
+    .theme-create {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border: 0;
+      border-radius: 999px;
+      padding: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: background 120ms ease, color 120ms ease;
+    }
+    .theme-create:hover {
+      background: rgba(241, 245, 249, 0.98);
+      color: var(--ink);
+    }
+    .theme-create .icon {
+      font-size: 1rem;
+      line-height: 1;
+    }
+    .theme-create-card {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+    .theme-create-form {
+      display: grid;
+      gap: 12px;
+    }
+    .theme-create-form input[type="text"] {
+      min-height: 36px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(226, 232, 240, 0.96);
+      background: rgba(255, 255, 255, 0.98);
+      font-size: 0.9rem;
+      box-shadow: none;
+    }
+    .theme-create-form-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+    .theme-create-form button {
+      width: auto;
+      min-width: 0;
+      min-height: 32px;
+      padding: 0 12px;
+      border-radius: 999px;
+      font-size: 0.84rem;
+      font-weight: 600;
     }
     .nav-list {
       list-style: none;
@@ -3008,12 +3116,36 @@ const workbenchHTML = `<!doctype html>
         <div id="workbench-sidebar-content" class="sidebar-content">
           {{range .NavGroups}}
           <section class="nav-group">
-            <h2>{{.Label}}</h2>
+            <div class="nav-group-head">
+              <h2>{{.Label}}</h2>
+              {{if .ShowCreateControl}}
+              <button type="button" class="theme-create" aria-label="Create theme"><span class="icon">+</span></button>
+              {{end}}
+            </div>
             <ul class="nav-list">
               {{range .Entries}}
               <li><a href="{{.Href}}"{{if .Active}} class="active"{{end}}><span>{{.Title}}</span><span class="count">{{.Count}}</span></a></li>
               {{end}}
             </ul>
+            {{if .ShowCreateControl}}
+            <dialog id="theme-create-modal" class="capture-modal" data-open-on-load="{{if .CreateOpen}}true{{else}}false{{end}}">
+              <div class="theme-create-card">
+                <div class="capture-head">
+                  <strong>Create Theme</strong>
+                  <button id="close-theme-create" type="button">Close</button>
+                </div>
+                <form method="post" action="{{.CreateAction}}" class="theme-create-form">
+                  <input type="hidden" name="nav" value="{{.CreateNav}}">
+                  <input type="hidden" name="tab" value="{{.CreateTab}}">
+                  <input type="hidden" name="q" value="{{.CreateQuery}}">
+                  <input id="theme-create-title" type="text" name="title" placeholder="{{.CreatePlaceholder}}" aria-label="Theme title" required>
+                  <div class="theme-create-form-actions">
+                    <button type="submit">{{.CreateButtonLabel}}</button>
+                  </div>
+                </form>
+              </div>
+            </dialog>
+            {{end}}
           </section>
           {{end}}
         </div>
@@ -3178,6 +3310,10 @@ const workbenchHTML = `<!doctype html>
       const openButton = document.getElementById("open-capture");
       const closeButton = document.getElementById("close-capture");
       const titleInput = document.getElementById("capture-title");
+      const themeDialog = document.getElementById("theme-create-modal");
+      const openThemeButton = document.querySelector(".theme-create");
+      const closeThemeButton = document.getElementById("close-theme-create");
+      const themeTitleInput = document.getElementById("theme-create-title");
       const rowMenus = Array.from(document.querySelectorAll(".row-menu"));
       let activeRowMenu = null;
       let activeRowMenuPopover = null;
@@ -3225,6 +3361,22 @@ const workbenchHTML = `<!doctype html>
       const closeCapture = () => {
         if (dialog && dialog.open) {
           dialog.close();
+        }
+      };
+      const openThemeCreate = () => {
+        if (!themeDialog || themeDialog.open || typeof themeDialog.showModal !== "function") {
+          return;
+        }
+        themeDialog.showModal();
+        window.setTimeout(() => {
+          if (themeTitleInput) {
+            themeTitleInput.focus();
+          }
+        }, 0);
+      };
+      const closeThemeCreate = () => {
+        if (themeDialog && themeDialog.open) {
+          themeDialog.close();
         }
       };
       const unmountRowMenu = () => {
@@ -3298,6 +3450,12 @@ const workbenchHTML = `<!doctype html>
       if (closeButton) {
         closeButton.addEventListener("click", closeCapture);
       }
+      if (openThemeButton) {
+        openThemeButton.addEventListener("click", openThemeCreate);
+      }
+      if (closeThemeButton) {
+        closeThemeButton.addEventListener("click", closeThemeCreate);
+      }
       if (toggleSidebarButton) {
         toggleSidebarButton.addEventListener("click", () => {
           setSidebarCollapsed(!sidebarCollapsed());
@@ -3323,6 +3481,9 @@ const workbenchHTML = `<!doctype html>
         layout.dataset.sidebarCollapsed = persistedSidebarState;
       }
       syncSidebarState();
+      if (themeDialog && themeDialog.dataset.openOnLoad === "true") {
+        openThemeCreate();
+      }
       document.addEventListener("click", (event) => {
         if (!activeRowMenu || !activeRowMenuPopover) {
           return;
@@ -3349,6 +3510,10 @@ const workbenchHTML = `<!doctype html>
         }
         if (event.key === "Escape" && dialog && dialog.open) {
           closeCapture();
+          return;
+        }
+        if (event.key === "Escape" && themeDialog && themeDialog.open) {
+          closeThemeCreate();
         }
       });
     })();
@@ -3404,7 +3569,7 @@ const sourceWorkbenchHTML = `<!doctype html>
     main {
       flex: 1 1 auto;
       min-height: 0;
-      padding: 0 20px 28px;
+      padding: 0 20px 20px;
     }
     h1 {
       margin: 0;
@@ -3422,6 +3587,9 @@ const sourceWorkbenchHTML = `<!doctype html>
       color: var(--muted);
       font-size: 0.93rem;
       line-height: 1.6;
+    }
+    p.lead {
+      margin: 0 0 14px;
     }
     .topbar {
       display: flex;
@@ -3526,7 +3694,7 @@ const sourceWorkbenchHTML = `<!doctype html>
       gap: 6px;
       border-radius: 10px;
       border: 1px solid var(--line);
-      padding: 10px 12px;
+      padding: 8px 12px;
       font: inherit;
       font-size: 0.86rem;
       font-weight: 500;
@@ -3663,9 +3831,11 @@ const sourceWorkbenchHTML = `<!doctype html>
       justify-content: flex-end;
       flex-wrap: wrap;
     }
-    @media (max-width: 640px) {
+    @media (max-width: 920px) {
       .shell-header { padding: 14px 14px 10px; }
-      main { padding: 0 14px 20px; }
+      main { padding: 0 14px 14px; }
+    }
+    @media (max-width: 640px) {
       .panel { padding: 16px; }
     }
   </style>
@@ -3704,13 +3874,13 @@ const sourceWorkbenchHTML = `<!doctype html>
     <section class="section">
       {{if .IsPasteView}}
       <div class="panel">
-      <h2>Quick Capture</h2>
+      <h2>Capture Notes</h2>
       <p class="meta">Paste markdown notes directly. Pick a theme or issue now if you already know where this source belongs.</p>
       <form method="post" action="/paste">
         <div class="stack">
           <div>
-            <label for="filename">Filename</label>
-            <input id="filename" type="text" name="filename" placeholder="pasted.md">
+            <label for="filename">Name</label>
+            <input id="filename" type="text" name="filename" placeholder="meeting-notes">
           </div>
           <div>
             <label for="markdown">Markdown</label>
@@ -3734,7 +3904,7 @@ const sourceWorkbenchHTML = `<!doctype html>
             <button type="submit">Capture Markdown</button>
           </div>
         </div>
-        <p class="meta">If no filename is provided, Workbench uses <code>pasted.md</code>. Pasted Markdown is saved directly as a source document, and any selected theme or issue is linked immediately.</p>
+        <p class="meta">If no name is provided, Workbench uses a random ID. If a name is provided, it saves as <code>&lt;slug&gt;--&lt;id&gt;.md</code>.</p>
       </form>
       </div>
       {{else if .IsUploadView}}

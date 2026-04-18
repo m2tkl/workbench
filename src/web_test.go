@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -133,8 +134,17 @@ func TestSourceWorkbenchPasteStagesMarkdownText(t *testing.T) {
 	if location := res.Header().Get("Location"); !strings.Contains(location, "view=paste") {
 		t.Fatalf("paste redirect location = %q, want view=paste", location)
 	}
-	path := filepath.Join(vault.SourceDocumentsDir(), "quick-note.md")
-	raw, err := os.ReadFile(path)
+	docs, err := vault.LoadSourceDocuments()
+	if err != nil {
+		t.Fatalf("LoadSourceDocuments returned error: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("LoadSourceDocuments len = %d, want 1", len(docs))
+	}
+	if !regexp.MustCompile(`^quick-note--[0-9a-f]{8}\.md$`).MatchString(docs[0].Filename) {
+		t.Fatalf("source filename = %q, want slugged random filename", docs[0].Filename)
+	}
+	raw, err := os.ReadFile(docs[0].Path)
 	if err != nil {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
@@ -143,7 +153,7 @@ func TestSourceWorkbenchPasteStagesMarkdownText(t *testing.T) {
 	}
 }
 
-func TestSourceWorkbenchPasteUsesDefaultMarkdownFilename(t *testing.T) {
+func TestSourceWorkbenchPasteUsesRandomMarkdownFilenameByDefault(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)
 	if err := vault.EnsureLayout(); err != nil {
@@ -165,8 +175,15 @@ func TestSourceWorkbenchPasteUsesDefaultMarkdownFilename(t *testing.T) {
 	if location := res.Header().Get("Location"); !strings.Contains(location, "view=paste") {
 		t.Fatalf("paste redirect location = %q, want view=paste", location)
 	}
-	if _, err := os.Stat(filepath.Join(vault.SourceDocumentsDir(), "pasted.md")); err != nil {
-		t.Fatalf("expected default pasted markdown document to exist: %v", err)
+	docs, err := vault.LoadSourceDocuments()
+	if err != nil {
+		t.Fatalf("LoadSourceDocuments returned error: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("LoadSourceDocuments len = %d, want 1", len(docs))
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}\.md$`).MatchString(docs[0].Filename) {
+		t.Fatalf("source filename = %q, want random id filename", docs[0].Filename)
 	}
 }
 
@@ -381,17 +398,20 @@ func TestSourceWorkbenchIndexShowsStagedFiles(t *testing.T) {
 	if !strings.Contains(body, `class="shell-header"`) {
 		t.Fatalf("expected stable shared header wrapper in body: %s", body)
 	}
+	if !strings.Contains(body, `padding: 0 20px 20px;`) || !strings.Contains(body, `@media (max-width: 920px)`) || !strings.Contains(body, `main { padding: 0 14px 14px; }`) || !strings.Contains(body, `p.lead {`) || !strings.Contains(body, `margin: 0 0 14px;`) || !strings.Contains(body, `padding: 8px 12px;`) {
+		t.Fatalf("expected sources outer spacing to match workbench: %s", body)
+	}
 	if !strings.Contains(body, `class="shell-title" aria-label="Title navigation"`) || !strings.Contains(body, `<span class="title-current">Sources</span>`) {
 		t.Fatalf("expected sources title in shared header: %s", body)
 	}
 	if !strings.Contains(body, `id="open-capture"`) || !strings.Contains(body, "Capture to Inbox") {
 		t.Fatalf("expected capture affordance in sources body: %s", body)
 	}
-	if !strings.Contains(body, "Quick Capture") || !strings.Contains(body, `action="/paste"`) {
+	if !strings.Contains(body, "Capture Notes") || !strings.Contains(body, `action="/paste"`) {
 		t.Fatalf("expected quick capture view in body: %s", body)
 	}
-	if !strings.Contains(body, "Capture Markdown") || !strings.Contains(body, "pasted.md") {
-		t.Fatalf("expected quick capture controls in body: %s", body)
+	if !strings.Contains(body, "Capture Markdown") || !strings.Contains(body, "Name") || !strings.Contains(body, "meeting-notes") || !strings.Contains(body, "&lt;slug&gt;--&lt;id&gt;.md") || !strings.Contains(body, "random ID") {
+		t.Fatalf("expected capture note naming guidance in body: %s", body)
 	}
 	if !strings.Contains(body, `href="/sources?view=upload"`) || !strings.Contains(body, `href="/sources?view=link"`) || !strings.Contains(body, `href="/sources?view=staged"`) {
 		t.Fatalf("expected workflow navigation in body: %s", body)
@@ -513,6 +533,11 @@ func TestSourceWorkbenchQuickCaptureCreatesDistinctSourceDocumentsForSameFilenam
 	}
 	if len(docs) != 2 {
 		t.Fatalf("LoadSourceDocuments len = %d, want 2", len(docs))
+	}
+	for _, doc := range docs {
+		if !regexp.MustCompile(`^quick-note--[0-9a-f]{8}\.md$`).MatchString(doc.Filename) {
+			t.Fatalf("source filename = %q, want slugged random filename", doc.Filename)
+		}
 	}
 	if sourceDocumentRef(vault, docs[0].Path) == sourceDocumentRef(vault, docs[1].Path) {
 		t.Fatalf("source document refs should be distinct: %v / %v", docs[0].Path, docs[1].Path)
@@ -1100,6 +1125,9 @@ func TestWorkbenchIndexShowsSidebarAndMainView(t *testing.T) {
 	if !strings.Contains(body, `class="workbench-list"`) || !strings.Contains(body, `class="workbench-row"`) || strings.Contains(body, `class="action-table"`) || strings.Contains(body, ">Stage</th>") || strings.Contains(body, ">Done</th>") || !strings.Contains(body, `<div class="row-meta-line">`) || !strings.Contains(body, `class="stage-inline">Now</span>`) || !strings.Contains(body, `class="menu-action-label">Done for today</span>`) || !strings.Contains(body, `class="menu-action-label">Done</span>`) {
 		t.Fatalf("expected title-first workbench row list: %s", body)
 	}
+	if !strings.Contains(body, `.nav-group-head {`) || !strings.Contains(body, `.nav-group h2 {`) || !strings.Contains(body, `padding-left: 10px;`) || !strings.Contains(body, `class="theme-create"`) || !strings.Contains(body, `id="theme-create-modal"`) || !strings.Contains(body, `action="/workbench/themes/create"`) || !strings.Contains(body, `placeholder="New theme"`) || !strings.Contains(body, `data-open-on-load="false"`) {
+		t.Fatalf("expected sidebar group labels to align with nav item text: %s", body)
+	}
 	if !strings.Contains(body, `class="row-menu"`) || !strings.Contains(body, `class="row-menu-icon"`) || !strings.Contains(body, `class="menu-divider"`) || !strings.Contains(body, `class="menu-action-icon"`) || !strings.Contains(body, `class="menu-action-label"`) || !strings.Contains(body, `viewBox="0 0 16 16"`) || !strings.Contains(body, `More actions for Focus item`) || !strings.Contains(body, `class="menu-action-label">Set theme</span>`) || !strings.Contains(body, `class="menu-action-label">Update stage</span>`) {
 		t.Fatalf("expected overflow menu for row-level theme actions: %s", body)
 	}
@@ -1117,6 +1145,9 @@ func TestWorkbenchIndexShowsSidebarAndMainView(t *testing.T) {
 	}
 	if !strings.Contains(body, `.content-panel {`) || !strings.Contains(body, `display: flex;`) || !strings.Contains(body, `.content-panel-body {`) || !strings.Contains(body, `padding: 10px 18px 14px;`) || !strings.Contains(body, `overflow: auto;`) {
 		t.Fatalf("expected main pane body to own scrolling: %s", body)
+	}
+	if !strings.Contains(body, `.sidebar-content {`) || !strings.Contains(body, `padding: 14px;`) || !strings.Contains(body, `overflow: auto;`) || strings.Contains(body, `.sidebar-content .nav-group:last-child .nav-list {`) {
+		t.Fatalf("expected sidebar to use one scroll container for all nav groups: %s", body)
 	}
 	if !strings.Contains(body, `overflow: hidden;`) || !strings.Contains(body, `padding: 0 20px 20px;`) || !strings.Contains(body, `.sidebar {
       position: relative;`) || !strings.Contains(body, `height: 100%;`) || strings.Contains(body, `height: calc(100dvh - 104px);`) {
@@ -1178,6 +1209,27 @@ func TestWorkbenchThemeViewCanShowSourcesTab(t *testing.T) {
 	}
 }
 
+func TestWorkbenchIndexCanReopenThemeCreateDialog(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	seedWorkbenchItems(t, vault)
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodGet, "/?new_theme=open&error=title+is+required", nil)
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("theme dialog reopen status = %d, want %d", res.Code, http.StatusOK)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, `id="theme-create-modal"`) || !strings.Contains(body, `data-open-on-load="true"`) || !strings.Contains(body, `const themeDialog = document.getElementById("theme-create-modal");`) || !strings.Contains(body, `if (themeDialog && themeDialog.dataset.openOnLoad === "true")`) {
+		t.Fatalf("expected theme create dialog to reopen from query state: %s", body)
+	}
+}
+
 func TestWorkbenchActionsAddMoveAndLifecycle(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)
@@ -1232,6 +1284,49 @@ func TestWorkbenchActionsAddMoveAndLifecycle(t *testing.T) {
 	}
 	if themedAdded == nil || themedAdded.Theme != "auth-stepup" {
 		t.Fatalf("expected theme-scoped added item, got item=%#v", themedAdded)
+	}
+
+	form = url.Values{"title": []string{"Platform Refresh"}, "nav": []string{"__now__"}, "tab": []string{"work-items"}}
+	req = httptest.NewRequest(http.MethodPost, "/workbench/themes/create", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res = httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("create theme status = %d, want %d", res.Code, http.StatusSeeOther)
+	}
+	location := res.Header().Get("Location")
+	if !strings.Contains(location, "status=created+theme") || !strings.Contains(location, "nav=") {
+		t.Fatalf("create theme redirect location = %q, want created theme nav", location)
+	}
+	themes, err := vault.LoadThemes()
+	if err != nil {
+		t.Fatalf("LoadThemes returned error: %v", err)
+	}
+	var createdTheme *ThemeDoc
+	for i := range themes {
+		if themes[i].Title == "Platform Refresh" {
+			createdTheme = &themes[i]
+			break
+		}
+	}
+	if createdTheme == nil {
+		t.Fatalf("expected created theme in vault, got %#v", themes)
+	}
+	if !strings.Contains(location, "nav="+createdTheme.ID) {
+		t.Fatalf("create theme redirect location = %q, want nav=%s", location, createdTheme.ID)
+	}
+
+	form = url.Values{"title": []string{""}, "nav": []string{"__now__"}, "tab": []string{"work-items"}}
+	req = httptest.NewRequest(http.MethodPost, "/workbench/themes/create", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res = httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("empty create theme status = %d, want %d", res.Code, http.StatusSeeOther)
+	}
+	location = res.Header().Get("Location")
+	if !strings.Contains(location, "error=title+is+required") || !strings.Contains(location, "new_theme=open") {
+		t.Fatalf("empty create theme redirect location = %q, want open theme composer error", location)
 	}
 
 	form = url.Values{"theme_id": []string{"auth-stepup"}}
