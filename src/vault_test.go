@@ -26,17 +26,45 @@ func findWorkDoc(items []WorkDoc, id string) (WorkDoc, bool) {
 	return WorkDoc{}, false
 }
 
+func saveInboxWorkItem(t *testing.T, vault VaultFS, item InboxItem) {
+	t.Helper()
+	err := vault.SaveWorkItem(WorkDoc{
+		Metadata: Metadata{
+			ID:      item.ID,
+			Title:   item.Title,
+			Status:  "open",
+			Triage:  TriageInbox,
+			Created: item.Created,
+			Updated: item.Updated,
+			Tags:    item.Tags,
+		},
+		Body: item.Body,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkItem returned error: %v", err)
+	}
+}
+
+func writeWorkItemSnippet(t *testing.T, dir, name, body string) {
+	t.Helper()
+	body = strings.TrimSpace(body)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ensureMarkdownName(name)), []byte(body+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+}
+
 func TestVaultRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 
 	inbox := NewInboxCapture(now, "Investigate OTP edge cases", "Need to clarify retry rules.", []string{"otp", "auth"})
-	if err := vault.SaveInboxItem(inbox); err != nil {
-		t.Fatalf("SaveInboxItem returned error: %v", err)
-	}
+	saveInboxWorkItem(t, vault, inbox)
 
-	task := TaskDoc{
+	task := WorkDoc{
 		Metadata: Metadata{
 			ID:      "expense-submit",
 			Title:   "Submit travel reimbursement",
@@ -50,11 +78,11 @@ func TestVaultRoundTrip(t *testing.T) {
 		},
 		Body: "Use the April receipt batch.\n",
 	}
-	if err := vault.SaveTask(task); err != nil {
-		t.Fatalf("SaveTask returned error: %v", err)
+	if err := vault.SaveWorkItem(task); err != nil {
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 
-	issue := IssueDoc{
+	issue := WorkDoc{
 		Metadata: Metadata{
 			ID:      "otp-tx-design",
 			Title:   "OTP transaction design",
@@ -69,8 +97,8 @@ func TestVaultRoundTrip(t *testing.T) {
 		Theme: "auth-stepup",
 		Body:  "Clarify timeout and retry rules.\n",
 	}
-	if err := vault.SaveIssue(issue); err != nil {
-		t.Fatalf("SaveIssue returned error: %v", err)
+	if err := vault.SaveWorkItem(issue); err != nil {
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 
 	theme := ThemeDoc{
@@ -208,6 +236,39 @@ func TestThemeContextDocRejectsRefsOutsideTheme(t *testing.T) {
 	}
 }
 
+func TestGlobalContextDocRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+
+	doc := ThemeContextDoc{
+		Title:   "Emergency Sync",
+		Kind:    contextKindEvent,
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+		Body:    "Discussed incident triage.\n",
+	}
+	if err := vault.SaveGlobalContextDoc("emergency-sync--abcd1234", doc); err != nil {
+		t.Fatalf("SaveGlobalContextDoc returned error: %v", err)
+	}
+
+	docs, err := vault.LoadGlobalContextDocs()
+	if err != nil {
+		t.Fatalf("LoadGlobalContextDocs returned error: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("LoadGlobalContextDocs len = %d, want 1", len(docs))
+	}
+	if docs[0].Title != "Emergency Sync" || docs[0].Kind != contextKindEvent {
+		t.Fatalf("unexpected global context doc: %#v", docs[0])
+	}
+	if docs[0].Created != "2026-04-21" || docs[0].Updated != "2026-04-21" {
+		t.Fatalf("unexpected global context timestamps: %#v", docs[0])
+	}
+	if docs[0].Body != "Discussed incident triage." {
+		t.Fatalf("global context body = %q, want normalized markdown", docs[0].Body)
+	}
+}
+
 func TestLoadThemesSkipsDirectoriesWithoutThemeMeta(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)
@@ -251,7 +312,7 @@ func TestLoadMarkdownSnippetsStripsFrontmatter(t *testing.T) {
 	}
 }
 
-func TestTaskAndIssueFromInbox(t *testing.T) {
+func TestWorkItemFromInbox(t *testing.T) {
 	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
 	inbox := InboxItem{
 		ID:      "otp-tx-design",
@@ -262,23 +323,23 @@ func TestTaskAndIssueFromInbox(t *testing.T) {
 		Body:    "raw notes",
 	}
 
-	task := TaskFromInbox(inbox, now, TriageStock, StageNext, "")
+	task := WorkItemFromInbox(inbox, now, TriageStock, StageNext, "", "")
 	if task.ID != inbox.ID || task.Title != inbox.Title || task.Stage != StageNext {
-		t.Fatalf("TaskFromInbox = %#v", task)
+		t.Fatalf("WorkItemFromInbox = %#v", task)
 	}
 	if task.Created != "2026-04-10" || task.Updated != "2026-04-12" {
 		t.Fatalf("unexpected task timestamps: %#v", task.Metadata)
 	}
 
-	issue := IssueFromInbox(inbox, now, TriageStock, StageNow, "", "auth-stepup")
+	issue := WorkItemFromInbox(inbox, now, TriageStock, StageNow, "", "auth-stepup")
 	if issue.ID != inbox.ID || issue.Theme != "auth-stepup" || issue.Stage != StageNow {
-		t.Fatalf("IssueFromInbox = %#v", issue)
+		t.Fatalf("WorkItemFromInbox = %#v", issue)
 	}
 }
 
 func TestVaultSaveTaskRejectsInvalidMetadata(t *testing.T) {
 	vault := NewVault(t.TempDir())
-	err := vault.SaveTask(TaskDoc{
+	err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "bad",
 			Title:   "Bad",
@@ -330,7 +391,7 @@ func TestSaveUsesSluggedPaths(t *testing.T) {
 		t.Fatalf("expected slugged inbox path: %v", err)
 	}
 
-	task := TaskDoc{
+	task := WorkDoc{
 		Metadata: Metadata{
 			ID:      "expense-submit",
 			Title:   "Submit Expense",
@@ -341,14 +402,14 @@ func TestSaveUsesSluggedPaths(t *testing.T) {
 			Updated: "2026-04-12",
 		},
 	}
-	if err := vault.SaveTask(task); err != nil {
-		t.Fatalf("SaveTask returned error: %v", err)
+	if err := vault.SaveWorkItem(task); err != nil {
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(vault.WorkItemsDir(), "submit-expense--expense-submit.md")); err != nil {
 		t.Fatalf("expected slugged work-item path: %v", err)
 	}
 
-	issue := IssueDoc{
+	issue := WorkDoc{
 		Metadata: Metadata{
 			ID:      "otp-tx-design",
 			Title:   "OTP Tx Design",
@@ -360,8 +421,8 @@ func TestSaveUsesSluggedPaths(t *testing.T) {
 		},
 		Theme: "auth-stepup",
 	}
-	if err := vault.SaveIssue(issue); err != nil {
-		t.Fatalf("SaveIssue returned error: %v", err)
+	if err := vault.SaveWorkItem(issue); err != nil {
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(vault.WorkItemsDir(), "otp-tx-design--otp-tx-design.md")); err != nil {
 		t.Fatalf("expected slugged themed work-item path: %v", err)
@@ -385,7 +446,7 @@ func TestSaveUsesUnicodeSluggedPaths(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)
 
-	task := TaskDoc{
+	task := WorkDoc{
 		Metadata: Metadata{
 			ID:      "task-ja",
 			Title:   "認証 強化",
@@ -396,8 +457,8 @@ func TestSaveUsesUnicodeSluggedPaths(t *testing.T) {
 			Updated: "2026-04-12",
 		},
 	}
-	if err := vault.SaveTask(task); err != nil {
-		t.Fatalf("SaveTask returned error: %v", err)
+	if err := vault.SaveWorkItem(task); err != nil {
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(vault.WorkItemsDir(), "認証-強化--task-ja.md")); err != nil {
 		t.Fatalf("expected unicode slugged work-item path: %v", err)
@@ -430,52 +491,20 @@ func TestSaveMigratesLegacyPathsToSluggedPaths(t *testing.T) {
 		t.Fatalf("expected migrated inbox path: %v", err)
 	}
 
-	legacyTaskDir := filepath.Join(vault.TasksDir(), "expense-submit")
-	if err := os.MkdirAll(filepath.Join(legacyTaskDir, "memos"), 0o755); err != nil {
-		t.Fatalf("MkdirAll returned error: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(legacyTaskDir, "memos", "work.md"), []byte("memo\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(legacyTaskDir, "task.md"), []byte("---\nid: expense-submit\ntitle: Submit expense\nstatus: open\ntriage: stock\nstage: now\ncreated: 2026-04-12\nupdated: 2026-04-12\n---\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
-	}
-	if err := vault.SaveTask(TaskDoc{
-		Metadata: Metadata{
-			ID:      "expense-submit",
-			Title:   "Submit Expense Report",
-			Status:  "open",
-			Triage:  TriageStock,
-			Stage:   StageNow,
-			Created: "2026-04-12",
-			Updated: "2026-04-13",
-		},
-	}); err != nil {
-		t.Fatalf("SaveTask returned error: %v", err)
-	}
-	newTaskDir := filepath.Join(vault.WorkItemsDir(), "submit-expense-report--expense-submit")
-	if _, err := os.Stat(legacyTaskDir); !os.IsNotExist(err) {
-		t.Fatalf("expected legacy task dir removed, got %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(newTaskDir, "context", "manual", "work.md")); err != nil {
-		t.Fatalf("expected migrated manual context preserved after migration: %v", err)
-	}
 }
 
-func TestLoadVaultStateMapsInboxTasksAndIssuesIntoSections(t *testing.T) {
+func TestLoadVaultStateMapsItemsIntoSections(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)
 
-	if err := vault.SaveInboxItem(InboxItem{
+	saveInboxWorkItem(t, vault, InboxItem{
 		ID:      "capture-1",
 		Title:   "Capture me",
 		Created: "2026-04-12",
 		Updated: "2026-04-12",
 		Body:    "raw thought",
-	}); err != nil {
-		t.Fatalf("SaveInboxItem returned error: %v", err)
-	}
-	if err := vault.SaveTask(TaskDoc{
+	})
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "expense-submit",
 			Title:   "Submit expense",
@@ -487,12 +516,10 @@ func TestLoadVaultStateMapsInboxTasksAndIssuesIntoSections(t *testing.T) {
 			Refs:    []string{"knowledge/expense-submit.md"},
 		},
 	}); err != nil {
-		t.Fatalf("SaveTask returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
-	if err := vault.WriteTaskMemo("expense-submit", "work", "# Submit expense\n\n- [ ] fill form"); err != nil {
-		t.Fatalf("WriteTaskMemo returned error: %v", err)
-	}
-	if err := vault.SaveIssue(IssueDoc{
+	writeWorkItemSnippet(t, vault.WorkItemContextManualDir("expense-submit"), "work", "# Submit expense\n\n- [ ] fill form")
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "otp-tx-design",
 			Title:   "OTP Tx design",
@@ -504,20 +531,16 @@ func TestLoadVaultStateMapsInboxTasksAndIssuesIntoSections(t *testing.T) {
 		},
 		Theme: "auth-stepup",
 	}); err != nil {
-		t.Fatalf("SaveIssue returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
-	if err := vault.WriteIssueMemo("otp-tx-design", "notes", "# Notes\n\nOpen question"); err != nil {
-		t.Fatalf("WriteIssueMemo returned error: %v", err)
-	}
+	writeWorkItemSnippet(t, vault.WorkItemContextGeneratedDir("otp-tx-design"), "notes", "# Notes\n\nOpen question")
 	if err := os.MkdirAll(vault.WorkItemContextDir("otp-tx-design"), 0o755); err != nil {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(vault.WorkItemContextDir("otp-tx-design"), "constraints.md"), []byte("---\ntitle: Constraints\n---\n\nRetry is capped at 3.\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
-	if err := vault.WriteIssueMemo("otp-tx-design", "agent-run", "Reviewed source deck and extracted open questions."); err != nil {
-		t.Fatalf("WriteIssueMemo returned error: %v", err)
-	}
+	writeWorkItemSnippet(t, vault.WorkItemContextGeneratedDir("otp-tx-design"), "agent-run", "Reviewed source deck and extracted open questions.")
 
 	state, err := LoadVaultState(vault)
 	if err != nil {
@@ -561,15 +584,13 @@ func containsText(raw, want string) bool {
 func TestSaveVaultStatePersistsMutationAndConversion(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)
-	if err := vault.SaveInboxItem(InboxItem{
+	saveInboxWorkItem(t, vault, InboxItem{
 		ID:      "capture-1",
 		Title:   "Capture me",
 		Created: "2026-04-12",
 		Updated: "2026-04-12",
 		Body:    "raw thought",
-	}); err != nil {
-		t.Fatalf("SaveInboxItem returned error: %v", err)
-	}
+	})
 
 	state, err := LoadVaultState(vault)
 	if err != nil {
@@ -599,7 +620,7 @@ func TestSaveVaultStatePersistsMutationAndConversion(t *testing.T) {
 func TestSaveVaultStatePersistsUpdatedIssueTheme(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)
-	if err := vault.SaveIssue(IssueDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "otp-tx-design",
 			Title:   "OTP Tx design",
@@ -611,7 +632,7 @@ func TestSaveVaultStatePersistsUpdatedIssueTheme(t *testing.T) {
 		},
 		Theme: "auth-old",
 	}); err != nil {
-		t.Fatalf("SaveIssue returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 
 	state, err := LoadVaultState(vault)

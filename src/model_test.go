@@ -21,9 +21,9 @@ func TestSpecializedItemConstructorsProduceValidWorkflowState(t *testing.T) {
 		t.Fatalf("scheduled_for = %q, want 2026-04-15", scheduled.ScheduledFor)
 	}
 
-	recurring := NewIssueRecurringItem(now, "Review backups", 7, "2026-04-12")
+	recurring := NewRecurringItem(now, "Review backups", 7, "2026-04-12")
 	if recurring.EntityType != entityWork || recurring.Triage != TriageDeferred || recurring.DeferredKind != DeferredKindRecurring {
-		t.Fatalf("NewIssueRecurringItem = %#v", recurring)
+		t.Fatalf("NewRecurringItem = %#v", recurring)
 	}
 	if recurring.RecurringEveryDays != 7 || recurring.RecurringAnchor != "2026-04-12" {
 		t.Fatalf("unexpected recurring rule: %#v", recurring)
@@ -36,7 +36,7 @@ func TestSpecializedConstructorsStartWithoutSyntheticLogEntries(t *testing.T) {
 	items := []Item{
 		NewInboxItem(now, "Capture note"),
 		NewStockItem(now, "Ship release", StageNow),
-		NewIssueStockItem(now, "OTP design", StageNext),
+		NewStockItem(now, "OTP design", StageNext),
 		NewScheduledItem(now, "Pay rent", "2026-04-15"),
 		NewRecurringItem(now, "Review backups", 2, "2026-04-12"),
 	}

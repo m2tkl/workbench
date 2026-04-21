@@ -39,8 +39,6 @@ func runVaultCommand(args []string) int {
 		return runVaultReopen(args)
 	case "done-for-day":
 		return runVaultDoneForDay(args)
-	case "convert":
-		return runVaultConvert(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown vault command: %s\n", args[2])
 		return 1
@@ -80,12 +78,12 @@ func runVaultList(args []string) int {
 	if len(args) < 4 || hasHelpFlag(args[3:]) {
 		printHelp(commandHelp{
 			Usage: []string{
-				fmt.Sprintf("%s vault list <inbox|tasks|issues|themes|knowledge> [--data-dir DIR]", flagSetName(args)),
+				fmt.Sprintf("%s vault list <items|inbox|themes|knowledge> [--data-dir DIR]", flagSetName(args)),
 			},
 			Description: "Print one vault collection as formatted JSON.",
 			Examples: []string{
 				fmt.Sprintf("%s vault list inbox", flagSetName(args)),
-				fmt.Sprintf("%s vault list issues --data-dir ./vault", flagSetName(args)),
+				fmt.Sprintf("%s vault list items --data-dir ./vault", flagSetName(args)),
 			},
 		})
 		if len(args) < 4 {
@@ -105,25 +103,24 @@ func runVaultList(args []string) int {
 	vault := NewVault(root)
 
 	switch kind {
+	case "items":
+		state, err := LoadVaultState(vault)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load state: %v\n", err)
+			return 1
+		}
+		return printJSON(state.Items)
 	case "inbox":
-		items, err := vault.LoadInbox()
+		state, err := LoadVaultState(vault)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "load inbox: %v\n", err)
+			fmt.Fprintf(os.Stderr, "load state: %v\n", err)
 			return 1
 		}
-		return printJSON(items)
-	case "tasks":
-		items, err := vault.LoadTasks()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load tasks: %v\n", err)
-			return 1
-		}
-		return printJSON(items)
-	case "issues":
-		items, err := vault.LoadIssues()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load issues: %v\n", err)
-			return 1
+		items := make([]Item, 0, len(state.Items))
+		for _, item := range state.Items {
+			if item.Triage == TriageInbox {
+				items = append(items, item)
+			}
 		}
 		return printJSON(items)
 	case "themes":
@@ -153,10 +150,8 @@ func runVaultAdd(args []string) int {
 	switch args[3] {
 	case "inbox":
 		return runVaultAddInbox(args)
-	case "task":
-		return runVaultAddTask(args)
-	case "issue":
-		return runVaultAddIssue(args)
+	case "item":
+		return runVaultAddItem(args)
 	case "theme":
 		return runVaultAddTheme(args)
 	case "theme-context":
@@ -172,22 +167,21 @@ func vaultCommandHelp(args []string) commandHelp {
 		Usage: []string{
 			fmt.Sprintf("%s vault <command> [args]", flagSetName(args)),
 		},
-		Description: "Manage the vault that stores inbox captures, tasks, issues, themes, knowledge, and staged source files. Item and theme IDs are generated as random 8-char hex strings, while saved paths include a title slug plus that ID.",
+		Description: "Manage the vault that stores work items, themes, knowledge, and staged source files. Item and theme IDs are generated as random 8-char hex strings, while saved paths include a title slug plus that ID.",
 		Commands: []helpCommand{
 			{Name: "init", Summary: "Create the vault directory layout."},
-			{Name: "list", Summary: "Inspect inbox, tasks, issues, themes, or knowledge entries."},
-			{Name: "add", Summary: "Create inbox items, tasks, issues, themes, or theme context docs."},
+			{Name: "list", Summary: "Inspect items, inbox, themes, or knowledge entries."},
+			{Name: "add", Summary: "Create inbox items, work items, themes, or theme context docs."},
 			{Name: "get", Summary: "Fetch a single item or theme by id."},
 			{Name: "move", Summary: "Move an item between inbox, working stages, scheduled, or recurring states."},
 			{Name: "update", Summary: "Edit item metadata such as title, refs, or theme."},
 			{Name: "done-for-day", Summary: "Pause an item for today without completing it."},
 			{Name: "reopen", Summary: "Undo done-for-day or complete state."},
 			{Name: "complete", Summary: "Mark an item done and optionally record a note."},
-			{Name: "convert", Summary: "Promote an inbox capture into a task or issue."},
 		},
 		Examples: []string{
 			fmt.Sprintf("%s vault add inbox --title \"Investigate OTP edge case\"", flagSetName(args)),
-			fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to issue --theme 3b91e4aa --stage next", flagSetName(args)),
+			fmt.Sprintf("%s vault add item --title \"OTP Tx design\" --theme 3b91e4aa --stage next", flagSetName(args)),
 			fmt.Sprintf("%s vault move --id 7fa3c2d1 --to scheduled --day 2026-04-20", flagSetName(args)),
 		},
 	}
@@ -196,19 +190,18 @@ func vaultCommandHelp(args []string) commandHelp {
 func vaultAddHelp(args []string) commandHelp {
 	return commandHelp{
 		Usage: []string{
-			fmt.Sprintf("%s vault add <inbox|task|issue|theme|theme-context> [flags]", flagSetName(args)),
+			fmt.Sprintf("%s vault add <inbox|item|theme|theme-context> [flags]", flagSetName(args)),
 		},
-		Description: "Create a new vault document. New inbox items, tasks, issues, and themes receive random 8-char hex IDs automatically.",
+		Description: "Create a new vault document. New inbox items, work items, and themes receive random 8-char hex IDs automatically.",
 		Commands: []helpCommand{
 			{Name: "inbox", Summary: "Capture a raw note before triage."},
-			{Name: "task", Summary: "Create a task document directly."},
-			{Name: "issue", Summary: "Create an issue document directly."},
+			{Name: "item", Summary: "Create a work item directly."},
 			{Name: "theme", Summary: "Create a theme and its context folder."},
 			{Name: "theme-context", Summary: "Add a markdown context doc under an existing theme."},
 		},
 		Examples: []string{
 			fmt.Sprintf("%s vault add inbox --title \"Investigate retry rules\"", flagSetName(args)),
-			fmt.Sprintf("%s vault add issue --title \"OTP Tx design\" --theme 3b91e4aa --stage next", flagSetName(args)),
+			fmt.Sprintf("%s vault add item --title \"OTP Tx design\" --theme 3b91e4aa --stage next", flagSetName(args)),
 		},
 	}
 }
@@ -217,7 +210,7 @@ func runVaultGet(args []string) int {
 	if len(args) < 4 || hasHelpFlag(args[3:]) {
 		printHelp(commandHelp{
 			Usage: []string{
-				fmt.Sprintf("%s vault get <item|inbox|task|issue|theme> --id ID [--data-dir DIR]", flagSetName(args)),
+				fmt.Sprintf("%s vault get <item|theme> --id ID [--data-dir DIR]", flagSetName(args)),
 			},
 			Description: "Load one vault record by its random 8-char hex ID and print it as JSON.",
 			Examples: []string{
@@ -243,18 +236,6 @@ func runVaultGet(args []string) int {
 
 	switch target {
 	case "item":
-		state, err := LoadVaultState(vault)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load state: %v\n", err)
-			return 1
-		}
-		item, err := state.FindItem(id)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			return 1
-		}
-		return printJSON(item)
-	case "inbox", "task", "issue":
 		state, err := LoadVaultState(vault)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "load state: %v\n", err)
@@ -381,7 +362,7 @@ func vaultUpdateHelp(args []string) commandHelp {
 		},
 		Description: "Edit item or theme metadata without changing lifecycle state.",
 		Commands: []helpCommand{
-			{Name: "item", Summary: "Update task or issue metadata such as title, theme, or refs."},
+			{Name: "item", Summary: "Update work-item metadata such as title, theme, or refs."},
 			{Name: "theme", Summary: "Update a theme title, tags, body, or source refs."},
 		},
 		Examples: []string{
@@ -408,7 +389,7 @@ func runVaultUpdateItem(args []string) int {
 	}
 	fs, dataDir, id := newItemFlagSet("vault update item")
 	title := fs.String("title", "", "updated title")
-	theme := fs.String("theme", "", "updated issue theme")
+	theme := fs.String("theme", "", "updated item theme")
 	refs := fs.String("refs", "", "comma-separated refs")
 	clearTheme := fs.Bool("clear-theme", false, "clear current theme")
 	if err := fs.Parse(args[4:]); err != nil {
@@ -647,86 +628,13 @@ func runVaultDoneForDay(args []string) int {
 	return printJSON(item)
 }
 
-func runVaultConvert(args []string) int {
-	if hasHelpFlag(args[3:]) {
-		printHelp(commandHelp{
-			Usage: []string{
-				fmt.Sprintf("%s vault convert inbox --id ID --to task|issue [--theme THEME] [--stage now|next|later] [--data-dir DIR]", flagSetName(args)),
-			},
-			Description: "Turn an inbox capture into a task or issue and place it into a planning stage.",
-			Examples: []string{
-				fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to task --stage now", flagSetName(args)),
-				fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to issue --theme 3b91e4aa --stage next", flagSetName(args)),
-			},
-		})
-		return 0
-	}
-	if len(args) < 4 || strings.TrimSpace(args[3]) != "inbox" {
-		printHelp(commandHelp{
-			Usage: []string{
-				fmt.Sprintf("%s vault convert inbox --id ID --to task|issue [--theme THEME] [--stage now|next|later] [--data-dir DIR]", flagSetName(args)),
-			},
-			Description: "Turn an inbox capture into a task or issue and place it into a planning stage.",
-			Examples: []string{
-				fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to task --stage now", flagSetName(args)),
-				fmt.Sprintf("%s vault convert inbox --id c4e12a9b --to issue --theme 3b91e4aa --stage next", flagSetName(args)),
-			},
-		})
-		return 1
-	}
-	fs, dataDir, id := newItemFlagSet("vault convert inbox")
-	target := fs.String("to", "", "conversion target: task|issue")
-	theme := fs.String("theme", "", "issue theme")
-	stage := fs.String("stage", string(StageNext), "initial stage: now|next|later")
-	if err := fs.Parse(args[4:]); err != nil {
-		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
-		return 1
-	}
-	if err := fsValidation(fs); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return 1
-	}
-	root, now, state, item, err := loadMutableItem(*dataDir, *id)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return 1
-	}
-	if item.Triage != TriageInbox {
-		fmt.Fprintf(os.Stderr, "item %s is not in inbox\n", *id)
-		return 1
-	}
-	parsedStage, err := parseCLIStage(*stage)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return 1
-	}
-
-	switch strings.TrimSpace(*target) {
-	case "", "task":
-		item.Theme = ""
-		item.MoveTo(now, TriageStock, parsedStage, "")
-	case "issue":
-		item.Theme = strings.TrimSpace(*theme)
-		item.MoveTo(now, TriageStock, parsedStage, "")
-	default:
-		fmt.Fprintf(os.Stderr, "unknown conversion target: %s\n", strings.TrimSpace(*target))
-		return 1
-	}
-
-	if err := SaveVaultState(NewVault(root), state); err != nil {
-		fmt.Fprintf(os.Stderr, "save state: %v\n", err)
-		return 1
-	}
-	return printJSON(item)
-}
-
 func runVaultAddInbox(args []string) int {
 	if hasHelpFlag(args[4:]) {
 		printHelp(commandHelp{
 			Usage: []string{
 				fmt.Sprintf("%s vault add inbox --title TEXT [--body TEXT] [--tags a,b] [--data-dir DIR]", flagSetName(args)),
 			},
-			Description: "Capture a raw inbox note before it becomes a task or issue.",
+			Description: "Capture a raw inbox note before it becomes a planned work item.",
 			Examples: []string{
 				fmt.Sprintf("%s vault add inbox --title \"Investigate retry rules\"", flagSetName(args)),
 				fmt.Sprintf("%s vault add inbox --title \"OTP note\" --body \"Need a decision\" --tags otp,auth", flagSetName(args)),
@@ -766,16 +674,16 @@ func runVaultAddInbox(args []string) int {
 	return printJSON(item)
 }
 
-func runVaultAddTask(args []string) int {
+func runVaultAddItem(args []string) int {
 	if hasHelpFlag(args[4:]) {
 		printHelp(commandHelp{
 			Usage: []string{
-				fmt.Sprintf("%s vault add task --title TEXT [--status STATUS] [--triage TRIAGE] [--stage now|next|later] [--deferred-kind KIND] [--tags a,b] [--refs a,b] [--data-dir DIR]", flagSetName(args)),
+				fmt.Sprintf("%s vault add item --title TEXT [--theme THEME] [--status STATUS] [--triage TRIAGE] [--stage now|next|later] [--deferred-kind KIND] [--tags a,b] [--refs a,b] [--data-dir DIR]", flagSetName(args)),
 			},
-			Description: "Create a task directly when you already know its metadata.",
+			Description: "Create a work item directly when you already know its metadata.",
 			Examples: []string{
-				fmt.Sprintf("%s vault add task --title \"Submit expense\" --stage now", flagSetName(args)),
-				fmt.Sprintf("%s vault add task --title \"Review memo\" --tags finance --refs knowledge/expense-submit.md", flagSetName(args)),
+				fmt.Sprintf("%s vault add item --title \"Submit expense\" --stage now", flagSetName(args)),
+				fmt.Sprintf("%s vault add item --title \"OTP Tx design\" --theme 3b91e4aa --stage next", flagSetName(args)),
 			},
 		})
 		return 0
@@ -785,77 +693,22 @@ func runVaultAddTask(args []string) int {
 		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
 		return 1
 	}
-	fs := flag.NewFlagSet("vault add task", flag.ContinueOnError)
+	fs := flag.NewFlagSet("vault add item", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
-	title := fs.String("title", "", "task title")
-	status := fs.String("status", "open", "task status")
-	triage := fs.String("triage", string(TriageStock), "task triage")
-	stage := fs.String("stage", string(StageNext), "task stage")
-	deferredKind := fs.String("deferred-kind", "", "task deferred kind")
-	tags := fs.String("tags", "", "comma-separated tags")
-	refs := fs.String("refs", "", "comma-separated refs")
-	if err := fs.Parse(args[4:]); err != nil {
-		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
-		return 1
-	}
-	task := WorkDoc{
-		Metadata: Metadata{
-			ID:           newID(),
-			Title:        strings.TrimSpace(*title),
-			Status:       strings.TrimSpace(*status),
-			Triage:       Triage(strings.TrimSpace(*triage)),
-			Stage:        Stage(strings.TrimSpace(*stage)),
-			DeferredKind: DeferredKind(strings.TrimSpace(*deferredKind)),
-			Created:      dateKey(todayLocal()),
-			Updated:      dateKey(todayLocal()),
-			Tags:         splitCSV(*tags),
-			Refs:         splitCSV(*refs),
-		},
-	}
-	vault := NewVault(*dataDir)
-	if err := vault.SaveWorkItem(task); err != nil {
-		fmt.Fprintf(os.Stderr, "save work item: %v\n", err)
-		return 1
-	}
-	return printJSON(task)
-}
-
-func runVaultAddIssue(args []string) int {
-	if hasHelpFlag(args[4:]) {
-		printHelp(commandHelp{
-			Usage: []string{
-				fmt.Sprintf("%s vault add issue --title TEXT [--theme THEME] [--status STATUS] [--triage TRIAGE] [--stage now|next|later] [--deferred-kind KIND] [--tags a,b] [--refs a,b] [--data-dir DIR]", flagSetName(args)),
-			},
-			Description: "Create an issue directly and optionally attach it to a theme.",
-			Examples: []string{
-				fmt.Sprintf("%s vault add issue --title \"OTP Tx design\" --theme 3b91e4aa --stage next", flagSetName(args)),
-				fmt.Sprintf("%s vault add issue --title \"Retry policy\" --refs themes/auth-step-up--3b91e4aa/context/constraints.md", flagSetName(args)),
-			},
-		})
-		return 0
-	}
-	defaultPath, err := defaultStorePath()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "resolve store path: %v\n", err)
-		return 1
-	}
-	fs := flag.NewFlagSet("vault add issue", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	dataDir := fs.String("data-dir", defaultPath, "directory used to store workbench data")
-	title := fs.String("title", "", "issue title")
+	title := fs.String("title", "", "item title")
 	theme := fs.String("theme", "", "theme id (8-char hex)")
-	status := fs.String("status", "open", "issue status")
-	triage := fs.String("triage", string(TriageStock), "issue triage")
-	stage := fs.String("stage", string(StageNext), "issue stage")
-	deferredKind := fs.String("deferred-kind", "", "issue deferred kind")
+	status := fs.String("status", "open", "item status")
+	triage := fs.String("triage", string(TriageStock), "item triage")
+	stage := fs.String("stage", string(StageNext), "item stage")
+	deferredKind := fs.String("deferred-kind", "", "item deferred kind")
 	tags := fs.String("tags", "", "comma-separated tags")
 	refs := fs.String("refs", "", "comma-separated refs")
 	if err := fs.Parse(args[4:]); err != nil {
 		fmt.Fprintf(os.Stderr, "parse args: %v\n", err)
 		return 1
 	}
-	issue := WorkDoc{
+	item := WorkDoc{
 		Metadata: Metadata{
 			ID:           newID(),
 			Title:        strings.TrimSpace(*title),
@@ -871,11 +724,11 @@ func runVaultAddIssue(args []string) int {
 		Theme: strings.TrimSpace(*theme),
 	}
 	vault := NewVault(*dataDir)
-	if err := vault.SaveWorkItem(issue); err != nil {
+	if err := vault.SaveWorkItem(item); err != nil {
 		fmt.Fprintf(os.Stderr, "save work item: %v\n", err)
 		return 1
 	}
-	return printJSON(issue)
+	return printJSON(item)
 }
 
 func runVaultAddTheme(args []string) int {

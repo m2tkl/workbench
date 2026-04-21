@@ -398,7 +398,7 @@ func TestSourceWorkbenchIndexShowsStagedFiles(t *testing.T) {
 	if !strings.Contains(body, `class="shell-header"`) {
 		t.Fatalf("expected stable shared header wrapper in body: %s", body)
 	}
-	if !strings.Contains(body, `padding: 0 20px 20px;`) || !strings.Contains(body, `@media (max-width: 920px)`) || !strings.Contains(body, `main { padding: 0 14px 14px; }`) || !strings.Contains(body, `p.lead {`) || !strings.Contains(body, `margin: 0 0 14px;`) || !strings.Contains(body, `padding: 8px 12px;`) {
+	if !strings.Contains(body, `--content-width: 1480px;`) || !strings.Contains(body, `padding: 0 20px 20px;`) || !strings.Contains(body, `@media (max-width: 920px)`) || !strings.Contains(body, `main { padding: 0 14px 14px; }`) || !strings.Contains(body, `p.lead {`) || !strings.Contains(body, `margin: 0 0 14px;`) || !strings.Contains(body, `padding: 8px 12px;`) {
 		t.Fatalf("expected sources outer spacing to match workbench: %s", body)
 	}
 	if !strings.Contains(body, `class="shell-title" aria-label="Title navigation"`) || !strings.Contains(body, `<span class="title-current">Sources</span>`) {
@@ -571,7 +571,7 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 	if _, err := writeTestSourceDocument(vault, "ignore.md", "Ignore"); err != nil {
 		t.Fatalf("writeTestSourceDocument returned error: %v", err)
 	}
-	if err := vault.SaveIssue(IssueDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:             "issue-1",
 			Title:          "Investigate OTP copy",
@@ -585,7 +585,7 @@ func TestWorkItemWorkspaceShowsIssueDocumentRecentMemosAndSources(t *testing.T) 
 		},
 		Body: "# Issue\n\nhuman notes",
 	}); err != nil {
-		t.Fatalf("SaveIssue returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 	writeWorkspaceMemo(t, filepath.Join(vault.WorkItemContextGeneratedDir("issue-1"), "older.md"), "# Older Memo\n\nolder details", time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
 	writeWorkspaceMemo(t, filepath.Join(vault.WorkItemContextGeneratedDir("issue-1"), "notes/newer.md"), "# Newer Memo\n\nfresh details", time.Date(2025, 1, 3, 10, 0, 0, 0, time.UTC))
@@ -709,7 +709,7 @@ func TestWorkItemWorkspaceCanSwitchToMemoTreeView(t *testing.T) {
 	if err := vault.EnsureLayout(); err != nil {
 		t.Fatalf("EnsureLayout returned error: %v", err)
 	}
-	if err := vault.SaveIssue(IssueDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "issue-1",
 			Title:   "Investigate OTP copy",
@@ -721,7 +721,7 @@ func TestWorkItemWorkspaceCanSwitchToMemoTreeView(t *testing.T) {
 		},
 		Body: "# Issue",
 	}); err != nil {
-		t.Fatalf("SaveIssue returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 	writeWorkspaceMemo(t, filepath.Join(vault.WorkItemContextGeneratedDir("issue-1"), "z-last.md"), "# Last\n\nbody", time.Date(2025, 1, 3, 10, 0, 0, 0, time.UTC))
 	writeWorkspaceMemo(t, filepath.Join(vault.WorkItemContextGeneratedDir("issue-1"), "notes/a-first.md"), "# First\n\nbody", time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
@@ -748,7 +748,7 @@ func TestWorkItemWorkspaceAgentPaneReflectsUpdatedMemoContent(t *testing.T) {
 	if err := vault.EnsureLayout(); err != nil {
 		t.Fatalf("EnsureLayout returned error: %v", err)
 	}
-	if err := vault.SaveIssue(IssueDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "issue-1",
 			Title:   "Investigate OTP copy",
@@ -760,7 +760,7 @@ func TestWorkItemWorkspaceAgentPaneReflectsUpdatedMemoContent(t *testing.T) {
 		},
 		Body: "# Issue",
 	}); err != nil {
-		t.Fatalf("SaveIssue returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 	memoPath := filepath.Join(vault.WorkItemContextGeneratedDir("issue-1"), "agent.md")
 	writeWorkspaceMemo(t, memoPath, "# Agent Memo\n\nfirst pass", time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
@@ -794,7 +794,7 @@ func TestWorkItemWorkspaceAssetUploadReturnsMarkdownLink(t *testing.T) {
 	if err := vault.EnsureLayout(); err != nil {
 		t.Fatalf("EnsureLayout returned error: %v", err)
 	}
-	if err := vault.SaveIssue(IssueDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "issue-1",
 			Title:   "Investigate OTP copy",
@@ -806,7 +806,7 @@ func TestWorkItemWorkspaceAssetUploadReturnsMarkdownLink(t *testing.T) {
 		},
 		Body: "# Issue",
 	}); err != nil {
-		t.Fatalf("SaveIssue returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 
 	body := &bytes.Buffer{}
@@ -851,7 +851,7 @@ func TestWorkItemWorkspacePreviewRendersAssetImage(t *testing.T) {
 	if err := vault.EnsureLayout(); err != nil {
 		t.Fatalf("EnsureLayout returned error: %v", err)
 	}
-	if err := vault.SaveIssue(IssueDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "issue-1",
 			Title:   "Investigate OTP copy",
@@ -863,7 +863,7 @@ func TestWorkItemWorkspacePreviewRendersAssetImage(t *testing.T) {
 		},
 		Body: "# Issue",
 	}); err != nil {
-		t.Fatalf("SaveIssue returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 	writeWorkspaceAsset(t, filepath.Join(vault.WorkItemAssetsDir("issue-1"), "diagram.png"), smallPNG())
 
@@ -887,7 +887,7 @@ func TestWorkItemWorkspaceServesAssetFile(t *testing.T) {
 	if err := vault.EnsureLayout(); err != nil {
 		t.Fatalf("EnsureLayout returned error: %v", err)
 	}
-	if err := vault.SaveTask(TaskDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "task-1",
 			Title:   "Write rollout notes",
@@ -899,7 +899,7 @@ func TestWorkItemWorkspaceServesAssetFile(t *testing.T) {
 		},
 		Body: "# Task",
 	}); err != nil {
-		t.Fatalf("SaveTask returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 	png := smallPNG()
 	writeWorkspaceAsset(t, filepath.Join(vault.WorkItemAssetsDir("task-1"), "diagram.png"), png)
@@ -922,7 +922,7 @@ func TestWorkItemWorkspaceSavesTaskMainDocument(t *testing.T) {
 	if err := vault.EnsureLayout(); err != nil {
 		t.Fatalf("EnsureLayout returned error: %v", err)
 	}
-	if err := vault.SaveTask(TaskDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "task-1",
 			Title:   "Write rollout notes",
@@ -934,7 +934,7 @@ func TestWorkItemWorkspaceSavesTaskMainDocument(t *testing.T) {
 		},
 		Body: "# Task\n\nbefore",
 	}); err != nil {
-		t.Fatalf("SaveTask returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 
 	server := newSourceWorkbenchServer(vault)
@@ -964,7 +964,7 @@ func TestWorkItemWorkspaceFetchSaveReturnsJSONWithoutRedirect(t *testing.T) {
 	if err := vault.EnsureLayout(); err != nil {
 		t.Fatalf("EnsureLayout returned error: %v", err)
 	}
-	if err := vault.SaveTask(TaskDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "task-1",
 			Title:   "Write rollout notes",
@@ -976,7 +976,7 @@ func TestWorkItemWorkspaceFetchSaveReturnsJSONWithoutRedirect(t *testing.T) {
 		},
 		Body: "# Task\n\nbefore",
 	}); err != nil {
-		t.Fatalf("SaveTask returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 
 	server := newSourceWorkbenchServer(vault)
@@ -1030,7 +1030,7 @@ func TestWorkItemWorkspaceUsesWorkItemRefsOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveTheme returned error: %v", err)
 	}
-	if err := vault.SaveIssue(IssueDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "issue-1",
 			Title:   "Investigate OTP copy",
@@ -1043,7 +1043,7 @@ func TestWorkItemWorkspaceUsesWorkItemRefsOnly(t *testing.T) {
 		Theme: "auth-stepup",
 		Body:  "# Issue",
 	}); err != nil {
-		t.Fatalf("SaveIssue returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 
 	server := newSourceWorkbenchServer(vault)
@@ -1158,6 +1158,293 @@ func TestWorkbenchIndexShowsSidebarAndMainView(t *testing.T) {
 	}
 }
 
+func TestEventsPageListsThemeAndGlobalEvents(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	if err := vault.SaveTheme(ThemeDoc{
+		ID:      "auth-stepup",
+		Title:   "Auth Step-Up",
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if err := vault.SaveThemeContextDoc("auth-stepup", "weekly-sync--11111111", ThemeContextDoc{
+		Title:   "Weekly Sync",
+		Kind:    contextKindEvent,
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+		Body:    "Theme event notes",
+	}); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+	if err := vault.SaveThemeContextDoc("auth-stepup", "constraints", ThemeContextDoc{
+		Title: "Constraints",
+		Body:  "Non-event context",
+	}); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+	if err := vault.SaveGlobalContextDoc("incident-huddle--22222222", ThemeContextDoc{
+		Title:   "Incident Huddle",
+		Kind:    contextKindEvent,
+		Created: "2026-04-20",
+		Updated: "2026-04-20",
+		Body:    "Global event notes",
+	}); err != nil {
+		t.Fatalf("SaveGlobalContextDoc returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodGet, "/events", nil)
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("events status = %d, want %d", res.Code, http.StatusOK)
+	}
+	body := res.Body.String()
+	for _, want := range []string{"Weekly Sync", "Incident Huddle", "Auth Step-Up", "Global", `href="/events/new"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %q in body: %s", want, body)
+		}
+	}
+	for _, want := range []string{`--content-width: 1480px;`, `padding: 0 20px 20px;`, `font-size: 1.5rem;`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected unified layout token %q in body: %s", want, body)
+		}
+	}
+	for _, want := range []string{`align-content: start;`, `.event-list { display: grid; gap: 12px; align-content: start; }`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected event list to stay top-aligned with %q in body: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "Constraints") {
+		t.Fatalf("expected non-event context to stay off events page: %s", body)
+	}
+	if strings.Contains(body, "Apply Filter") || strings.Contains(body, `id="events-theme-filter"`) {
+		t.Fatalf("expected events page to stay a simple list without filter UI: %s", body)
+	}
+}
+
+func TestEventsNewPageShowsCreateForm(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	if err := vault.SaveTheme(ThemeDoc{
+		ID:      "auth-stepup",
+		Title:   "Auth Step-Up",
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if err := vault.SaveThemeContextDoc("auth-stepup", "weekly-sync--11111111", ThemeContextDoc{
+		Title:   "Weekly Sync",
+		Kind:    contextKindEvent,
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+		Body:    "Theme event notes",
+	}); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodGet, "/events/new?theme_id=auth-stepup", nil)
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("events new status = %d, want %d", res.Code, http.StatusOK)
+	}
+	body := res.Body.String()
+	for _, want := range []string{"New Event", `action="/events/create"`, `placeholder="Weekly sync"`, `placeholder="# Agenda or notes"`, `value="auth-stepup" selected`, `href="/events?theme_id=auth-stepup"`, "Weekly Sync"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %q in body: %s", want, body)
+		}
+	}
+}
+
+func TestEventsCreateSavesGlobalEventAndRedirectsToWorkspace(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	form := url.Values{
+		"title": []string{"Standup"},
+		"body":  []string{"Quick sync notes"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/events/create", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("create status = %d, want %d", res.Code, http.StatusSeeOther)
+	}
+	location := res.Header().Get("Location")
+	if !strings.HasPrefix(location, "/events/global/") {
+		t.Fatalf("create redirect = %q, want global event workspace", location)
+	}
+
+	docs, err := vault.LoadGlobalContextDocs()
+	if err != nil {
+		t.Fatalf("LoadGlobalContextDocs returned error: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("LoadGlobalContextDocs len = %d, want 1", len(docs))
+	}
+	if docs[0].Title != "Standup" || docs[0].Kind != contextKindEvent || docs[0].Body != "Quick sync notes" {
+		t.Fatalf("global event doc = %#v", docs[0])
+	}
+
+	showReq := httptest.NewRequest(http.MethodGet, location, nil)
+	showRes := httptest.NewRecorder()
+	server.routes().ServeHTTP(showRes, showReq)
+	if showRes.Code != http.StatusOK {
+		t.Fatalf("workspace status = %d, want %d", showRes.Code, http.StatusOK)
+	}
+	if body := showRes.Body.String(); !strings.Contains(body, "Standup") || !strings.Contains(body, "Quick sync notes") {
+		t.Fatalf("expected event workspace body, got: %s", body)
+	} else if !strings.Contains(body, `--content-width: 1480px;`) || !strings.Contains(body, `padding: 0 20px 20px;`) || !strings.Contains(body, `font-size: 1.5rem;`) {
+		t.Fatalf("expected event workspace to share shell layout, got: %s", body)
+	} else if !strings.Contains(body, `id="event-theme"`) || !strings.Contains(body, `class="toolbar-button" type="submit">Save Event</button>`) {
+		t.Fatalf("expected event workspace theme selector and visible save button, got: %s", body)
+	}
+}
+
+func TestEventWorkspaceCanMoveGlobalEventToTheme(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	if err := vault.SaveTheme(ThemeDoc{
+		ID:      "auth-stepup",
+		Title:   "Auth Step-Up",
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if err := vault.SaveGlobalContextDoc("standup--11111111.md", ThemeContextDoc{
+		Title:   "Standup",
+		Kind:    contextKindEvent,
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+		Body:    "Quick sync notes",
+	}); err != nil {
+		t.Fatalf("SaveGlobalContextDoc returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	form := url.Values{
+		"title":    []string{"Standup"},
+		"theme_id": []string{"auth-stepup"},
+		"body":     []string{"Quick sync notes"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/events/global/standup--11111111.md/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("save status = %d, want %d", res.Code, http.StatusSeeOther)
+	}
+	location := res.Header().Get("Location")
+	if !strings.HasPrefix(location, "/events/theme/auth-stepup/standup--11111111.md") {
+		t.Fatalf("save redirect = %q, want theme event workspace", location)
+	}
+
+	globalDocs, err := vault.LoadGlobalContextDocs()
+	if err != nil {
+		t.Fatalf("LoadGlobalContextDocs returned error: %v", err)
+	}
+	if len(globalDocs) != 0 {
+		t.Fatalf("expected global docs to be empty after move, got %#v", globalDocs)
+	}
+	themeDocs, err := vault.LoadThemeContextDocs("auth-stepup")
+	if err != nil {
+		t.Fatalf("LoadThemeContextDocs returned error: %v", err)
+	}
+	if len(themeDocs) != 1 || themeDocs[0].Title != "Standup" || themeDocs[0].Kind != contextKindEvent {
+		t.Fatalf("theme docs = %#v", themeDocs)
+	}
+}
+
+func TestLegacyWorkbenchPathRedirectsToRoot(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodGet, "/workbench?nav=auth-stepup&tab=events&q=otp", nil)
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("legacy workbench status = %d, want %d", res.Code, http.StatusSeeOther)
+	}
+	if location := res.Header().Get("Location"); location != "/?nav=auth-stepup&q=otp&tab=events" {
+		t.Fatalf("legacy workbench redirect = %q", location)
+	}
+}
+
+func TestEventsTrailingSlashRedirectsToIndex(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodGet, "/events/?theme_id=auth-stepup", nil)
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("events slash status = %d, want %d", res.Code, http.StatusSeeOther)
+	}
+	if location := res.Header().Get("Location"); location != "/events?theme_id=auth-stepup" {
+		t.Fatalf("events slash redirect = %q", location)
+	}
+}
+
+func TestWorkbenchThemeEventsTabListsEventContexts(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	seedWorkbenchItems(t, vault)
+	if err := vault.SaveThemeContextDoc("auth-stepup", "retro--33333333", ThemeContextDoc{
+		Title:   "Retro",
+		Kind:    contextKindEvent,
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+		Body:    "Theme retrospective notes",
+	}); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodGet, "/?nav=auth-stepup&tab=events", nil)
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("theme events tab status = %d, want %d", res.Code, http.StatusOK)
+	}
+	body := res.Body.String()
+	for _, want := range []string{"Retro", `href="/events/new?theme_id=auth-stepup"`, `href="/?nav=auth-stepup&amp;tab=events" class="active"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %q in body: %s", want, body)
+		}
+	}
+}
+
 func TestWorkbenchIndexCanOpenThemeView(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)
@@ -1177,8 +1464,8 @@ func TestWorkbenchIndexCanOpenThemeView(t *testing.T) {
 	if !strings.Contains(body, "Auth Step-Up") || !strings.Contains(body, "Theme item") {
 		t.Fatalf("expected theme-scoped main view in body: %s", body)
 	}
-	if !strings.Contains(body, `class="theme-composer"`) || !strings.Contains(body, `placeholder="Add a work item to Auth Step-Up"`) || !strings.Contains(body, `name="theme_id" value="auth-stepup"`) || !strings.Contains(body, `aria-label="Theme view"`) || !strings.Contains(body, `>Work items</a>`) || !strings.Contains(body, `>Sources</a>`) || !strings.Contains(body, `href="/?nav=auth-stepup&amp;tab=sources"`) {
-		t.Fatalf("expected chatgpt-like theme tabs in body: %s", body)
+	if !strings.Contains(body, `class="theme-tab-toolbar"`) || !strings.Contains(body, `class="theme-tab-form"`) || !strings.Contains(body, `placeholder="Add a work item to Auth Step-Up"`) || !strings.Contains(body, `name="theme_id" value="auth-stepup"`) || !strings.Contains(body, `aria-label="Theme view"`) || !strings.Contains(body, `>Work items</a>`) || !strings.Contains(body, `>Sources</a>`) || !strings.Contains(body, `href="/?nav=auth-stepup&amp;tab=sources"`) || !strings.Contains(body, `class="toolbar-button" type="submit">Add Work Item</button>`) {
+		t.Fatalf("expected aligned theme work items tab in body: %s", body)
 	}
 	if strings.Contains(body, "Focus item") {
 		t.Fatalf("expected theme view to replace action list content: %s", body)
@@ -1201,7 +1488,7 @@ func TestWorkbenchThemeViewCanShowSourcesTab(t *testing.T) {
 		t.Fatalf("theme sources status = %d, want %d", res.Code, http.StatusOK)
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, `class="content-tabs"`) || !strings.Contains(body, `class="theme-sources-toolbar"`) || !strings.Contains(body, `>Add Sources</a>`) || !strings.Contains(body, `/sources?theme_id=auth-stepup&amp;view=paste`) || !strings.Contains(body, `class="source-list"`) || !strings.Contains(body, "Theme Brief") || !strings.Contains(body, "sources/documents/theme-brief.md") {
+	if !strings.Contains(body, `class="content-tabs"`) || !strings.Contains(body, `class="theme-tab-toolbar"`) || !strings.Contains(body, `class="toolbar-button" href="/sources?theme_id=auth-stepup&amp;view=paste">Add Sources</a>`) || !strings.Contains(body, `class="source-list"`) || !strings.Contains(body, "Theme Brief") || !strings.Contains(body, "sources/documents/theme-brief.md") {
 		t.Fatalf("expected theme sources tab content in body: %s", body)
 	}
 	if strings.Contains(body, "Theme item") {
@@ -1420,7 +1707,7 @@ func seedSourceWorkbenchThemeAndIssue(t *testing.T, vault VaultFS) {
 	now := time.Date(2025, 1, 1, 9, 0, 0, 0, time.UTC)
 	state := State{
 		Items: []Item{
-			NewIssueStockItem(now, "Investigate OTP copy", StageNext),
+			NewStockItem(now, "Investigate OTP copy", StageNext),
 		},
 	}
 	state.Items[0].ID = "issue-1"
@@ -1436,10 +1723,10 @@ func seedWorkbenchItems(t *testing.T, vault VaultFS) {
 		t.Fatalf("writeTestSourceDocument returned error: %v", err)
 	}
 	if err := vault.SaveTheme(ThemeDoc{
-		ID:      "auth-stepup",
-		Title:   "Auth Step-Up",
-		Created: "2025-01-01",
-		Updated: "2025-01-01",
+		ID:         "auth-stepup",
+		Title:      "Auth Step-Up",
+		Created:    "2025-01-01",
+		Updated:    "2025-01-01",
 		SourceRefs: []string{ref},
 	}); err != nil {
 		t.Fatalf("SaveTheme returned error: %v", err)

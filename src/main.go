@@ -120,10 +120,10 @@ func runUICommand(args []string) int {
 	workbenchRuntime := newSourceWorkbenchRuntime(store.vault, defaultSourceWorkbenchAddr)
 	app.startSourceWorkbench = workbenchRuntime.EnsureStarted
 	app.stopSourceWorkbench = workbenchRuntime.Stop
-	app.issueAssetSummary = func(id string) IssueAssetSummary {
-		summary, err := store.vault.SummarizeIssue(id)
+	app.workItemAssetSummary = func(id string) WorkItemAssetSummary {
+		summary, err := store.vault.SummarizeWorkItem(id)
 		if err != nil {
-			return IssueAssetSummary{}
+			return WorkItemAssetSummary{}
 		}
 		return summary
 	}

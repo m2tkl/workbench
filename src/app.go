@@ -134,7 +134,7 @@ type App struct {
 	themes               []ThemeDoc
 	startSourceWorkbench func() (string, error)
 	stopSourceWorkbench  func() error
-	issueAssetSummary    func(string) IssueAssetSummary
+	workItemAssetSummary func(string) WorkItemAssetSummary
 	themeAssetSummary    func(string) ThemeAssetSummary
 
 	today string
@@ -217,7 +217,7 @@ func NewApp(store Store, state State) *App {
 	app.stopSourceWorkbench = func() error {
 		return nil
 	}
-	app.issueAssetSummary = func(string) IssueAssetSummary { return IssueAssetSummary{} }
+	app.workItemAssetSummary = func(string) WorkItemAssetSummary { return WorkItemAssetSummary{} }
 	app.themeAssetSummary = func(string) ThemeAssetSummary { return ThemeAssetSummary{} }
 	app.syncSelection()
 	return app
@@ -3389,7 +3389,7 @@ func (a *App) workbenchDetailLines(width int) []string {
 }
 
 func (a *App) workbenchIssueDetailLines(width int, item *Item) []string {
-	summary := a.issueAssetSummary(item.ID)
+	summary := a.workItemAssetSummary(item.ID)
 	lines := []string{}
 	if item.ID != "" {
 		lines = append(lines, wrapText("id: "+item.ID, width)...)

@@ -250,7 +250,7 @@ func TestDetailLinesDoNotExpandRefs(t *testing.T) {
 		Items: []Item{{
 			ID:         "expense-submit",
 			Title:      "Submit expense",
-			EntityType: entityTask,
+			EntityType: entityWork,
 			Refs:       []string{"knowledge/expense-submit.md", "themes/admin/context/policy.md"},
 			Triage:     TriageStock,
 			Stage:      StageNow,
@@ -272,7 +272,7 @@ func TestDetailLinesShowUserFacingTypeInsteadOfEntityOrKind(t *testing.T) {
 		Items: []Item{{
 			ID:         "otp-tx-design",
 			Title:      "OTP Tx design",
-			EntityType: entityIssue,
+			EntityType: entityWork,
 			Theme:      "auth-stepup",
 			Triage:     TriageStock,
 			Stage:      StageNext,
@@ -316,8 +316,8 @@ func TestThemeDetailLinesShowRelatedIssues(t *testing.T) {
 
 	app := NewApp(store, State{
 		Items: []Item{
-			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup"},
-			{ID: "issue-2", Title: "Review challenge flow", EntityType: entityIssue, Theme: "auth-stepup"},
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityWork, Theme: "auth-stepup"},
+			{ID: "issue-2", Title: "Review challenge flow", EntityType: entityWork, Theme: "auth-stepup"},
 		},
 	})
 	app.themes = []ThemeDoc{{
@@ -389,9 +389,9 @@ func TestWorkbenchSectionsShowIssueStateFilters(t *testing.T) {
 func TestWorkbenchThemeSelectionFiltersIssues(t *testing.T) {
 	app := NewApp(newTestStore(t), State{
 		Items: []Item{
-			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
-			{ID: "issue-2", Title: "Review challenge flow", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
-			{ID: "issue-3", Title: "Unthemed issue", EntityType: entityIssue, Status: "open"},
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityWork, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-2", Title: "Review challenge flow", EntityType: entityWork, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-3", Title: "Unthemed issue", EntityType: entityWork, Status: "open"},
 		},
 	})
 	app.view = viewWorkbench
@@ -413,8 +413,8 @@ func TestWorkbenchThemeSelectionFiltersIssues(t *testing.T) {
 func TestWorkbenchSidebarShowsFilterDetails(t *testing.T) {
 	app := NewApp(newTestStore(t), State{
 		Items: []Item{
-			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
-			{ID: "issue-2", Title: "Unthemed issue", EntityType: entityIssue, Status: "open"},
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityWork, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-2", Title: "Unthemed issue", EntityType: entityWork, Status: "open"},
 		},
 	})
 	app.view = viewWorkbench
@@ -434,7 +434,7 @@ func TestWorkbenchListShowsIssueWorkingSetDetails(t *testing.T) {
 			{
 				ID:           "issue-1",
 				Title:        "OTP Tx design",
-				EntityType:   entityIssue,
+				EntityType:   entityWork,
 				Theme:        "auth-stepup",
 				Status:       "open",
 				Refs:         []string{"knowledge/otp.md"},
@@ -449,8 +449,8 @@ func TestWorkbenchListShowsIssueWorkingSetDetails(t *testing.T) {
 	app.selectedSection = sectionIssueNoStatus
 	app.workbenchNavCursor = 8
 	app.themes = []ThemeDoc{{ID: "auth-stepup", Title: "Auth step-up"}}
-	app.issueAssetSummary = func(string) IssueAssetSummary {
-		return IssueAssetSummary{ContextFiles: 3, MemoFiles: 2}
+	app.workItemAssetSummary = func(string) WorkItemAssetSummary {
+		return WorkItemAssetSummary{ContextFiles: 3, MemoFiles: 2}
 	}
 
 	joined := strings.Join(app.detailLines(80), "\n")
@@ -478,7 +478,7 @@ func TestWorkbenchStateShortcutsMoveSelectedIssue(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	app := NewApp(newTestStore(t), State{
 		Items: []Item{
-			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open", Triage: TriageStock, Stage: StageNext},
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityWork, Theme: "auth-stepup", Status: "open", Triage: TriageStock, Stage: StageNext},
 		},
 	})
 	app.now = func() time.Time { return now }
@@ -563,7 +563,7 @@ func TestWorkbenchArrowKeysSwitchIssueFilterTabs(t *testing.T) {
 func TestOpenRefsModalAndOpenSelectedRef(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewItem(now, "Submit expense", TriageStock, StageNow, "")
-	item.EntityType = entityTask
+	item.EntityType = entityWork
 	item.Refs = []string{"knowledge/expense-submit.md", "themes/admin/context/policy.md"}
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -603,7 +603,7 @@ func TestOpenRefsModalAndOpenSelectedRef(t *testing.T) {
 func TestOpenRefsModalOpensWithUppercaseO(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewItem(now, "Submit expense", TriageStock, StageNow, "")
-	item.EntityType = entityTask
+	item.EntityType = entityWork
 	item.Refs = []string{"knowledge/expense-submit.md"}
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -619,7 +619,7 @@ func TestOpenRefsModalOpensWithUppercaseO(t *testing.T) {
 func TestEditRefsUpdatesSelectedItem(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
 	item := NewItem(now, "Submit expense", TriageStock, StageNow, "")
-	item.EntityType = entityTask
+	item.EntityType = entityWork
 	item.Refs = []string{"knowledge/old.md"}
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -648,8 +648,8 @@ func TestEditRefsUpdatesSelectedItem(t *testing.T) {
 
 func TestEditThemeUpdatesIssue(t *testing.T) {
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
-	item := NewIssueItem(now, "OTP Tx design", TriageStock, StageNext, "")
-	item.EntityType = entityIssue
+	item := NewItem(now, "OTP Tx design", TriageStock, StageNext, "")
+	item.EntityType = entityWork
 	item.Theme = "auth-old"
 
 	app := NewApp(newTestStore(t), State{Items: []Item{item}})
@@ -1248,7 +1248,7 @@ func TestListHeaderAlignsWithRows(t *testing.T) {
 	row := fmt.Sprintf(">%s %s", " ", app.renderListRow(Item{
 		ID:         "12345678",
 		Title:      "Example",
-		EntityType: entityTask,
+		EntityType: entityWork,
 		Theme:      "auth-stepup",
 		Refs:       []string{"knowledge/example.md"},
 		Notes:      []string{"- [x] Done\n- [ ] Todo"},
@@ -1309,7 +1309,7 @@ func TestWorkbenchInboxListShowsTitleOnly(t *testing.T) {
 func TestWorkbenchListShowsMultiSelectMarker(t *testing.T) {
 	app := NewApp(newTestStore(t), State{
 		Items: []Item{
-			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-1", Title: "OTP Tx design", EntityType: entityWork, Theme: "auth-stepup", Status: "open"},
 		},
 	})
 	app.view = viewWorkbench
@@ -1328,9 +1328,9 @@ func TestWorkbenchListShowsMultiSelectMarker(t *testing.T) {
 func TestWorkbenchListKeepsLastSelectedItemVisible(t *testing.T) {
 	app := NewApp(newTestStore(t), State{
 		Items: []Item{
-			{ID: "issue-1", Title: "First", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
-			{ID: "issue-2", Title: "Second", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
-			{ID: "issue-3", Title: "Third", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-1", Title: "First", EntityType: entityWork, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-2", Title: "Second", EntityType: entityWork, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-3", Title: "Third", EntityType: entityWork, Theme: "auth-stepup", Status: "open"},
 		},
 	})
 	app.view = viewWorkbench
@@ -1349,9 +1349,9 @@ func TestWorkbenchListKeepsLastSelectedItemVisible(t *testing.T) {
 func TestWorkbenchSpaceSelectionKeepsCursorOnLastFilteredItem(t *testing.T) {
 	app := NewApp(newTestStore(t), State{
 		Items: []Item{
-			{ID: "issue-1", Title: "Theme First", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
-			{ID: "issue-2", Title: "Theme Last", EntityType: entityIssue, Theme: "auth-stepup", Status: "open"},
-			{ID: "issue-3", Title: "Other Theme", EntityType: entityIssue, Theme: "other", Status: "open"},
+			{ID: "issue-1", Title: "Theme First", EntityType: entityWork, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-2", Title: "Theme Last", EntityType: entityWork, Theme: "auth-stepup", Status: "open"},
+			{ID: "issue-3", Title: "Other Theme", EntityType: entityWork, Theme: "other", Status: "open"},
 		},
 	})
 	app.view = viewWorkbench
@@ -1469,14 +1469,14 @@ func TestListRowShowsStateAndTitle(t *testing.T) {
 	withNote := app.renderListRow(Item{
 		ID:         "12345678",
 		Title:      "Example",
-		EntityType: entityTask,
+		EntityType: entityWork,
 		Theme:      "auth-stepup",
 		Notes:      []string{"has note"},
 	}, 77)
 	withoutNote := app.renderListRow(Item{
 		ID:         "12345678",
 		Title:      "Example",
-		EntityType: entityTask,
+		EntityType: entityWork,
 	}, 77)
 
 	if !strings.Contains(withNote, "inbox") || !strings.Contains(withNote, "Example") {
@@ -1495,7 +1495,7 @@ func TestListRowShowsChecklistProgress(t *testing.T) {
 	row := app.renderListRow(Item{
 		ID:         "12345678",
 		Title:      "Example",
-		EntityType: entityTask,
+		EntityType: entityWork,
 		Notes: []string{strings.TrimSpace(`
 - [x] Write changelog
 - [ ] Tag release
@@ -1513,7 +1513,7 @@ func TestListRowDoesNotShowIssueType(t *testing.T) {
 	row := app.renderListRow(Item{
 		ID:         "otp-tx",
 		Title:      "OTP Tx design",
-		EntityType: entityIssue,
+		EntityType: entityWork,
 	}, 77)
 
 	if strings.Contains(row, "issue") {
@@ -1673,7 +1673,7 @@ func TestShiftDShowsSourceInboxDialog(t *testing.T) {
 	if updated.mode != modeSourceWorkbench {
 		t.Fatalf("mode = %v, want modeSourceWorkbench", updated.mode)
 	}
-	if updated.sourceWorkbenchDialogURL != "http://127.0.0.1:18080/sources" {
+	if updated.sourceWorkbenchDialogURL != "http://127.0.0.1:18080/" {
 		t.Fatalf("dialog url = %q", updated.sourceWorkbenchDialogURL)
 	}
 

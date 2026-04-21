@@ -23,8 +23,7 @@ func TestRunVaultInitCreatesLayout(t *testing.T) {
 	for _, path := range []string{
 		vault.RootDir(),
 		vault.InboxDir(),
-		vault.TasksDir(),
-		vault.IssuesDir(),
+		vault.WorkItemsDir(),
 		vault.ThemesDir(),
 		vault.KnowledgeDir(),
 	} {
@@ -48,11 +47,11 @@ func TestRunVaultCommandHelpListsAgentOperations(t *testing.T) {
 	for _, want := range []string{
 		"Description:",
 		"Manage the vault",
-		"convert",
+		"add",
 		"move",
 		"done-for-day",
 		"Examples:",
-		"workbench vault convert inbox",
+		"workbench vault add item",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing %q:\n%s", want, output)
@@ -111,8 +110,8 @@ func TestRunVaultAddCommandsCreateFiles(t *testing.T) {
 
 	tests := [][]string{
 		{"workbench", "vault", "add", "inbox", "--data-dir", root, "--title", "Capture", "--body", "raw note", "--tags", "a,b"},
-		{"workbench", "vault", "add", "task", "--data-dir", root, "--title", "Submit expense", "--stage", "now", "--tags", "admin", "--refs", "knowledge/expense-submit.md"},
-		{"workbench", "vault", "add", "issue", "--data-dir", root, "--title", "OTP Tx design", "--theme", "auth-stepup", "--stage", "next", "--tags", "otp,tx", "--refs", "themes/auth-stepup/context/constraints.md"},
+		{"workbench", "vault", "add", "item", "--data-dir", root, "--title", "Submit expense", "--stage", "now", "--tags", "admin", "--refs", "knowledge/expense-submit.md"},
+		{"workbench", "vault", "add", "item", "--data-dir", root, "--title", "OTP Tx design", "--theme", "auth-stepup", "--stage", "next", "--tags", "otp,tx", "--refs", "themes/auth-stepup/context/constraints.md"},
 		{"workbench", "vault", "add", "theme", "--data-dir", root, "--title", "Auth step-up", "--tags", "auth,stepup", "--source-refs", "sources/documents/auth-deck.pptx,knowledge/auth-basics.md"},
 	}
 
@@ -259,7 +258,7 @@ func TestRunVaultAddThemeContextRejectsUnknownSourceRef(t *testing.T) {
 func TestRunVaultListLoadsAddedItems(t *testing.T) {
 	root := t.TempDir()
 	vault := NewVault(root)
-	if err := vault.SaveTask(TaskDoc{
+	if err := vault.SaveWorkItem(WorkDoc{
 		Metadata: Metadata{
 			ID:      "expense-submit",
 			Title:   "Submit expense",
@@ -270,19 +269,19 @@ func TestRunVaultListLoadsAddedItems(t *testing.T) {
 			Updated: "2026-04-12",
 		},
 	}); err != nil {
-		t.Fatalf("SaveTask returned error: %v", err)
+		t.Fatalf("SaveWorkItem returned error: %v", err)
 	}
 
-	if code := runVaultCommand([]string{"workbench", "vault", "list", "tasks", "--data-dir", root}); code != 0 {
+	if code := runVaultCommand([]string{"workbench", "vault", "list", "items", "--data-dir", root}); code != 0 {
 		t.Fatalf("runVaultCommand exit code = %d, want 0", code)
 	}
 }
 
-func TestRunVaultAddTaskGeneratesRandomIDWhenNotSpecified(t *testing.T) {
+func TestRunVaultAddItemGeneratesRandomIDWhenNotSpecified(t *testing.T) {
 	root := t.TempDir()
 
 	if code := runVaultCommand([]string{
-		"workbench", "vault", "add", "task",
+		"workbench", "vault", "add", "item",
 		"--data-dir", root,
 		"--title", "Submit expense",
 		"--stage", "now",
@@ -307,7 +306,7 @@ func TestRunVaultAddRejectsIDFlag(t *testing.T) {
 	root := t.TempDir()
 
 	if code := runVaultCommand([]string{
-		"workbench", "vault", "add", "task",
+		"workbench", "vault", "add", "item",
 		"--data-dir", root,
 		"--id", "expense-submit",
 		"--title", "Submit expense",
@@ -316,43 +315,11 @@ func TestRunVaultAddRejectsIDFlag(t *testing.T) {
 	}
 }
 
-func TestRunVaultConvertInboxToIssue(t *testing.T) {
-	root := t.TempDir()
-	vault := NewVault(root)
-	if err := vault.SaveInboxItem(InboxItem{
-		ID:      "capture-1",
-		Title:   "Investigate OTP edge case",
-		Created: "2026-04-12",
-		Updated: "2026-04-12",
-		Body:    "raw notes",
-	}); err != nil {
-		t.Fatalf("SaveInboxItem returned error: %v", err)
-	}
-
-	code := runVaultCommand([]string{
-		"workbench", "vault", "convert", "inbox",
-		"--data-dir", root,
-		"--id", "capture-1",
-		"--to", "issue",
-		"--theme", "auth-stepup",
-		"--stage", "next",
-	})
-	if code != 0 {
-		t.Fatalf("runVaultCommand exit code = %d, want 0", code)
-	}
-
-	workItems := mustLoadWorkItems(t, vault)
-	got, ok := findWorkDoc(workItems, "capture-1")
-	if !ok || got.Theme != "auth-stepup" || got.Stage != StageNext {
-		t.Fatalf("work items = %#v", workItems)
-	}
-}
-
 func TestRunVaultMoveUpdateAndLifecycleCommands(t *testing.T) {
 	root := t.TempDir()
 	store := NewStore(root)
 	now := time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)
-	item := NewIssueStockItem(now, "OTP Tx design", StageNext)
+	item := NewStockItem(now, "OTP Tx design", StageNext)
 	item.ID = "otp-tx-design"
 	item.Theme = "auth-old"
 	if err := store.Save(State{Items: []Item{item}}); err != nil {

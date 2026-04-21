@@ -8,6 +8,8 @@ Persist workbench state directly in the vault. Every work item has one primary M
 
 ```text
 vault/
+  context/
+    <title-slug>--<context-id>.md
   work-items/
     <title-slug>--<work-item-id>.md
     <title-slug>--<work-item-id>/
@@ -41,6 +43,7 @@ vault/
 - Item and theme IDs are random 8-char hex strings; the saved path uses `<title-slug>--<id>`.
 - `status`, `triage`, `stage`, `deferred_kind`, dates, refs, and short memo state stay visible from the main file.
 - References are modeled by item or theme IDs; file paths are a derived storage detail.
+- Context documents can live globally under `vault/context/` or under `themes/<slug>--<id>/context/`.
 
 ## Metadata Model
 
@@ -77,6 +80,14 @@ Theme metadata stores:
 - `tags`
 - `source_refs`
 
+Context document metadata stores:
+
+- `title`
+- `kind`
+- `created`
+- `updated`
+- `source_refs`
+
 ## Responsibility Split
 
 Main work-item files answer:
@@ -96,6 +107,8 @@ Promoted helper files answer:
 
 Theme-local `context/` remains the place for shared theme artifacts.
 
+Global `context/` holds ad-hoc documents that do not belong to a theme. MTG notes are represented as context documents with `kind: event`, whether they live globally or under a theme.
+
 ## Operational Notes
 
 - Saving app state rewrites main work-item documents and preserves promoted directories.
@@ -106,6 +119,7 @@ Theme-local `context/` remains the place for shared theme artifacts.
 - `sources/` is the global source collection root.
 - Extracted source documents live under `sources/documents/`.
 - Raw uploaded files live under `sources/files/` and should stay out of Git.
+- Event notes are stored as context docs rather than as a separate durable entity type.
 
 ## Future Direction
 

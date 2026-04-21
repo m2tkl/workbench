@@ -41,6 +41,7 @@ Workbench reads configuration from your OS config directory, for example `~/.con
 
 ```text
 ./vault/
+  context/
   work-items/
   themes/
   knowledge/
@@ -109,7 +110,7 @@ Use top-level `sources/` as the collection root:
 
 Sources are independent from themes and can be classified later. Files under `sources/files/` stay out of Git. Documents in `sources/documents/` store Markdown content with frontmatter such as `attachment`, `filename`, `links`, `tags`, and `imported_at`.
 
-Themes refer to the sources they need from `theme.md` via `source_refs`, and theme-local `context/` documents can cite the relevant subset of those sources.
+Themes refer to the sources they need from `theme.md` via `source_refs`, and theme-local `context/` documents can cite the relevant subset of those sources. Global context documents live under `vault/context/`.
 
 You can also create a theme-local context document that cites a subset of the theme's `source_refs`:
 
@@ -124,6 +125,8 @@ workbench web serve --addr 127.0.0.1:8080
 ```
 
 Open the shown URL to land on the browser workbench. The source inbox now lives under `/sources`, where you can drop or pick a file to add it. Pasted Markdown text and uploaded Markdown files are saved directly into `sources/documents/`. If you already know the related theme or work item, select it in the form and Workbench will link the new source document immediately. Other file types still go to `sources/files/staged/` for later agent work. The page also includes a form to link existing source documents to themes and work items after an agent has produced them.
+
+The browser workbench also exposes `/events` as an MTG-focused entry point. Events are stored as context documents with `kind: event`; they can live either under a theme's `context/` directory or under the global `vault/context/` root for ad-hoc conversations that do not belong to a theme.
 
 In the TUI workbench, select a theme and press `D` to open a dialog with the source inbox URL. The web server stays up only while that dialog is open.
 

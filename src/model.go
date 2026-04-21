@@ -109,16 +109,8 @@ func NewInboxItem(now time.Time, title string) Item {
 	return item
 }
 
-func NewIssueItem(now time.Time, title string, triage Triage, stage Stage, deferredKind DeferredKind) Item {
-	return NewItem(now, title, triage, stage, deferredKind)
-}
-
 func NewStockItem(now time.Time, title string, stage Stage) Item {
 	return NewItem(now, title, TriageStock, stage, "")
-}
-
-func NewIssueStockItem(now time.Time, title string, stage Stage) Item {
-	return NewStockItem(now, title, stage)
 }
 
 func NewScheduledItem(now time.Time, title, day string) Item {
@@ -129,20 +121,12 @@ func NewScheduledItem(now time.Time, title, day string) Item {
 	return item
 }
 
-func NewIssueScheduledItem(now time.Time, title, day string) Item {
-	return NewScheduledItem(now, title, day)
-}
-
 func NewRecurringItem(now time.Time, title string, everyDays int, anchor string) Item {
 	item := newBaseItem(now, title)
 	item.SetRecurring(now, everyDays, anchor)
 	item.Log = nil
 	item.LastReviewedOn = ""
 	return item
-}
-
-func NewIssueRecurringItem(now time.Time, title string, everyDays int, anchor string) Item {
-	return NewRecurringItem(now, title, everyDays, anchor)
 }
 
 func (s *State) FindItem(id string) (*Item, error) {
