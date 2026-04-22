@@ -374,15 +374,7 @@ func (s *sourceWorkbenchServer) renderWorkItemAgentPane(page workItemWorkspacePa
 }
 
 func renderWorkItemMarkdownPreview(item Item, markdown string) (template.HTML, error) {
-	markdown = rewriteWorkItemAssetMarkdown(item.ID, markdown)
-	source := []byte(markdown)
-	doc := workspaceMarkdownRenderer.Parser().Parse(text.NewReader(source))
-	annotateMarkdownSourceOffsets(doc)
-	var b bytes.Buffer
-	if err := workspaceMarkdownRenderer.Renderer().Render(&b, source, doc); err != nil {
-		return "", err
-	}
-	return template.HTML(b.String()), nil
+	return renderWorkspaceMarkdownPreview(rewriteWorkItemAssetMarkdown(item.ID, markdown))
 }
 
 func annotateMarkdownSourceOffsets(node ast.Node) {
@@ -404,11 +396,26 @@ func annotateMarkdownSourceOffsets(node ast.Node) {
 }
 
 func rewriteWorkItemAssetMarkdown(id, markdown string) string {
+	return rewriteWorkspaceAssetMarkdown(buildWorkItemAssetPrefix(id), markdown)
+}
+
+func renderWorkspaceMarkdownPreview(markdown string) (template.HTML, error) {
+	source := []byte(markdown)
+	doc := workspaceMarkdownRenderer.Parser().Parse(text.NewReader(source))
+	annotateMarkdownSourceOffsets(doc)
+	var b bytes.Buffer
+	if err := workspaceMarkdownRenderer.Renderer().Render(&b, source, doc); err != nil {
+		return "", err
+	}
+	return template.HTML(b.String()), nil
+}
+
+func rewriteWorkspaceAssetMarkdown(prefix, markdown string) string {
 	replacer := strings.NewReplacer(
-		"(assets/", "("+buildWorkItemAssetPrefix(id)+"/",
-		"(./assets/", "("+buildWorkItemAssetPrefix(id)+"/",
-		`="assets/`, `="`+buildWorkItemAssetPrefix(id)+`/`,
-		`="./assets/`, `="`+buildWorkItemAssetPrefix(id)+`/`,
+		"(assets/", "("+strings.TrimRight(prefix, "/")+"/",
+		"(./assets/", "("+strings.TrimRight(prefix, "/")+"/",
+		`="assets/`, `="`+strings.TrimRight(prefix, "/")+`/`,
+		`="./assets/`, `="`+strings.TrimRight(prefix, "/")+`/`,
 	)
 	return replacer.Replace(markdown)
 }

@@ -1,10 +1,15 @@
 package workbench
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"html/template"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -103,6 +108,27 @@ func (s *sourceWorkbenchServer) handleEvent(w http.ResponseWriter, r *http.Reque
 		http.Redirect(w, r, buildEventNewHref(strings.TrimSpace(r.URL.Query().Get("theme_id")), strings.TrimSpace(r.URL.Query().Get("status")), strings.TrimSpace(r.URL.Query().Get("error"))), http.StatusSeeOther)
 		return
 	}
+	if strings.HasSuffix(path, "/assets") {
+		if !requireMethod(w, r, http.MethodPost) {
+			return
+		}
+		s.handleEventAssetUpload(w, r, strings.TrimSuffix(path, "/assets"))
+		return
+	}
+	if before, after, ok := strings.Cut(path, "/assets/"); ok {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
+		s.handleEventAsset(w, r, before, after)
+		return
+	}
+	if strings.HasSuffix(path, "/preview") {
+		if !requireMethod(w, r, http.MethodPost) {
+			return
+		}
+		s.handleEventPreview(w, r, strings.TrimSuffix(path, "/preview"))
+		return
+	}
 	save := false
 	if strings.HasSuffix(path, "/save") {
 		save = true
@@ -124,6 +150,88 @@ func (s *sourceWorkbenchServer) handleEvent(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.handleEventShow(w, r, themeID, name)
+}
+
+func (s *sourceWorkbenchServer) handleEventPreview(w http.ResponseWriter, r *http.Request, route string) {
+	themeID, name, ok := parseEventWorkspaceRoute(route)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, fmt.Sprintf("preview form parse failed: %v", err), http.StatusBadRequest)
+		return
+	}
+	if _, err := s.loadEventDoc(themeID, name); err != nil {
+		respondWorkItemLoadError(w, r, err)
+		return
+	}
+	preview, err := renderEventMarkdownPreview(themeID, name, r.FormValue("body"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = io.WriteString(w, string(preview))
+}
+
+func (s *sourceWorkbenchServer) handleEventAssetUpload(w http.ResponseWriter, r *http.Request, route string) {
+	themeID, name, ok := parseEventWorkspaceRoute(route)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		http.Error(w, fmt.Sprintf("asset upload parse failed: %v", err), http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		http.Error(w, "image is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	markdownPath, err := s.saveEventAsset(themeID, name, header.Filename, file)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(workItemAssetUploadResponse{
+		Markdown: "![](" + markdownPath + ")",
+		Path:     markdownPath,
+	})
+}
+
+func (s *sourceWorkbenchServer) handleEventAsset(w http.ResponseWriter, r *http.Request, route, assetPath string) {
+	themeID, name, ok := parseEventWorkspaceRoute(route)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	doc, err := s.loadEventDoc(themeID, name)
+	if err != nil {
+		respondWorkItemLoadError(w, r, err)
+		return
+	}
+	resolved, err := eventAssetPath(doc, assetPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := os.Stat(resolved); err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.ServeFile(w, r, resolved)
 }
 
 func parseEventWorkspaceRoute(path string) (string, string, bool) {
@@ -159,6 +267,10 @@ func (s *sourceWorkbenchServer) handleEventShow(w http.ResponseWriter, r *http.R
 
 func (s *sourceWorkbenchServer) handleEventSave(w http.ResponseWriter, r *http.Request, themeID, name string) {
 	if err := r.ParseForm(); err != nil {
+		if isFetchRequest(r) {
+			respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: fmt.Sprintf("event form parse failed: %v", err)})
+			return
+		}
 		http.Redirect(w, r, buildEventWorkspaceHref(themeID, name, strings.TrimSpace(r.URL.Query().Get("from")), strings.TrimSpace(r.URL.Query().Get("from_label"))), http.StatusSeeOther)
 		return
 	}
@@ -171,6 +283,10 @@ func (s *sourceWorkbenchServer) handleEventSave(w http.ResponseWriter, r *http.R
 	newThemeID := strings.TrimSpace(r.FormValue("theme_id"))
 	if newThemeID != "" {
 		if _, err := readThemeDoc(s.vault.ThemeMetaPath(newThemeID)); err != nil {
+			if isFetchRequest(r) {
+				respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: "unknown theme"})
+				return
+			}
 			http.Redirect(w, r, withExtraQuery(buildEventWorkspaceHref(themeID, name, strings.TrimSpace(r.URL.Query().Get("from")), strings.TrimSpace(r.URL.Query().Get("from_label"))), url.Values{"error": []string{"unknown theme"}}), http.StatusSeeOther)
 			return
 		}
@@ -190,14 +306,34 @@ func (s *sourceWorkbenchServer) handleEventSave(w http.ResponseWriter, r *http.R
 		err = s.vault.SaveGlobalContextDoc(name, doc)
 	}
 	if err != nil {
+		if isFetchRequest(r) {
+			respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: err.Error()})
+			return
+		}
 		http.Redirect(w, r, withExtraQuery(buildEventWorkspaceHref(themeID, name, strings.TrimSpace(r.URL.Query().Get("from")), strings.TrimSpace(r.URL.Query().Get("from_label"))), url.Values{"error": []string{err.Error()}}), http.StatusSeeOther)
 		return
 	}
 	if oldPath != "" && oldPath != targetPath {
-		if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+		if err := moveEventAssets(oldPath, targetPath); err != nil {
+			if isFetchRequest(r) {
+				respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: err.Error()})
+				return
+			}
 			http.Redirect(w, r, withExtraQuery(buildEventWorkspaceHref(newThemeID, name, strings.TrimSpace(r.URL.Query().Get("from")), strings.TrimSpace(r.URL.Query().Get("from_label"))), url.Values{"error": []string{err.Error()}}), http.StatusSeeOther)
 			return
 		}
+		if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+			if isFetchRequest(r) {
+				respondJSON(w, http.StatusBadRequest, workItemSaveResponse{Error: err.Error()})
+				return
+			}
+			http.Redirect(w, r, withExtraQuery(buildEventWorkspaceHref(newThemeID, name, strings.TrimSpace(r.URL.Query().Get("from")), strings.TrimSpace(r.URL.Query().Get("from_label"))), url.Values{"error": []string{err.Error()}}), http.StatusSeeOther)
+			return
+		}
+	}
+	if isFetchRequest(r) {
+		respondJSON(w, http.StatusOK, workItemSaveResponse{Status: "saved event"})
+		return
 	}
 	http.Redirect(w, r, withExtraQuery(buildEventWorkspaceHref(newThemeID, name, strings.TrimSpace(r.URL.Query().Get("from")), strings.TrimSpace(r.URL.Query().Get("from_label"))), url.Values{"status": []string{"saved event"}}), http.StatusSeeOther)
 }
@@ -309,6 +445,10 @@ func (s *sourceWorkbenchServer) loadEventWorkspace(themeID, name, returnTo, retu
 	if err != nil {
 		return eventWorkspacePage{}, err
 	}
+	previewHTML, err := renderEventMarkdownPreview(themeID, name, doc.Body)
+	if err != nil {
+		return eventWorkspacePage{}, err
+	}
 	themes, err := s.vault.LoadThemes()
 	if err != nil {
 		return eventWorkspacePage{}, err
@@ -351,19 +491,22 @@ func (s *sourceWorkbenchServer) loadEventWorkspace(themeID, name, returnTo, retu
 			{Label: "Events", Href: buildEventsHref(themeID, "", ""), Active: false},
 			{Label: doc.Title, Active: true},
 		},
-		HeaderNav:     buildGlobalHeaderNav("events"),
-		Breadcrumbs:   []sourceWorkbenchNavItem{backLink, {Label: doc.Title, Active: true}},
-		CaptureAction: "/workbench/add",
-		CaptureReturn: buildEventWorkspaceHref(themeID, name, backLink.Href, backLink.Label),
-		SaveAction:    buildEventWorkspaceSaveHref(themeID, name, backLink.Href, backLink.Label),
-		ReturnHref:    backLink.Href,
-		ReturnLabel:   backLink.Label,
-		ThemeLabel:    themeTitle,
-		Themes:        options,
-		Updated:       firstNonEmpty(doc.Updated, doc.Created),
-		MainBody:      doc.Body,
-		Status:        status,
-		Error:         errMsg,
+		HeaderNav:         buildGlobalHeaderNav("events"),
+		Breadcrumbs:       []sourceWorkbenchNavItem{backLink, {Label: doc.Title, Active: true}},
+		CaptureAction:     "/workbench/add",
+		CaptureReturn:     buildEventWorkspaceHref(themeID, name, backLink.Href, backLink.Label),
+		SaveAction:        buildEventWorkspaceSaveHref(themeID, name, backLink.Href, backLink.Label),
+		ReturnHref:        backLink.Href,
+		ReturnLabel:       backLink.Label,
+		ThemeLabel:        themeTitle,
+		Themes:            options,
+		Updated:           firstNonEmpty(doc.Updated, doc.Created),
+		MainBody:          doc.Body,
+		MainPreviewHTML:   previewHTML,
+		Status:            status,
+		Error:             errMsg,
+		PreviewAction:     buildEventWorkspacePreviewHref(themeID, name),
+		AssetUploadAction: buildEventWorkspaceAssetUploadHref(themeID, name),
 	}, nil
 }
 
@@ -480,6 +623,87 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func renderEventMarkdownPreview(themeID, name, markdown string) (template.HTML, error) {
+	return renderWorkspaceMarkdownPreview(rewriteWorkspaceAssetMarkdown(buildEventWorkspaceAssetPrefix(themeID, name), markdown))
+}
+
+func (s *sourceWorkbenchServer) saveEventAsset(themeID, name, filename string, content io.Reader) (string, error) {
+	doc, err := s.loadEventDoc(themeID, name)
+	if err != nil {
+		return "", err
+	}
+	raw, err := io.ReadAll(content)
+	if err != nil {
+		return "", err
+	}
+	contentType := http.DetectContentType(raw)
+	if !strings.HasPrefix(contentType, "image/") {
+		return "", fmt.Errorf("only image uploads are supported")
+	}
+	assetName := normalizeWorkItemAssetName(filename, contentType)
+	assetPath, err := uniquePath(eventAssetsDir(doc), assetName)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(assetPath, raw, 0o644); err != nil {
+		return "", err
+	}
+	return "assets/" + filepath.Base(assetPath), nil
+}
+
+func eventAssetsDir(doc ThemeContextDoc) string {
+	return eventAssetsDirForPath(doc.Path)
+}
+
+func eventAssetsDirForPath(docPath string) string {
+	docPath = strings.TrimSpace(docPath)
+	if docPath == "" {
+		return ""
+	}
+	return docPath + ".assets"
+}
+
+func eventAssetPath(doc ThemeContextDoc, raw string) (string, error) {
+	assetPath := path.Clean(strings.TrimSpace(raw))
+	if assetPath == "." || assetPath == "/" || strings.HasPrefix(assetPath, "../") || assetPath == ".." || path.IsAbs(assetPath) {
+		return "", os.ErrNotExist
+	}
+	root := eventAssetsDir(doc)
+	if root == "" {
+		return "", os.ErrNotExist
+	}
+	return filepath.Join(root, filepath.FromSlash(assetPath)), nil
+}
+
+func moveEventAssets(oldDocPath, newDocPath string) error {
+	oldDir := eventAssetsDirForPath(oldDocPath)
+	newDir := eventAssetsDirForPath(newDocPath)
+	if oldDir == "" || newDir == "" || oldDir == newDir {
+		return nil
+	}
+	entries, err := os.ReadDir(oldDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		src := filepath.Join(oldDir, entry.Name())
+		dst, err := uniquePath(newDir, entry.Name())
+		if err != nil {
+			return err
+		}
+		if err := os.Rename(src, dst); err != nil {
+			return err
+		}
+	}
+	return os.Remove(oldDir)
+}
+
 func buildEventsHref(themeID, status, errMsg string) string {
 	values := url.Values{}
 	if strings.TrimSpace(themeID) != "" {
@@ -514,6 +738,14 @@ func buildEventNewHref(themeID, status, errMsg string) string {
 	return "/events/new"
 }
 
+func buildEventWorkspacePath(themeID, name string) string {
+	base := "/events/global/" + url.PathEscape(ensureMarkdownName(name))
+	if strings.TrimSpace(themeID) != "" {
+		base = "/events/theme/" + url.PathEscape(strings.TrimSpace(themeID)) + "/" + url.PathEscape(ensureMarkdownName(name))
+	}
+	return base
+}
+
 func buildEventWorkspaceHref(themeID, name, returnTo, returnLabel string) string {
 	values := url.Values{}
 	if safe := safeLocalReturnPath(returnTo); safe != "" {
@@ -522,10 +754,7 @@ func buildEventWorkspaceHref(themeID, name, returnTo, returnLabel string) string
 	if strings.TrimSpace(returnLabel) != "" {
 		values.Set("from_label", strings.TrimSpace(returnLabel))
 	}
-	base := "/events/global/" + url.PathEscape(ensureMarkdownName(name))
-	if strings.TrimSpace(themeID) != "" {
-		base = "/events/theme/" + url.PathEscape(strings.TrimSpace(themeID)) + "/" + url.PathEscape(ensureMarkdownName(name))
-	}
+	base := buildEventWorkspacePath(themeID, name)
 	if encoded := values.Encode(); encoded != "" {
 		return base + "?" + encoded
 	}
@@ -540,12 +769,21 @@ func buildEventWorkspaceSaveHref(themeID, name, returnTo, returnLabel string) st
 	if strings.TrimSpace(returnLabel) != "" {
 		values.Set("from_label", strings.TrimSpace(returnLabel))
 	}
-	base := "/events/global/" + url.PathEscape(ensureMarkdownName(name)) + "/save"
-	if strings.TrimSpace(themeID) != "" {
-		base = "/events/theme/" + url.PathEscape(strings.TrimSpace(themeID)) + "/" + url.PathEscape(ensureMarkdownName(name)) + "/save"
-	}
+	base := buildEventWorkspacePath(themeID, name) + "/save"
 	if encoded := values.Encode(); encoded != "" {
 		return base + "?" + encoded
 	}
 	return base
+}
+
+func buildEventWorkspacePreviewHref(themeID, name string) string {
+	return buildEventWorkspacePath(themeID, name) + "/preview"
+}
+
+func buildEventWorkspaceAssetUploadHref(themeID, name string) string {
+	return buildEventWorkspacePath(themeID, name) + "/assets"
+}
+
+func buildEventWorkspaceAssetPrefix(themeID, name string) string {
+	return buildEventWorkspaceAssetUploadHref(themeID, name)
 }

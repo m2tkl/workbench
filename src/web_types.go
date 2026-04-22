@@ -206,25 +206,28 @@ type eventCreatePage struct {
 }
 
 type eventWorkspacePage struct {
-	Title         string
-	WorkbenchHref string
-	SourcesHref   string
-	EventsHref    string
-	HeaderTitle   string
-	TitleNav      []sourceWorkbenchNavItem
-	HeaderNav     []sourceWorkbenchNavItem
-	Breadcrumbs   []sourceWorkbenchNavItem
-	CaptureAction string
-	CaptureReturn string
-	SaveAction    string
-	ReturnHref    string
-	ReturnLabel   string
-	ThemeLabel    string
-	Themes        []sourceWorkbenchOption
-	Updated       string
-	MainBody      string
-	Status        string
-	Error         string
+	Title             string
+	WorkbenchHref     string
+	SourcesHref       string
+	EventsHref        string
+	HeaderTitle       string
+	TitleNav          []sourceWorkbenchNavItem
+	HeaderNav         []sourceWorkbenchNavItem
+	Breadcrumbs       []sourceWorkbenchNavItem
+	CaptureAction     string
+	CaptureReturn     string
+	SaveAction        string
+	ReturnHref        string
+	ReturnLabel       string
+	ThemeLabel        string
+	Themes            []sourceWorkbenchOption
+	Updated           string
+	MainBody          string
+	MainPreviewHTML   template.HTML
+	Status            string
+	Error             string
+	PreviewAction     string
+	AssetUploadAction string
 }
 
 type workItemMemoMode string

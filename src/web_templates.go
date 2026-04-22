@@ -1997,9 +1997,12 @@ const eventWorkspaceHTML = `<!doctype html>
       --ink: #111827;
       --muted: #6b7280;
       --line: #e5e7eb;
+      --accent: #111827;
+      --accent-soft: #eef2f7;
       --error: #b42318;
       --error-bg: #fef3f2;
       --content-width: 1480px;
+      --content-inset: 20px;
       --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 12px 30px rgba(15, 23, 42, 0.05);
     }
 ` + sharedWebShellCSS + `
@@ -2019,9 +2022,162 @@ const eventWorkspaceHTML = `<!doctype html>
       padding: 9px 14px;
       cursor: pointer;
     }
-    textarea { min-height: 420px; resize: vertical; }
-    .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
-    .form-actions { display: flex; justify-content: flex-end; gap: 12px; }
+    .event-editor-shell {
+      padding: 0;
+      overflow: hidden;
+    }
+    .event-editor-form {
+      display: grid;
+      gap: 0;
+    }
+    .event-header,
+    .event-fields {
+      padding: 18px var(--content-inset);
+    }
+    .event-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      border-bottom: 1px solid rgba(229, 231, 235, 0.8);
+    }
+    .event-fields {
+      display: grid;
+      gap: 14px;
+      border-bottom: 1px solid rgba(229, 231, 235, 0.8);
+    }
+    .editor-stack {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      background: linear-gradient(180deg, rgba(248, 250, 252, 0.55) 0%, rgba(255, 255, 255, 0) 100%);
+    }
+    .editor-only {
+      display: flex;
+      flex-direction: column;
+    }
+    .editor-stack[data-mode="editor"] .preview-panel,
+    .editor-stack[data-mode="preview"] .editor-only {
+      display: none;
+    }
+    textarea {
+      min-height: 420px;
+      resize: vertical;
+      border: 0;
+      border-radius: 0;
+      padding: 18px var(--content-inset);
+      background: transparent;
+      line-height: 1.65;
+    }
+    textarea:focus { outline: none; }
+    .preview-panel {
+      display: flex;
+      flex-direction: column;
+      border-top: 1px solid rgba(229, 231, 235, 0.8);
+    }
+    .editor-stack[data-mode="preview"] .preview-panel {
+      border-top: 0;
+    }
+    .preview-surface {
+      padding: 18px var(--content-inset);
+      min-height: 420px;
+      line-height: 1.7;
+      overflow: auto;
+    }
+    .preview-surface img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 12px;
+    }
+    .preview-surface pre {
+      overflow: auto;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: var(--surface-soft);
+      border: 1px solid rgba(229, 231, 235, 0.8);
+    }
+    .mode-actions-right {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-left: auto;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+    .event-back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.96);
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .event-back-link:hover {
+      color: var(--ink);
+      border-color: #d1d5db;
+      background: #fff;
+    }
+    .event-editor-form .toolbar-button {
+      width: auto;
+      min-width: 0;
+      white-space: nowrap;
+    }
+    .mode-toggle-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.96);
+    }
+    .mode-toggle {
+      margin-left: 0;
+      border: 0;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      color: var(--muted);
+      box-shadow: none;
+    }
+    .mode-toggle:last-child { border-right: 0; }
+    .mode-toggle[aria-pressed="true"] {
+      background: #eef2f7;
+      color: var(--ink);
+      font-weight: 600;
+    }
+    #event-save-button[hidden] { display: none; }
+    .editor-feedback {
+      display: none;
+      padding: 8px 10px;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      width: auto;
+      max-width: min(480px, 100%);
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.9);
+    }
+    .editor-feedback.error {
+      display: inline-flex;
+      color: var(--error);
+      background: var(--error-bg);
+      border-color: #f3d0cc;
+    }
+    .editor-feedback.success {
+      display: inline-flex;
+      color: #0f6b46;
+      background: #f2fbf6;
+      border-color: #cfe9d9;
+    }
+    @media (max-width: 720px) {
+      textarea, .preview-surface { min-height: 320px; }
+    }
   </style>
 </head>
 <body>
@@ -2029,34 +2185,299 @@ const eventWorkspaceHTML = `<!doctype html>
   <main>
     {{if .Status}}<div class="message">{{.Status}}</div>{{end}}
     {{if .Error}}<div class="message error">{{.Error}}</div>{{end}}
-    <section class="panel">
-      <div class="panel-head">
-        <div>
+    <section class="panel event-editor-shell">
+      <form id="event-editor" method="post" action="{{.SaveAction}}" class="event-editor-form" data-preview-url="{{.PreviewAction}}" data-asset-upload-url="{{.AssetUploadAction}}">
+        <div class="event-header">
           <div class="meta">{{.ThemeLabel}}{{if .Updated}} · Updated {{.Updated}}{{end}}</div>
+          <div class="mode-actions-right">
+            <a class="event-back-link" href="{{.ReturnHref}}">{{.ReturnLabel}}</a>
+            <div id="event-editor-feedback" class="editor-feedback" role="status" aria-live="polite"></div>
+            <button id="event-save-button" class="toolbar-button" type="submit">Save Event</button>
+            <div class="mode-toggle-group" role="group" aria-label="Editor mode">
+              <button id="toggle-event-edit-mode" class="mode-toggle" type="button" aria-pressed="true">Edit</button>
+              <button id="toggle-event-preview-mode" class="mode-toggle" type="button" aria-pressed="false">Preview</button>
+            </div>
+          </div>
         </div>
-        <a class="toolbar-button" href="{{.ReturnHref}}">{{.ReturnLabel}}</a>
-      </div>
-      <form method="post" action="{{.SaveAction}}" style="display:grid; gap:14px;">
-        <div>
-          <label for="event-title">Title</label>
-          <input id="event-title" type="text" name="title" value="{{.Title}}" required>
+        <div class="event-fields">
+          <div>
+            <label for="event-title">Title</label>
+            <input id="event-title" type="text" name="title" value="{{.Title}}" required>
+          </div>
+          <div>
+            <label for="event-theme">Theme</label>
+            <select id="event-theme" name="theme_id">
+              {{range .Themes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+            </select>
+          </div>
         </div>
-        <div>
-          <label for="event-theme">Theme</label>
-          <select id="event-theme" name="theme_id">
-            {{range .Themes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
-          </select>
+        <div class="editor-stack" data-mode="editor">
+          <div class="editor-only stack">
+            <div>
+              <label for="event-body">Notes</label>
+              <textarea id="event-body" name="body" placeholder="# Notes">{{.MainBody}}</textarea>
+            </div>
+          </div>
+          <div class="preview-panel stack">
+            <div id="event-preview" class="preview-surface" tabindex="0">{{.MainPreviewHTML}}</div>
+          </div>
         </div>
-        <div>
-          <label for="event-body">Notes</label>
-          <textarea id="event-body" name="body" placeholder="# Notes">{{.MainBody}}</textarea>
-        </div>
-        <div class="form-actions"><button class="toolbar-button" type="submit">Save Event</button></div>
       </form>
     </section>
 ` + sharedCaptureModalHTML + `
   </main>
-` + sharedCaptureModalScript + `
+  <script>
+    (() => {
+      const form = document.getElementById("event-editor");
+      const editorStack = form ? form.querySelector(".editor-stack") : null;
+      const textarea = document.getElementById("event-body");
+      const preview = document.getElementById("event-preview");
+      const feedback = document.getElementById("event-editor-feedback");
+      const toggleEditButton = document.getElementById("toggle-event-edit-mode");
+      const togglePreviewButton = document.getElementById("toggle-event-preview-mode");
+      const saveButton = document.getElementById("event-save-button");
+` + sharedCaptureModalSetupJS + `
+      const previewAction = form ? form.dataset.previewUrl : "";
+      const assetUploadAction = form ? form.dataset.assetUploadUrl : "";
+      let saveTimer = null;
+      const setFeedback = (message, tone) => {
+        if (!feedback) {
+          return;
+        }
+        feedback.textContent = message || "";
+        feedback.className = message ? "editor-feedback " + (tone || "error") : "editor-feedback";
+      };
+      const showSavedFeedback = (message) => {
+        setFeedback(message || "saved event", "success");
+        if (saveTimer) {
+          window.clearTimeout(saveTimer);
+        }
+        saveTimer = window.setTimeout(() => setFeedback("", ""), 1500);
+      };
+      const previewMode = () => editorStack ? editorStack.dataset.mode || "editor" : "editor";
+      const refreshPreview = async () => {
+        if (!textarea || !preview || !previewAction) {
+          return;
+        }
+        try {
+          const response = await fetch(previewAction, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+              "X-Requested-With": "fetch"
+            },
+            body: new URLSearchParams({ body: textarea.value }).toString()
+          });
+          if (!response.ok) {
+            return;
+          }
+          preview.innerHTML = await response.text();
+        } catch (_) {
+        }
+      };
+      let previewTimer = null;
+      const queuePreviewRefresh = () => {
+        if (previewTimer) {
+          window.clearTimeout(previewTimer);
+        }
+        previewTimer = window.setTimeout(refreshPreview, 200);
+      };
+      const setPreviewMode = async (mode) => {
+        if (!editorStack) {
+          return;
+        }
+        const previewActive = mode === "preview";
+        editorStack.dataset.mode = previewActive ? "preview" : "editor";
+        if (saveButton) {
+          saveButton.hidden = previewActive;
+        }
+        if (toggleEditButton && togglePreviewButton) {
+          toggleEditButton.setAttribute("aria-pressed", previewActive ? "false" : "true");
+          togglePreviewButton.setAttribute("aria-pressed", previewActive ? "true" : "false");
+        }
+        if (previewActive) {
+          await refreshPreview();
+          if (preview) {
+            preview.focus();
+          }
+        } else if (textarea) {
+          textarea.focus();
+        }
+      };
+      const saveDocument = async () => {
+        if (!form) {
+          return false;
+        }
+        setFeedback("", "");
+        try {
+          const response = await fetch(form.action, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+              "X-Requested-With": "fetch"
+            },
+            body: new URLSearchParams(new FormData(form)).toString()
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload && payload.error ? payload.error : "save failed");
+          }
+          showSavedFeedback(payload && payload.status ? payload.status : "saved event");
+          return true;
+        } catch (error) {
+          setFeedback(error && error.message ? error.message : "save failed", "error");
+          return false;
+        }
+      };
+      if (toggleEditButton) {
+        toggleEditButton.addEventListener("click", () => {
+          if (previewMode() !== "editor") {
+            void setPreviewMode("editor");
+          }
+        });
+      }
+      if (togglePreviewButton) {
+        togglePreviewButton.addEventListener("click", () => {
+          if (previewMode() !== "preview") {
+            void setPreviewMode("preview");
+          }
+        });
+      }
+      if (form) {
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          await saveDocument();
+        });
+      }
+      if (textarea) {
+        textarea.addEventListener("input", queuePreviewRefresh);
+        const fileNameForBlob = (blob) => {
+          const type = String(blob && blob.type || "").toLowerCase();
+          if (type === "image/png") return "pasted-image.png";
+          if (type === "image/jpeg") return "pasted-image.jpg";
+          if (type === "image/gif") return "pasted-image.gif";
+          if (type === "image/webp") return "pasted-image.webp";
+          return "pasted-image.img";
+        };
+        const blobFromDataURL = (value) => {
+          const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(value || "");
+          if (!match) {
+            return null;
+          }
+          const binary = window.atob(match[2]);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i += 1) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          return new Blob([bytes], { type: match[1] });
+        };
+        const extractPastedImageSync = (event) => {
+          const clipboard = event.clipboardData;
+          if (!clipboard) {
+            return null;
+          }
+          const items = Array.from(clipboard.items || []);
+          const imageItem = items.find((item) => item.kind === "file" && String(item.type).startsWith("image/"));
+          if (imageItem) {
+            return imageItem.getAsFile();
+          }
+          const files = Array.from(clipboard.files || []);
+          const imageFile = files.find((file) => String(file.type).startsWith("image/"));
+          if (imageFile) {
+            return imageFile;
+          }
+          const html = clipboard.getData ? clipboard.getData("text/html") : "";
+          const htmlMatch = /src=["'](data:image\/[^"']+)["']/i.exec(html || "");
+          if (htmlMatch) {
+            return blobFromDataURL(htmlMatch[1]);
+          }
+          const plain = clipboard.getData ? clipboard.getData("text/plain") : "";
+          if (String(plain).startsWith("data:image/")) {
+            return blobFromDataURL(plain);
+          }
+          return null;
+        };
+        const extractPastedImageAsync = async () => {
+          if (navigator.clipboard && typeof navigator.clipboard.read === "function") {
+            try {
+              const items = await navigator.clipboard.read();
+              for (const item of items) {
+                const imageType = item.types.find((type) => String(type).startsWith("image/"));
+                if (imageType) {
+                  return await item.getType(imageType);
+                }
+              }
+            } catch (_) {
+            }
+          }
+          return null;
+        };
+        const uploadPastedImage = async (blob) => {
+          const formData = new FormData();
+          formData.append("image", blob, fileNameForBlob(blob));
+          const response = await fetch(assetUploadAction, {
+            method: "POST",
+            body: formData,
+            headers: { "X-Requested-With": "fetch" }
+          });
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || "image upload failed");
+          }
+          return response.json();
+        };
+        textarea.addEventListener("paste", async (event) => {
+          if (!assetUploadAction) {
+            return;
+          }
+          let blob = extractPastedImageSync(event);
+          if (blob) {
+            event.preventDefault();
+          } else {
+            blob = await extractPastedImageAsync();
+          }
+          if (!blob) {
+            setFeedback("");
+            return;
+          }
+          setFeedback("");
+          try {
+            const payload = await uploadPastedImage(blob);
+            const insertion = payload.markdown || "";
+            const start = textarea.selectionStart || 0;
+            const end = textarea.selectionEnd || 0;
+            const prefix = textarea.value.slice(0, start);
+            const suffix = textarea.value.slice(end);
+            const joiner = prefix && !prefix.endsWith("\n") ? "\n" : "";
+            const trailer = suffix && !suffix.startsWith("\n") ? "\n" : "";
+            textarea.value = prefix + joiner + insertion + trailer + suffix;
+            const caret = (prefix + joiner + insertion).length;
+            textarea.selectionStart = caret;
+            textarea.selectionEnd = caret;
+            textarea.focus();
+            queuePreviewRefresh();
+          } catch (error) {
+            setFeedback(error && error.message ? error.message : "image paste failed", "error");
+          }
+        });
+      }
+      document.addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && !event.shiftKey && String(event.key).toLowerCase() === "s" && form) {
+          event.preventDefault();
+          void saveDocument();
+          return;
+        }
+        if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key !== "Escape") {
+          return;
+        }
+        if (captureDialog && captureDialog.open) {
+          return;
+        }
+        event.preventDefault();
+        void setPreviewMode(previewMode() === "preview" ? "editor" : "preview");
+      });
+    })();
+  </script>
 </body>
 </html>`
 

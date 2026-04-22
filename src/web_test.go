@@ -1314,6 +1314,180 @@ func TestEventsCreateSavesGlobalEventAndRedirectsToWorkspace(t *testing.T) {
 		t.Fatalf("expected event workspace to share shell layout, got: %s", body)
 	} else if !strings.Contains(body, `id="event-theme"`) || !strings.Contains(body, `class="toolbar-button" type="submit">Save Event</button>`) {
 		t.Fatalf("expected event workspace theme selector and visible save button, got: %s", body)
+	} else if !strings.Contains(body, `data-preview-url="/events/global/`) || !strings.Contains(body, `data-asset-upload-url="/events/global/`) || !strings.Contains(body, ">Preview</button>") {
+		t.Fatalf("expected event workspace preview and asset upload wiring, got: %s", body)
+	}
+}
+
+func TestEventWorkspaceAssetUploadStoresImage(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	if err := vault.SaveGlobalContextDoc("standup--11111111.md", ThemeContextDoc{
+		Title:   "Standup",
+		Kind:    contextKindEvent,
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+		Body:    "Quick sync notes",
+	}); err != nil {
+		t.Fatalf("SaveGlobalContextDoc returned error: %v", err)
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("image", "clipboard.png")
+	if err != nil {
+		t.Fatalf("CreateFormFile returned error: %v", err)
+	}
+	if _, err := part.Write(smallPNG()); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodPost, "/events/global/standup--11111111.md/assets", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("asset upload status = %d, want %d", res.Code, http.StatusOK)
+	}
+	var payload workItemAssetUploadResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if !strings.HasPrefix(payload.Path, "assets/") {
+		t.Fatalf("payload.Path = %q, want assets/... path", payload.Path)
+	}
+	if payload.Markdown != "![]("+payload.Path+")" {
+		t.Fatalf("payload.Markdown = %q, want markdown image link", payload.Markdown)
+	}
+	if _, err := os.Stat(filepath.Join(eventAssetsDirForPath(vault.GlobalContextPath("standup--11111111.md")), filepath.FromSlash(strings.TrimPrefix(payload.Path, "assets/")))); err != nil {
+		t.Fatalf("expected uploaded asset file to exist: %v", err)
+	}
+}
+
+func TestEventWorkspacePreviewRendersAssetImage(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	if err := vault.SaveGlobalContextDoc("standup--11111111.md", ThemeContextDoc{
+		Title:   "Standup",
+		Kind:    contextKindEvent,
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+		Body:    "Quick sync notes",
+	}); err != nil {
+		t.Fatalf("SaveGlobalContextDoc returned error: %v", err)
+	}
+	writeWorkspaceAsset(t, filepath.Join(eventAssetsDirForPath(vault.GlobalContextPath("standup--11111111.md")), "diagram.png"), smallPNG())
+
+	server := newSourceWorkbenchServer(vault)
+	form := url.Values{"body": []string{"# Notes\n\n![](assets/diagram.png)"}}
+	req := httptest.NewRequest(http.MethodPost, "/events/global/standup--11111111.md/preview", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, want %d", res.Code, http.StatusOK)
+	}
+	if !strings.Contains(res.Body.String(), `<img src="/events/global/standup--11111111.md/assets/diagram.png" alt="">`) {
+		t.Fatalf("expected preview image route in HTML: %s", res.Body.String())
+	}
+}
+
+func TestEventWorkspaceServesAssetFile(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	if err := vault.SaveTheme(ThemeDoc{
+		ID:      "auth-stepup",
+		Title:   "Auth Step-Up",
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+	}); err != nil {
+		t.Fatalf("SaveTheme returned error: %v", err)
+	}
+	if err := vault.SaveThemeContextDoc("auth-stepup", "retro--33333333.md", ThemeContextDoc{
+		Title:   "Retro",
+		Kind:    contextKindEvent,
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+		Body:    "Theme notes",
+	}); err != nil {
+		t.Fatalf("SaveThemeContextDoc returned error: %v", err)
+	}
+	png := smallPNG()
+	writeWorkspaceAsset(t, filepath.Join(eventAssetsDirForPath(vault.ThemeContextPath("auth-stepup", "retro--33333333.md")), "diagram.png"), png)
+
+	server := newSourceWorkbenchServer(vault)
+	req := httptest.NewRequest(http.MethodGet, "/events/theme/auth-stepup/retro--33333333.md/assets/diagram.png", nil)
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("asset status = %d, want %d", res.Code, http.StatusOK)
+	}
+	if !bytes.Equal(res.Body.Bytes(), png) {
+		t.Fatalf("served asset body mismatch")
+	}
+}
+
+func TestEventWorkspaceFetchSaveReturnsJSONWithoutRedirect(t *testing.T) {
+	root := t.TempDir()
+	vault := NewVault(root)
+	if err := vault.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout returned error: %v", err)
+	}
+	if err := vault.SaveGlobalContextDoc("standup--11111111.md", ThemeContextDoc{
+		Title:   "Standup",
+		Kind:    contextKindEvent,
+		Created: "2026-04-21",
+		Updated: "2026-04-21",
+		Body:    "# Notes\n\nbefore",
+	}); err != nil {
+		t.Fatalf("SaveGlobalContextDoc returned error: %v", err)
+	}
+
+	server := newSourceWorkbenchServer(vault)
+	form := url.Values{
+		"title": []string{"Standup"},
+		"body":  []string{"# Notes\n\nafter fetch save"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/events/global/standup--11111111.md/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Requested-With", "fetch")
+	res := httptest.NewRecorder()
+	server.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("fetch save status = %d, want %d", res.Code, http.StatusOK)
+	}
+	if location := res.Header().Get("Location"); location != "" {
+		t.Fatalf("fetch save redirect location = %q, want empty", location)
+	}
+	if got := res.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Fatalf("fetch save content type = %q, want application/json", got)
+	}
+	var payload workItemSaveResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Status != "saved event" {
+		t.Fatalf("payload.Status = %q, want saved event", payload.Status)
+	}
+	doc, err := readThemeContextDoc(vault.GlobalContextPath("standup--11111111.md"))
+	if err != nil {
+		t.Fatalf("readThemeContextDoc returned error: %v", err)
+	}
+	if doc.Body != "# Notes\n\nafter fetch save" {
+		t.Fatalf("doc body = %q, want updated markdown", doc.Body)
 	}
 }
 
@@ -1340,6 +1514,8 @@ func TestEventWorkspaceCanMoveGlobalEventToTheme(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveGlobalContextDoc returned error: %v", err)
 	}
+	png := smallPNG()
+	writeWorkspaceAsset(t, filepath.Join(eventAssetsDirForPath(vault.GlobalContextPath("standup--11111111.md")), "diagram.png"), png)
 
 	server := newSourceWorkbenchServer(vault)
 	form := url.Values{
@@ -1372,6 +1548,15 @@ func TestEventWorkspaceCanMoveGlobalEventToTheme(t *testing.T) {
 	}
 	if len(themeDocs) != 1 || themeDocs[0].Title != "Standup" || themeDocs[0].Kind != contextKindEvent {
 		t.Fatalf("theme docs = %#v", themeDocs)
+	}
+	movedAsset := filepath.Join(eventAssetsDirForPath(vault.ThemeContextPath("auth-stepup", "standup--11111111.md")), "diagram.png")
+	if got, err := os.ReadFile(movedAsset); err != nil {
+		t.Fatalf("expected moved asset file to exist: %v", err)
+	} else if !bytes.Equal(got, png) {
+		t.Fatalf("moved asset body mismatch")
+	}
+	if _, err := os.Stat(filepath.Join(eventAssetsDirForPath(vault.GlobalContextPath("standup--11111111.md")), "diagram.png")); !os.IsNotExist(err) {
+		t.Fatalf("expected global asset to be removed after move, got: %v", err)
 	}
 }
 
